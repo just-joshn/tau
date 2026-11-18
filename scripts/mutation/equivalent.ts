@@ -10,4 +10,6 @@ export const EQUIVALENT_MUTANTS: Readonly<Record<string, string>> = {
     "A colon at 0 makes the key empty, which `!key` in the same condition rejects, so the rule still matches nothing.",
   "src/tool-policy.ts:341:13 relational <= → <":
     "A colon at 0 makes the key empty, which `!key` in the same condition rejects, so the rule still matches nothing.",
+  "src/permission-prompt.ts:166:53 boolean-literal true → false":
+    "abortable removes its abort listener in cleanup before it rejects and when the pending call settles, and an AbortSignal dispatches abort at most once, so `once` never has a second event to drop.",
 };
