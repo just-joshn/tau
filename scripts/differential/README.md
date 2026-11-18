@@ -119,3 +119,10 @@ project rejection; it retains per-origin RPC/process logs and checks PID cleanup
 An initial enterprise-presence mismatch and its Node stat/lstat/realpath probe
 are preserved separately. The corrected loader treats an absent leaf as absent
 before attempting ancestor-sensitive canonicalization.
+
+`run_web.py original|tau web|web-preflight` runs the WebFetch/WebSearch scenario in
+scenarios_web.py. The mock serves fixture pages and answers TLS on its single
+loopback port with the test-only certificate in test/fixtures/web-tls, trusted
+through NODE_EXTRA_CA_CERTS, because both CLIs upgrade http:// to https://.
+`web` sets skipWebFetchPreflight; `web-preflight` leaves the api.anthropic.com
+domain check on so the profile records how a denied preflight surfaces.
