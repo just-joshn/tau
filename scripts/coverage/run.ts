@@ -7,11 +7,11 @@
 // `bun run test:coverage -- --reporter=junit` (bun run drops the "--").
 // Writes coverage/coverage-final.json, lcov.info and coverage-summary.json.
 // --focus narrows printing and gating to the named files and lists each of
-// their uncovered branches. --merge unions a saved coverage-final.json first.
+// their uncovered branches. --merge unions a saved coverage-final.json first,
+// skipping with a warning each file whose source changed since it was saved.
 import {
   createCoverageMap,
   type CoverageMap,
-  type CoverageMapData,
   type Totals,
 } from "istanbul-lib-coverage";
 import { createContext } from "istanbul-lib-report";
@@ -27,7 +27,12 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
-import { parseArgs } from "node:util";
+import {
+  mergeableCoverage,
+  parseRunArgs,
+  readCoverage,
+  resolveFocus,
+} from "./gate.ts";
 import { cachedInstrumentation, INSTRUMENTER_OPTIONS } from "./instrument.ts";
 
 const BRANCH_FLOOR = 80; // total and every src file
@@ -36,36 +41,12 @@ const FUNCTION_FLOOR = 85; // total
 
 const root = resolve(import.meta.dir, "../..");
 const coverageDir = join(root, "coverage");
-// Unknown options pass through, so tokens rather than values drive this.
-const { tokens } = parseArgs({
-  args: process.argv.slice(2),
-  options: {
-    serial: { type: "boolean" },
-    focus: { type: "string", multiple: true },
-    merge: { type: "string" },
-  },
-  allowPositionals: true,
-  strict: false,
-  tokens: true,
-});
-let serial = false;
-let mergePath: string | undefined;
-const focus: string[] = [];
-const testArgs: string[] = [];
-for (const token of tokens) {
-  if (token.kind === "positional") testArgs.push(token.value);
-  else if (token.kind === "option-terminator") continue;
-  else if (token.name === "serial") serial = true;
-  else if (token.name === "focus" && token.value !== undefined)
-    focus.push(resolve(root, token.value));
-  else if (token.name === "merge") mergePath = token.value;
-  else
-    testArgs.push(
-      token.inlineValue === true
-        ? `${token.rawName}=${token.value}`
-        : token.rawName,
-    );
-}
+const {
+  serial,
+  mergePath,
+  focus: focusArgs,
+  testArgs,
+} = parseRunArgs(process.argv.slice(2));
 
 // Read --merge before cleaning, since it may live under coverage/.
 const merged = mergePath === undefined ? undefined : readCoverage(mergePath);
@@ -75,6 +56,12 @@ rmSync(coverageDir, { recursive: true, force: true });
 const map = createCoverageMap({});
 for (const fileCoverage of instrumentSources())
   map.addFileCoverage(fileCoverage);
+const focus = resolveFocus(root, focusArgs, map.files());
+const saved = merged === undefined ? undefined : mergeableCoverage(merged, map);
+for (const path of saved?.stale ?? [])
+  console.warn(
+    `skipping ${relative(root, path)} from ${mergePath}: it no longer matches the source`,
+  );
 
 const preload = `--preload=${join(import.meta.dir, "instrument.ts")}`;
 const testRun = Bun.spawnSync(
@@ -95,7 +82,7 @@ const rawFiles = existsSync(rawDir)
   ? readdirSync(rawDir).filter((name) => name.endsWith(".json"))
   : [];
 for (const name of rawFiles) map.merge(readCoverage(join(rawDir, name)));
-if (merged !== undefined) map.merge(merged);
+if (saved !== undefined) map.merge(saved.fresh);
 console.log(
   `merged ${rawFiles.length} raw coverage files${mergePath === undefined ? "" : ` and ${mergePath}`}`,
 );
@@ -112,8 +99,11 @@ create("text-summary").execute(
 const violations: string[] = [];
 const total = map.getCoverageSummary();
 checkFloor("total branches", total.branches, BRANCH_FLOOR);
-checkFloor("total lines", total.lines, LINE_FLOOR);
-checkFloor("total functions", total.functions, FUNCTION_FLOOR);
+// The line and function floors are whole-suite totals, so a focused run skips them.
+if (focus.length === 0) {
+  checkFloor("total lines", total.lines, LINE_FLOOR);
+  checkFloor("total functions", total.functions, FUNCTION_FLOOR);
+}
 for (const file of map.files().sort())
   checkFloor(
     `${relative(root, file)} branches`,
@@ -147,27 +137,6 @@ function outputName(report: "json" | "lcovonly" | "json-summary"): string {
     case "json-summary":
       return "coverage-summary.json";
   }
-}
-
-function readCoverage(path: string): CoverageMapData {
-  const data: unknown = JSON.parse(readFileSync(path, "utf8"));
-  if (!isCoverageMapData(data))
-    throw new Error(`${path} is not an istanbul coverage map`);
-  return data;
-}
-
-function isCoverageMapData(value: unknown): value is CoverageMapData {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    Object.values(value).every(
-      (file) =>
-        typeof file === "object" &&
-        file !== null &&
-        "path" in file &&
-        "branchMap" in file,
-    )
-  );
 }
 
 // Instruments every src file once, here, and fills the cache the preload
