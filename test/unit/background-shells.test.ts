@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { onTestFinished, test } from "bun:test";
+import { expect, onTestFinished, test } from "bun:test";
 import {
   createBackgroundShells,
   type RunningShell,
@@ -149,5 +149,47 @@ test("a trailer that cannot be written is a diagnostic, not a failure", async ()
   assert.match(
     diagnostics[0] ?? "",
     /^Background shell bffffffff: output trailer failed/,
+  );
+});
+
+test("a task's own exit report replaces the summary and adds its body; a stop gets no report", async () => {
+  const { shells, notifications, file } = await setup();
+  const reports: (number | undefined)[] = [];
+  const watched = fakeShell(await file("m.output"));
+  shells.adopt(watched.shell, {
+    id: "bmonitor1",
+    command: "tail -f log",
+    description: "log",
+    onExit: (ending) => {
+      reports.push(ending?.code);
+      return {
+        summary: 'Monitor "log" stream ended',
+        body: "\n<event>bye</event>",
+      };
+    },
+  });
+  const stopped = fakeShell(await file("s.output"));
+  shells.adopt(stopped.shell, {
+    id: "bmonitor2",
+    command: "tail -f other",
+    description: "other",
+    onExit: (ending) => {
+      reports.push(ending?.code);
+      return undefined;
+    },
+  });
+  let woken = 0;
+  shells.subscribe(() => woken++);
+  shells.announce("event text");
+  expect(notifications).toEqual(["event text"]);
+  expect(woken).toBe(1);
+  await shells.stop("bmonitor2");
+  watched.exit(0);
+  await until(() => notifications.length >= 2);
+  expect(reports).toHaveLength(2);
+  expect(reports).toContain(0);
+  expect(reports).toContain(undefined);
+  expect(notifications[1]).toContain(
+    '<status>completed</status>\n<summary>Monitor "log" stream ended</summary>\n<event>bye</event>\n</task-notification>',
   );
 });
