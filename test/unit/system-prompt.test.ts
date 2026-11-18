@@ -59,8 +59,12 @@ test("sections shared with the pinned original's print-mode request are byte-ide
       "fa85380f060862ddace44215d68515ede19b4c39bbb4b333df4f3016c9194808",
     "Executing actions with care":
       "f801973827e0e515ec183088837e212c94d23cb8f5d68d7128d28d235611165c",
+    "Using your tools":
+      "66a62382745d1ae026ac3e5d33fe35c5ca515435c1b3e738a46a163d3bff1fed",
     "Tone and style":
       "657ab1c8b980b41a5eb6e6c55c7de414ed8ba69396f45a403bd562f4a5ea3038",
+    "Session-specific guidance":
+      "2096ac34f3bf27bb68cf7217475054f9b169fa212e722db614f127fb89b93099",
     "Text output (does not apply to tool calls)":
       "d741f97cb47aee81682c9ae1637afbd6956f217ea28149cf250c5c71bc6726d8",
     Environment:
@@ -119,11 +123,26 @@ test("the auto memory section matches the pinned original between session guidan
 
 test("tool, skill and interactivity facts gate their lines", () => {
   const full = renderSystemPrompt(context({ interactive: true }));
-  assert.match(full, /Prefer dedicated tools over Bash when one fits/);
+  assert.match(
+    full,
+    /Prefer dedicated tools over Bash when one fits \(Read, Edit, Write\)/,
+  );
+  assert.doesNotMatch(full, /Glob, Grep/);
   assert.match(full, /Use TaskCreate to plan and track work/);
   assert.match(full, /suggest they type `! <command>`/);
-  assert.match(full, /subagent_type=Explore/);
+  assert.match(full, /runs in the background/);
+  assert.doesNotMatch(full, /subagent_type=Explore/);
   assert.match(full, /invoke it via Skill/);
+  const nudged = renderSystemPrompt(
+    context({
+      interactive: true,
+      env: { CLAUDE_CODE_FORK_SUBAGENT: "false" },
+    }),
+  );
+  assert.match(nudged, /Use the Agent tool with specialized agents/);
+  assert.match(nudged, /should not be used excessively/);
+  assert.match(nudged, /subagent_type=Explore/);
+  assert.doesNotMatch(nudged, /subagent_type: "fork"/);
   const bare = renderSystemPrompt(
     context({
       tools: new Set(["TodoWrite"]),
@@ -132,17 +151,33 @@ test("tool, skill and interactivity facts gate their lines", () => {
     }),
   );
   assert.match(bare, /Prefer dedicated tools over PowerShell/);
+  assert.match(bare, /\(Read, Edit, Write, Glob, Grep\)/);
   assert.match(bare, /Use TodoWrite to plan/);
   assert.doesNotMatch(bare, /Session-specific guidance/);
   assert.doesNotMatch(bare, /When you have enough information to act/);
   const noExplore = renderSystemPrompt(
-    context({ env: { CLAUDE_CODE_DISABLE_EXPLORE_PLAN_AGENTS: "1" } }),
+    context({
+      env: {
+        CLAUDE_CODE_FORK_SUBAGENT: "0",
+        CLAUDE_CODE_DISABLE_EXPLORE_PLAN_AGENTS: "1",
+      },
+    }),
   );
   assert.match(noExplore, /Use the Agent tool with specialized agents/);
   assert.doesNotMatch(noExplore, /subagent_type=Explore/);
+  const listed = renderSystemPrompt(context({ hasEmbeddedSearch: false }));
+  assert.match(listed, /\(Read, Edit, Write, Glob, Grep\)/);
+  const localAgent = renderSystemPrompt(
+    context({ env: { CLAUDE_CODE_ENTRYPOINT: "local-agent" } }),
+  );
+  assert.match(localAgent, /\(Read, Edit, Write, Glob, Grep\)/);
   assert.doesNotMatch(
     renderSystemPrompt(context({ tools: new Set(["Bash"]) })),
     /TaskCreate|TodoWrite/,
+  );
+  assert.doesNotMatch(
+    renderSystemPrompt(context({ isFork: true })),
+    /subagent_type: "fork"|subagent_type=Explore/,
   );
 });
 
