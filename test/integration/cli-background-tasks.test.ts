@@ -168,4 +168,69 @@ describe("TaskStop", () => {
       "No task found with ID: missing",
     );
   });
+
+  test("a subagent cannot stop a background agent it did not start; the parent can", async () => {
+    const isStopper = (body: unknown) =>
+      JSON.stringify(bodySchema.parse(body).system).includes("STOPPER_SYSTEM");
+    let parent = 0,
+      stopper = 0,
+      workerId = "";
+    const provider = await startSseServer(async (body) => {
+      if (isWorker(body)) return stall();
+      if (isStopper(body))
+        return ++stopper === 1
+          ? turn({
+              type: "tool_use",
+              id: "child-stop",
+              name: "TaskStop",
+              input: { task_id: workerId },
+            })
+          : turn({ type: "text", text: "stopper done" });
+      parent++;
+      if (parent === 1) return turn(launch);
+      if (parent === 2) {
+        workerId = launchedId(body, "launch");
+        return turn({
+          type: "tool_use",
+          id: "delegate",
+          name: "Agent",
+          input: {
+            description: "Stop the worker",
+            prompt: "stop it",
+            subagent_type: "stopper",
+            run_in_background: false,
+          },
+        });
+      }
+      if (parent === 3)
+        return turn({
+          type: "tool_use",
+          id: "parent-stop",
+          name: "TaskStop",
+          input: { task_id: workerId },
+        });
+      return turn({ type: "text", text: "parent done" });
+    });
+    const run = await runCli({
+      provider,
+      env: ENV,
+      files: {
+        "../config/agents/worker.md": AGENTS["agents/worker.md"],
+        "../config/agents/stopper.md":
+          "---\nname: stopper\ndescription: Stops tasks\ntools: TaskStop\n---\nSTOPPER_SYSTEM",
+      },
+      args: ["-p", "go", "--tools", "Agent,Read,TaskStop"],
+    });
+    expect(run.exitCode).toBe(0);
+    expect(run.stdout).toContain("parent done");
+    const refused = toolResult(
+      provider.bodies.findLast(isStopper),
+      "child-stop",
+    );
+    expect(refused?.is_error).toBe(true);
+    expect(String(refused?.content)).toContain(`can stop task ${workerId}`);
+    const parentStop = toolResult(provider.bodies.at(-1), "parent-stop");
+    expect(parentStop).toBeDefined();
+    expect(parentStop?.is_error).toBeUndefined();
+  });
 });
