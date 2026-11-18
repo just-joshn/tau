@@ -28,6 +28,7 @@ interface Setup {
   sandbox?: boolean;
   readFences?: boolean;
   remote?: boolean;
+  readOnly?: RegExp;
 }
 
 function owner(setup: Setup = {}) {
@@ -35,7 +36,7 @@ function owner(setup: Setup = {}) {
   const permission = policy(setup.policy);
   f.setPolicy(permission);
   f.policyHost.readOnly = (input, _context, s) =>
-    known(READ_ONLY.test(input.command.trim()), s);
+    known((setup.readOnly ?? READ_ONLY).test(input.command.trim()), s);
   f.policyHost.allDenyRules = (_permission, s) => known([...f.denied], s);
   f.policyHost.commandDenyBuiltinRuleNames = (s) => known(new Set<string>(), s);
   f.policyHost.xargsSafeFlags = (s) => known({ "-n": "number" }, s);
@@ -637,3 +638,142 @@ test("sandbox auto-allow admits a heredoc pipeline without declaration prefixes"
   expect(declarations).toEqual([]);
   expect(label(decision)).toBe("allow other/-");
 });
+
+table("Bash rules on refused commands", { deny: ["eval:*"] }, [
+  ["eval ls", "deny rule"],
+]);
+
+table("Bash ask rule on a refused command", { ask: ["eval:*"] }, [
+  ["eval ls", "ask rule"],
+]);
+
+table("exact whole-command deny", { deny: ["ls; npm test"] }, [
+  ["ls; npm test", "deny rule"],
+]);
+
+table("pipelines after a directory change", {}, [
+  ["cd sub && cat f | sh", "ask subcommandResults"],
+  ["cd sub && cat f | xargs rm", "ask subcommandResults"],
+  ["cd sub && git log | head", "ask other/cd-git-compound"],
+  ["cd sub && echo x | tee /etc/passwd", "ask subcommandResults"],
+  ["cd sub && ls > /work/out | cat", "ask other/cd-compound-redirect"],
+  ["cd sub && ls | rm -rf /", "ask subcommandResults"],
+  ["ls | rm -rf /", "ask subcommandResults"],
+  ["echo hi | cd sub", "allow subcommandResults"],
+  ["ls & cd sub", "allow subcommandResults"],
+  ["cd sub && ls &", "allow subcommandResults"],
+  ["ls; npm test &", "passthrough subcommandResults"],
+]);
+
+table(
+  "stdin code with sandbox read fences",
+  {
+    sandbox: true,
+    readFences: true,
+    policy: {
+      blockReadsOutsideWorkingDirectories: true,
+      sandboxAutoAllowSuspended: true,
+    },
+  },
+  [
+    ["cat x | python -", "ask subcommandResults"],
+    ["cd a && cd b", "ask other/multi-cd"],
+    ["ls | (cat)", "ask other/shell-operators"],
+    ["eval ls", "ask other/semantics"],
+  ],
+);
+
+// Sandbox auto-allow screens literal rm/rmdir (and wrappers such as env,
+// command, nice and timeout) for dangerous targets, but a removal handed to
+// another shell or to xargs is admitted without that screen. Deleting the
+// working directory is inside the sandbox's write roots, so nothing stops it.
+for (const command of [
+  "bash -c 'rm -rf /work'",
+  'sh -c "rm -rf ~"',
+  "echo /work | xargs rm -rf",
+])
+  test.failing(`KNOWN-GAP sandbox auto-allow admits ${command}`, async () => {
+    const decision = await owner({ sandbox: true }).decide(command);
+    expect(decision.behavior).not.toBe("allow");
+  });
+
+table("sandbox screens literal removals", { sandbox: true }, [
+  ["rm -rf /work", "ask safetyCheck/dangerousRemoval"],
+  ["/bin/rm -rf /work", "ask safetyCheck/dangerousRemoval"],
+  ["env rm -rf /work", "ask safetyCheck/dangerousRemoval"],
+  ["command rm -rf /work", "ask safetyCheck/dangerousRemoval"],
+  ["timeout 5 rm -rf /work", "ask safetyCheck/dangerousRemoval"],
+  ["rmdir /work", "ask safetyCheck/dangerousRemoval"],
+  ["find /work -delete", "ask other/semantics"],
+]);
+
+// With sed in the read-only table, a read-only sed script joins the list.
+const sedReadOnly = /^(cat|cd|ls|echo|grep|sed)\b/;
+table("read-only sed in a list", { readOnly: sedReadOnly }, [
+  ["ls; sed -n p f", "allow subcommandResults"],
+  ["ls; sed -n p f > /work/out", "ask none"],
+  ["ls; sed -n p < /work/in", "allow subcommandResults"],
+  ["ls; sed -n p f 2>&1", "allow subcommandResults"],
+  ['ls; sed -n p f > "$x"', "ask other/too-complex"],
+  ["sed -n p f; sed -n 1p g", "allow subcommandResults"],
+  ["ls && sed -n p f | grep x", "allow subcommandResults"],
+]);
+
+table(
+  "read-only sed under the read block",
+  {
+    readOnly: sedReadOnly,
+    policy: { blockReadsOutsideWorkingDirectories: true },
+  },
+  [
+    ["ls; sed -n p f", "allow subcommandResults"],
+    ['ls; sed -n p <<< "$x"', "ask safetyCheck/outsideReadsBlocked"],
+  ],
+);
+
+table(
+  "read-only sed with an exact list rule",
+  {
+    readOnly: sedReadOnly,
+    allow: ["ls; sed -n p f"],
+  },
+  [["ls; sed -n p f", "allow rule"]],
+);
+
+table("empty and over-length input", {}, [
+  ["", "allow subcommandResults"],
+  ["   ", "allow subcommandResults"],
+  [`ls ${"a".repeat(12_000)}`, "ask other/too-complex"],
+]);
+
+function acceptEditsCannotAllow(decision: Decision): boolean | undefined {
+  const reason = decision.decisionReason;
+  return reason?.type === "other" ? reason.acceptEditsCannotAllow : undefined;
+}
+
+test("auto mode marks unanalyzable commands as beyond acceptEdits, except a parser abort", async () => {
+  const auto = { policy: { mode: "auto" } };
+  const nested = await owner(auto).decide("echo $(whoami)");
+  expect(label(nested)).toBe("ask other/too-complex");
+  expect(acceptEditsCannotAllow(nested)).toBe(true);
+  const refused = await owner(auto).decide("eval ls");
+  expect(acceptEditsCannotAllow(refused)).toBe(true);
+  const aborted = await owner(auto).decide(`ls ${"a".repeat(12_000)}`);
+  expect(label(aborted)).toBe("ask other/too-complex");
+  expect(acceptEditsCannotAllow(aborted)).toBeUndefined();
+  const manual = await owner().decide("echo $(whoami)");
+  expect(acceptEditsCannotAllow(manual)).toBeUndefined();
+});
+
+table("Read deny reached through eval", secret, [
+  ["eval cat /work/b/secret", "ask other/semantics"],
+]);
+
+table(
+  "Read deny reached through eval in bypassPermissions",
+  {
+    ...secret,
+    policy: { ...secret.policy, mode: "bypassPermissions" },
+  },
+  [["eval cat /work/b/secret", "ask other/semantics"]],
+);
