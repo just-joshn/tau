@@ -88,6 +88,10 @@ test("command substitution and spoofed expansion markers never count as literal 
     // Brace expansion multiplies operands the profile never saw.
     ["grep needle {a,b}", false],
     ["grep needle {a}", true],
+    // A single-quoted dollar is literal, but the profile still fails closed.
+    ["grep 'end$' file", false],
+    ["", false],
+    ["$(id)", false],
     // Newlines end the grep command, so a pattern cannot contain one.
     ["rg 'a\nb' file", false],
   ]);
@@ -118,6 +122,7 @@ test("git format and sort values reject signature checks and configured aliases"
     ["git log --format=%h", true],
     ["git log --pretty=format:%s", true],
     ["git log --pretty=tformat:%s", true],
+    ["git log --pretty=format:short", true],
     ["git log --format", false],
     // Signature placeholders and keys run gpg verification.
     ["git log --format=%GS", false],
@@ -148,6 +153,8 @@ test("git reflog, remote and ls-remote stay within their read-only subcommands",
     ["git ls-remote --tags --", true],
     ["git ls-remote --sort=-refname", true],
     ["git ls-remote --sort ''", true],
+    ["git ls-remote '' --tags", true],
+    ["git ls-remote --sort=signature", false],
     ["git ls-remote origin", false],
     ["git ls-remote -- origin", false],
     ["git ls-remote -", false],
@@ -166,6 +173,9 @@ test("git tag and git branch accept names only in list mode", () => {
     ["git tag -l --contains HEAD", true],
     ["git tag -l --contains=HEAD 'v*'", true],
     ["git tag -n 5 -l", true],
+    ["git tag -l ''", true],
+    ["git branch -l ''", true],
+    ["git tag -l --sort=signature", false],
     ["git tag v1", false],
     ["git tag -- v1", false],
     ["git branch --merged main", true],

@@ -46,6 +46,7 @@ test("docker logs and inspect refuse daemon-selecting options anywhere in their 
     ["docker inspect -- -Hunix:///other.sock container", false],
     ["docker inspect -- -tc ctx container", false],
     ["docker logs container ~/out", false],
+    ["docker logs container 'a{~}'", false],
     ["docker logs -- __CMDSUB_OUTPUT__", false],
   ]);
 });
@@ -88,6 +89,7 @@ test("ps refuses BSD environment output and -e combined with extra formatting", 
     ["ps aux", true],
     ["ps -ef", true],
     ["ps -eH", true],
+    ["ps -e --forest", true],
     ["ps -- aux", true],
     ["ps auxe", false],
     ["ps ewww", false],
@@ -128,6 +130,8 @@ test("lsof refuses mount supplements, host-name lookups and tilde paths", () => 
     ["lsof -i @10.0.0.1", true],
     ["lsof -i @10.0.0.1:22", true],
     ["lsof -p 123", true],
+    ["lsof -i", true],
+    ["lsof 12x", true],
     ["lsof +D /tmp", true],
     ["lsof +m", false],
     ["lsof +m/tmp/mounts", false],
@@ -223,4 +227,13 @@ test("with the dash-flag gate off, an undeclared punctuation word is an operand"
     ],
     (key) => key !== "tengu_amber_thimble",
   );
+});
+
+test("hostname may print names but never set one", () => {
+  expectReadonly([
+    ["hostname", true],
+    ["hostname -f", true],
+    ["hostname --fqdn", true],
+    ["hostname new-name", false],
+  ]);
 });
