@@ -9,6 +9,7 @@ import {
   messageStart,
   startSseServer,
   textBlock,
+  turn,
 } from "../helpers/sse-server.js";
 
 setDefaultTimeout(30_000);
@@ -709,5 +710,67 @@ describe("approvals that start outside a turn", () => {
     expect(JSON.stringify(body(provider.requests[2]).messages)).toContain(
       "Plan approval completed for this agent.",
     );
+  });
+});
+
+describe("subagent plan text", () => {
+  test("the approval prompt shows the plan the subagent wrote", async () => {
+    const system = (body: unknown) =>
+      JSON.stringify(z.looseObject({ system: z.unknown() }).parse(body).system);
+    let child = 0;
+    const provider = await startSseServer((received) => {
+      if (!system(received).includes("PLANNER_SYSTEM"))
+        return child === 0
+          ? turn({
+              type: "tool_use",
+              id: "agent-1",
+              name: "Agent",
+              input: {
+                description: "Plan it",
+                prompt: "make a plan",
+                subagent_type: "planner",
+                run_in_background: false,
+              },
+            })
+          : turn({ type: "text", text: "parent done" });
+      child++;
+      const planFile = /Agent plan file: ([^\s"\\]+)/.exec(
+        JSON.stringify(received),
+      )?.[1];
+      if (child === 1)
+        return turn({
+          type: "tool_use",
+          id: "write-plan",
+          name: "Write",
+          input: { file_path: planFile, content: "# Child plan\n- step one\n" },
+        });
+      if (child === 2)
+        return turn({
+          type: "tool_use",
+          id: "child-exit",
+          name: "ExitPlanMode",
+          input: {},
+        });
+      return turn({ type: "text", text: "child done" });
+    });
+    const tau = startPty({
+      provider,
+      env: {
+        CLAUDE_CODE_FORK_SUBAGENT: "0",
+        CLAUDE_CODE_SUBAGENT_MODEL: "inherit",
+      },
+      configFiles: {
+        "agents/planner.md":
+          "---\nname: planner\ndescription: Plans work\ntools: ExitPlanMode, Write, Read\npermissionMode: plan\n---\nPLANNER_SYSTEM",
+      },
+      args: ["--tools", "Agent,ExitPlanMode,Write,Read"],
+    });
+    await submit(tau, "delegate");
+    await tau.expect(
+      "Plan:\n# Child plan\n- step one\n\n\nApprove ExitPlanMode for planner?\nAllow once? [y/N] ",
+    );
+    tau.write("y\r");
+    await tau.expect("parent done");
+    await exit(tau);
   });
 });
