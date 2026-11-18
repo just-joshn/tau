@@ -52,6 +52,29 @@ jobs:
       - run: bun ci
       - run: bun test --parallel
 
+  mutation:
+    name: permission guard mutation check
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+      - run: bun ci
+      # STRATEGY.md section 8: every surviving permission guard mutant is
+      # either killed by test/security or recorded in equivalent.ts.
+      - run: bun run test:mutation -- --concurrency 4
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: mutation-results
+          path: mutation-results/
+          if-no-files-found: warn
+          retention-days: 30
+
   canary:
     name: Bun canary (latest; NON-BLOCKING until validated)
     # A red canary is a signal to evaluate before advancing .bun-version, not a

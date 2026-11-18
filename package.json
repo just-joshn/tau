@@ -20,6 +20,7 @@
     "test:property": "bun test --parallel test/property",
     "test:faults": "bun test --parallel test/faults",
     "test:coverage": "bun scripts/coverage/run.ts",
+    "test:mutation": "bun scripts/mutation/run.ts --min-score 0.988",
     "test:flaky": "bun test --randomize --seed 20261117 --rerun-each 5",
     "test:node": "node scripts/node-smoke.mjs",
     "bench": "bun scripts/bench/cli.ts",
@@ -35,6 +36,8 @@
     "zod": "^4.0.0"
   },
   "devDependencies": {
+    "@babel/parser": "7.29.14",
+    "@babel/types": "7.29.14",
     "@types/bun": "^1.4.4",
     "@types/istanbul-lib-coverage": "2.0.6",
     "@types/istanbul-lib-instrument": "1.7.8",
