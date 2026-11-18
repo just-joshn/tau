@@ -130,11 +130,22 @@ test("a background command's completion reaches the next request, and TaskStop s
         input: { task_id: launched },
       });
     }
-    if (index === 3) return turn({ type: "text", text: "waiting" });
+    if (index === 3) {
+      const file = /Output is being written to: (\S+\.output)\./.exec(
+        String(resultsOf(body).bg?.content),
+      )?.[1];
+      return turn({
+        type: "tool_use",
+        id: "read",
+        name: "Read",
+        input: { file_path: file ?? "" },
+      });
+    }
+    if (index === 4) return turn({ type: "text", text: "waiting" });
     return turn({ type: "text", text: "notified" });
   });
   const run = await runCli({
-    args: PRINT.map((arg) => (arg === "Bash" ? "Bash,TaskStop" : arg)),
+    args: PRINT.map((arg) => (arg === "Bash" ? "Bash,TaskStop,Read" : arg)),
     provider,
     env: { ENABLE_TOOL_SEARCH: "false" },
   });
@@ -143,7 +154,9 @@ test("a background command's completion reaches the next request, and TaskStop s
     0,
     `${run.stderr}\n${provider.requests.length}\n${JSON.stringify(provider.requests.map((r) => resultsOf(r.body)))}`,
   );
-  assert.equal(provider.requests.length, 5);
+  assert.equal(provider.requests.length, 6);
+  // Read may open a live task output file outside the workspace.
+  assert.equal(results(provider).read?.is_error, false);
   const launch = results(provider).bg;
   const output = /Output is being written to: (\S+\.output)\./.exec(
     String(launch?.content),
@@ -164,7 +177,7 @@ test("a background command's completion reaches the next request, and TaskStop s
     }),
     is_error: false,
   });
-  const notifications = blocks(provider.requests[4]?.body).filter(
+  const notifications = blocks(provider.requests[5]?.body).filter(
     ({ role, block }) =>
       role === "user" &&
       block.type === "text" &&
