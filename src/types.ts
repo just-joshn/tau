@@ -250,6 +250,10 @@ export interface CompletionRequest {
   onStreamProgress?: (event: ProviderStreamProgress) => void;
   /** Owns stable identities at actual API row creation, separately from progress sampling. */
   nativeRecording?: NativeResponseRecordingHost;
+  /** Actual immutable serialized request, observed before transport and attempt accounting. */
+  nativeRequestPrepared?: import("./native-request-capture.js").NativePreparedRequestHost;
+  /** Actual source-stage replay and declaration capture before provider serialization. */
+  nativePromptPreparation?: import("./native-prompt-transport.js").NativePromptTransportHost;
   /** Replace provisional text for this model round, preserving previous completed rounds. */
   onTextReset?: (text: string) => void;
   onThinkingStrip?: (strip: ThinkingStrip) => void;

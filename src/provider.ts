@@ -1,4 +1,7 @@
 import { z } from "zod";
+import { captureNativePreparedRequest } from "./native-request-capture.js";
+import { prepareNativePromptForTransport } from "./native-prompt-transport.js";
+import type { NativePromptRequestPlan } from "./native-prompt-request.js";
 import {
   NativeResponseRecordingError,
   recordNativeJsonResponse,
@@ -533,10 +536,11 @@ export class AnthropicProvider implements Provider {
     let projectedEffort = projection();
     let messages = request.messages;
     let wire = projectMessages(messages, request.resumeIncompleteThinking);
+    let nativePrompt: NativePromptRequestPlan | undefined;
     const serialize = () =>
       JSON.stringify({
         model: facts.wire,
-        system: request.system,
+        system: nativePrompt?.system ?? request.system,
         messages: request.disablePromptCaching
           ? wire.map((row) => ({
               ...row,
@@ -544,8 +548,8 @@ export class AnthropicProvider implements Provider {
             }))
           : wire,
         tools: request.disablePromptCaching
-          ? request.tools.map(withoutCacheControl)
-          : request.tools,
+          ? (nativePrompt?.tools ?? request.tools).map(withoutCacheControl)
+          : (nativePrompt?.tools ?? request.tools),
         max_tokens: maxTokens,
         thinking,
         stream: streaming,
@@ -563,6 +567,21 @@ export class AnthropicProvider implements Provider {
         ...request.thinking,
       });
       projectedEffort = projection();
+      nativePrompt =
+        request.nativePromptPreparation === undefined
+          ? undefined
+          : await prepareNativePromptForTransport(
+              request.nativePromptPreparation,
+              {
+                requestedModel: request.model,
+                wireModel: facts.wire,
+                transport: streaming ? "stream" : "json",
+                currentSystem: request.system,
+                currentTools: request.tools,
+                disablePromptCaching: request.disablePromptCaching === true,
+              },
+              request.signal,
+            );
       body = serialize();
       const resumptionBeta =
         this.thinkingResumption && supportsInterleavedThinking(request.model);
@@ -575,6 +594,13 @@ export class AnthropicProvider implements Provider {
       ].filter(Boolean);
       if (request.resumeIncompleteThinking && !resumptionBeta)
         throw new ProviderHttpError(400, "thinking_resumption_unavailable");
+      if (request.nativeRequestPrepared)
+        await captureNativePreparedRequest(
+          request.nativeRequestPrepared,
+          body,
+          request.model,
+          request.signal,
+        );
       ledger.takeAttempt();
       const startedAt = this.clock.monotonicNow();
       const deadline = new TransportDeadline(

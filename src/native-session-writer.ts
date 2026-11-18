@@ -24,7 +24,7 @@ export interface NativeMessageIdentity {
   stopReason?: "end_turn" | "tool_use";
 }
 export type NativeWriterEntry = NativeObject & {
-  readonly type: "user" | "assistant" | "attachment" | "progress";
+  readonly type: "user" | "assistant" | "attachment" | "progress" | "system";
   readonly uuid: string;
   readonly timestamp: string;
 };
@@ -255,7 +255,7 @@ export interface NativeWriterContext {
   sessionId: string;
   cwd: string;
   version: string;
-  entrypoint: string;
+  entrypoint?: string;
   userType: string;
   sessionKind?: string;
   sidechain: boolean;
@@ -376,6 +376,7 @@ function isWriterEntry(value: NativeJson): value is NativeWriterEntry {
     (value.type === "user" ||
       value.type === "assistant" ||
       value.type === "attachment" ||
+      value.type === "system" ||
       value.type === "progress") &&
     typeof value.uuid === "string" &&
     uuidPattern.test(value.uuid) &&
@@ -395,6 +396,7 @@ function entryValue(input: NativeWriterEntry): NativeWriterEntry {
     throw new Error("Unsupported pre-enveloped/native transformation input");
   if (
     value.type === "attachment" ||
+    value.type === "system" ||
     (value.type === "user" &&
       (value.toolUseResult !== undefined ||
         value.permissionDecision !== undefined))
@@ -471,7 +473,9 @@ export function envelopeNativeWriterEntries(
         ? {}
         : { sessionKind: context.sessionKind }),
       userType: context.userType,
-      entrypoint: context.entrypoint,
+      ...(context.entrypoint === undefined
+        ? {}
+        : { entrypoint: context.entrypoint }),
       cwd: context.cwd,
       sessionId: context.sessionId,
       ...(context.teamName === undefined ? {} : { teamName: context.teamName }),
@@ -599,12 +603,13 @@ export class NativeSessionWriter {
     if (
       !options.context.sessionId ||
       !options.context.version ||
-      !options.context.entrypoint ||
+      (options.context.entrypoint !== undefined &&
+        typeof options.context.entrypoint !== "string") ||
       !options.context.userType ||
       typeof options.context.sidechain !== "boolean"
     )
       throw new TypeError(
-        "Explicit native owner/version/entrypoint metadata is required",
+        "Explicit native owner/version metadata and a valid optional entrypoint are required",
       );
     if (
       options.context.sidechain
@@ -761,7 +766,10 @@ export class NativeSessionWriter {
         !this.#context.sidechain &&
         prepared.rows.length > 0 &&
         !entries.some(
-          (entry) => entry.type === "user" || entry.type === "assistant",
+          (entry) =>
+            entry.type === "user" ||
+            entry.type === "assistant" ||
+            entry.type === "system",
         )
       )
         throw new Error(

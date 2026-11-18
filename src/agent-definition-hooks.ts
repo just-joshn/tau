@@ -23,6 +23,7 @@ const nativeEventOrder: readonly HookEvent[] = [
   "PreToolUse",
   "PostToolUse",
   "PostToolUseFailure",
+  "UserPromptSubmit",
   "SessionStart",
   "Stop",
   "SubagentStart",

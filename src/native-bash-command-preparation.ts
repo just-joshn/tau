@@ -1040,17 +1040,6 @@ export function createNativeBashCommandPreparation(
       options: NativeBashPreparationOptions = {},
     ): NativeBashPreparationResult<T> {
       try {
-        if (
-          phase === "prefix" &&
-          options.ruleBehavior === "allow" &&
-          options.astCommand === undefined &&
-          [...rules.keys()].some(vzn)
-        )
-          return {
-            status: "unresolved",
-            matches: [],
-            dependency: "semantic-command-certificate",
-          };
         return {
           status: "resolved",
           matches: R8(input, rules, phase, options),

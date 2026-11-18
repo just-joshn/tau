@@ -13,11 +13,13 @@ import {
   classifyNativeToolResult,
   isNativePollEventText,
   projectNativeToolContext,
+  projectNativeToolRequestContext,
   type NativeToolContextClassifiers,
 } from "../src/native-tool-context.js";
 import { type NativeHistoryOptions } from "../src/native-history-projection.js";
 import { type NativeResumeContextHost } from "../src/native-resume-context.js";
 import { type ToolResult } from "../src/types.js";
+import { createNativeAttachmentEvent } from "../src/native-persistence-events.js";
 
 const SID = "11111111-1111-1111-1111-111111111111";
 const wrap = (text: string) => `<system-reminder>\n${text}\n</system-reminder>`;
@@ -139,6 +141,68 @@ function readResult(
         return block;
   throw new Error("Fixture result missing");
 }
+
+test("a live context continuation requires actual nonempty admitted user context after its completed assistant", async () => {
+  const completed = [user("u", null), final("u")];
+  const stopId = "00000000-1111-1111-1111-000000000001";
+  const stop = createNativeAttachmentEvent(
+    {
+      type: "hook_additional_context",
+      content: ["ACTUAL_STOP_CONTEXT"],
+      hookName: "Stop",
+      hookEvent: "Stop",
+      toolUseID: "ACTUAL_DISPATCH",
+    },
+    { uuid: stopId, timestamp: "2026-01-01T00:00:00Z" },
+  );
+  const live = await projectNativeToolRequestContext(
+    doc([...completed, row("attachment", stopId, "final", stop)]),
+    options(),
+  );
+  assert.equal(live.messages.at(-1)?.role, "user");
+  assert.match(JSON.stringify(live.messages.at(-1)), /ACTUAL_STOP_CONTEXT/);
+  assert.deepEqual(live.messageSources.at(-1), [stopId]);
+  for (const tail of [
+    [],
+    [
+      row("attachment", "snapshot", "final", {
+        attachment: {
+          type: "prompt_snapshot",
+          systemPrompt: ["PASSIVE"],
+          tools: [],
+        },
+      }),
+    ],
+  ])
+    await assert.rejects(
+      projectNativeToolRequestContext(doc([...completed, ...tail]), options()),
+      /unsupported-model-request-tail/,
+    );
+  await assert.rejects(
+    projectNativeToolRequestContext(
+      doc([
+        user("u", null),
+        assistant(
+          "final",
+          "u",
+          [{ type: "text", text: "INTERRUPTED" }],
+          "final",
+          "max_tokens",
+        ),
+        context("ctx", "final", "CANNOT_REPAIR_INTERRUPTED_REPLY"),
+      ]),
+      options(),
+    ),
+    /unsupported-model-request-tail/,
+  );
+  await assert.rejects(
+    projectNativeToolRequestContext(
+      doc([...completed, context("ctx", "final", "DENIED_CONTEXT")]),
+      options({ host: { ...host(), admit: () => false } }),
+    ),
+    /not-admitted|admission/,
+  );
+});
 
 test("ordinary string result absorbs context using native trim and double newline", async () => {
   const original = doc([

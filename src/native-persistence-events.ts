@@ -1,13 +1,17 @@
 import { z } from "zod";
 import { sanitizeHookAttachmentText } from "./hook-attachment-projection.js";
 import {
+  validateNativeHookProgressRow,
+  validateNativeStopHookSummaryRow,
+} from "./native-hook-progress.js";
+import {
   isNativeObject,
   type NativeJson,
   type NativeObject,
 } from "./native-session-codec.js";
 
 export type NativePersistenceEvent = NativeObject & {
-  readonly type: "user" | "assistant" | "attachment";
+  readonly type: "user" | "assistant" | "attachment" | "system" | "progress";
   readonly uuid: string;
   readonly timestamp: string;
 };
@@ -16,6 +20,8 @@ function hasEventIdentity(value: NativeJson): value is NativePersistenceEvent {
     isNativeObject(value) &&
     (value.type === "user" ||
       value.type === "assistant" ||
+      value.type === "system" ||
+      value.type === "progress" ||
       value.type === "attachment") &&
     typeof value.uuid === "string" &&
     typeof value.timestamp === "string"
@@ -139,7 +145,77 @@ const instructionFile = z.strictObject({
   startOnly: z.boolean().optional(),
   cutForRoom: z.boolean().optional(),
 });
+const lifecycleHookEvent = z.enum([
+  "SessionStart",
+  "Stop",
+  "SubagentStop",
+  "UserPromptSubmit",
+  "UserPromptExpansion",
+]);
+const lifecycleHookIdentity = {
+  hookName: nonempty,
+  toolUseID: nonempty,
+  hookEvent: lifecycleHookEvent,
+};
 const attachmentSchema = z.discriminatedUnion("type", [
+  z.strictObject({
+    type: z.literal("hook_success"),
+    ...lifecycleHookIdentity,
+    content: z.string(),
+    stdout: z.string().optional(),
+    stderr: z.string().optional(),
+    exitCode: z.number().int().optional(),
+    command: z.string().optional(),
+    durationMs: z.number().nonnegative().optional(),
+  }),
+  z.strictObject({
+    type: z.literal("hook_system_message"),
+    ...lifecycleHookIdentity,
+    content: z.string(),
+    heldForServedCall: z.boolean().optional(),
+  }),
+  z.strictObject({
+    type: z.literal("hook_non_blocking_error"),
+    ...lifecycleHookIdentity,
+    stderr: z.string(),
+    stdout: z.string(),
+    exitCode: z.number().int().optional(),
+    command: z.string().optional(),
+    durationMs: z.number().nonnegative().optional(),
+  }),
+  z.strictObject({
+    type: z.literal("hook_error_during_execution"),
+    ...lifecycleHookIdentity,
+    content: z.string(),
+    command: z.string().optional(),
+    durationMs: z.number().nonnegative().optional(),
+  }),
+  z.strictObject({
+    type: z.literal("hook_cancelled"),
+    ...lifecycleHookIdentity,
+    command: z.string().optional(),
+    timedOut: z.boolean().optional(),
+    timeoutMs: z.number().nonnegative().optional(),
+  }),
+  z.strictObject({
+    type: z.literal("hook_blocking_error"),
+    ...lifecycleHookIdentity,
+    blockingError: z.strictObject({
+      blockingError: z.string(),
+      command: z.string(),
+    }),
+  }),
+  z.strictObject({
+    type: z.literal("hook_stopped_continuation"),
+    ...lifecycleHookIdentity,
+    message: z.string(),
+  }),
+  z.strictObject({
+    type: z.literal("max_turns_reached"),
+    maxTurns: count,
+    turnCount: count,
+    exitCommitted: z.boolean().optional(),
+  }),
   z.strictObject({
     type: z.literal("instructions"),
     files: z.array(instructionFile),
@@ -180,6 +256,8 @@ const attachmentSchema = z.discriminatedUnion("type", [
       "SessionStart",
       "Stop",
       "SubagentStop",
+      "UserPromptSubmit",
+      "UserPromptExpansion",
     ]),
   }),
   // This renderer/writer host is the ordinary announced branch. Positive wire/fold
@@ -263,6 +341,14 @@ const assistantMessage = z.strictObject({
 });
 const eventSchema = z.discriminatedUnion("type", [
   z.strictObject({
+    type: z.literal("system"),
+    ...identity,
+    subtype: z.literal("informational"),
+    content: z.string(),
+    isMeta: z.literal(false),
+    level: nonempty,
+  }),
+  z.strictObject({
     type: z.literal("assistant"),
     ...identity,
     message: assistantMessage,
@@ -336,6 +422,35 @@ export function renderNativePersistenceAttachment(
   );
   let output = "";
   switch (attachment.type) {
+    case "max_turns_reached":
+      return [];
+    case "hook_success":
+      if (
+        !["SessionStart", "UserPromptSubmit", "UserPromptExpansion"].includes(
+          attachment.hookEvent,
+        ) ||
+        !attachment.content
+      )
+        return [];
+      output = sanitizeHookAttachmentText(
+        `${attachment.hookName} hook success: ${attachment.content}`,
+      );
+      break;
+    case "hook_blocking_error":
+      output = sanitizeHookAttachmentText(
+        `${attachment.hookName} hook blocking error from command: "${attachment.blockingError.command}": ${attachment.blockingError.blockingError}`,
+      );
+      break;
+    case "hook_stopped_continuation":
+      output = sanitizeHookAttachmentText(
+        `${attachment.hookName} hook stopped continuation: ${attachment.message}`,
+      );
+      break;
+    case "hook_system_message":
+    case "hook_non_blocking_error":
+    case "hook_error_during_execution":
+    case "hook_cancelled":
+      return [];
     case "prompt_snapshot":
       return [];
     case "instructions": {
@@ -448,8 +563,16 @@ export function renderNativePersistenceAttachment(
 export function validateNativePersistenceEvent(
   input: unknown,
 ): NativePersistenceEvent {
-  const value = captureNativePersistenceJson(input),
-    parsed = eventSchema.parse(value);
+  const value = captureNativePersistenceJson(input);
+  if (isNativeObject(value) && value.type === "progress")
+    return validateNativeHookProgressRow(value);
+  if (
+    isNativeObject(value) &&
+    value.type === "system" &&
+    value.subtype === "stop_hook_summary"
+  )
+    return validateNativeStopHookSummaryRow(value);
+  const parsed = eventSchema.parse(value);
   if (parsed.type === "attachment") {
     const expected = renderNativePersistenceAttachment(parsed.attachment);
     if (expected.length) {

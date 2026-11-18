@@ -8,6 +8,7 @@ export const HOOK_EVENTS = [
   "PostToolUseFailure",
   "Stop",
   "SessionStart",
+  "UserPromptSubmit",
   "TaskCreated",
   "TaskCompleted",
   "SubagentStart",
@@ -30,6 +31,8 @@ export interface HookInput {
   duration_ms?: number;
   stop_hook_active?: boolean;
   source?: string;
+  prompt?: string;
+  session_title?: string;
   effort?: { level: string };
   [key: string]: unknown;
 }
@@ -98,6 +101,12 @@ const startOutput = z.object({
   watchPaths: z.array(z.string()).optional(),
   reloadSkills: z.boolean().optional(),
 });
+const userPromptOutput = z.object({
+  hookEventName: z.literal("UserPromptSubmit"),
+  additionalContext: z.string().optional(),
+  sessionTitle: z.string().optional(),
+  suppressOriginalPrompt: z.boolean().optional(),
+});
 const subagentStartOutput = z.object({
   hookEventName: z.literal("SubagentStart"),
   additionalContext: z.string().optional(),
@@ -120,6 +129,7 @@ const outputSchema = z.object({
       failureOutput,
       stopOutput,
       startOutput,
+      userPromptOutput,
       subagentStartOutput,
       subagentStopOutput,
     ])
@@ -147,6 +157,8 @@ export interface HookResult {
   preventContinuation?: boolean;
   stopReason?: string;
   suppressOutput?: boolean;
+  /** Source per-command block feedback disposition; never reduced into a batch verdict. */
+  suppressOriginalPrompt?: boolean;
   updatedToolOutput?: unknown;
   updatedMCPToolOutput?: unknown;
   initialUserMessage?: string;
@@ -181,9 +193,20 @@ export interface HookBatchResult {
 export type HookDispatchCandidate = Readonly<RegisteredHook>;
 export interface PreparedHookDispatch {
   readonly candidates: readonly HookDispatchCandidate[];
+  /** Present only for opt-in immutable final execution plans. */
+  readonly selection?: "ordinary-command-key" | "native-origin-reduced";
   runSelected(ids: ReadonlySet<string>): Promise<HookBatchResult>;
   /** Retire the snapshot, not its borrowed registry or already-started processes. */
   close(): Promise<void>;
+}
+function commandSelectionKey(entry: RegisteredHook): string {
+  return JSON.stringify([
+    entry.origin.source,
+    entry.hook.shell ?? "bash",
+    entry.hook.command,
+    entry.hook.args ?? null,
+    entry.hook.if ?? "",
+  ]);
 }
 function freezeDispatch<T>(value: T): T {
   if (value !== null && typeof value === "object") {
@@ -193,6 +216,8 @@ function freezeDispatch<T>(value: T): T {
   return value;
 }
 export interface HookRunOptions {
+  /** Bind final command winners before any native progress is produced. */
+  preparedSelection?: "bound-final";
   /** Caller-supplied roots/environment; no personal configuration or process env is read. */
   cwd: string;
   projectDir: string;
@@ -241,7 +266,7 @@ function matcherValue(input: HookInput): string | undefined {
     input.hook_event_name === "SubagentStop"
   )
     return typeof input.agent_type === "string" ? input.agent_type : undefined;
-  return undefined; // Stop has no matcher query in the source.
+  return undefined; // Stop and UserPromptSubmit have no matcher query in the source.
 }
 function matches(matcher: string | undefined, input: HookInput): boolean {
   const value = matcherValue(input);
@@ -428,6 +453,27 @@ export class HookRegistry {
       typeof input.source !== "string"
     )
       throw new Error("SessionStart input requires source");
+    if (input.hook_event_name === "UserPromptSubmit") {
+      if (typeof input.prompt !== "string")
+        throw new Error("UserPromptSubmit input requires prompt");
+      if (
+        input.source !== undefined &&
+        ![
+          "user",
+          "sdk",
+          "system",
+          "loop_wakeup",
+          "schedule_wakeup",
+          "poll_event",
+        ].includes(input.source)
+      )
+        throw new Error("UserPromptSubmit source is unsupported");
+      if (
+        input.session_title !== undefined &&
+        typeof input.session_title !== "string"
+      )
+        throw new Error("UserPromptSubmit session_title must be a string");
+    }
     if (
       input.hook_event_name === "TaskCreated" ||
       input.hook_event_name === "TaskCompleted"
@@ -482,12 +528,20 @@ export class HookRegistry {
     this.validateDispatch(input, options);
     const capturedInput = structuredClone(input);
     const capturedOptions = { ...options, env: { ...options.env } };
-    const candidates = Object.freeze(
-      (this.options.disabled ||
+    const eligible =
+      this.options.disabled ||
       options.signal.aborted ||
       this.stopping.signal.aborted
         ? []
-        : this.hooks.filter((entry) => this.eligible(entry, capturedInput))
+        : this.hooks.filter((entry) => this.eligible(entry, capturedInput));
+    const final = new Map<string, RegisteredHook>();
+    if (options.preparedSelection === "bound-final")
+      for (const entry of eligible)
+        final.set(commandSelectionKey(entry), entry);
+    const candidates = Object.freeze(
+      (options.preparedSelection === "bound-final"
+        ? [...final.values()]
+        : eligible
       ).map((entry) => freezeDispatch(structuredClone(entry))),
     );
     const valid = new Set(candidates.map((entry) => entry.id)),
@@ -495,6 +549,9 @@ export class HookRegistry {
     let retired = false;
     return {
       candidates,
+      ...(options.preparedSelection === "bound-final"
+        ? { selection: "ordinary-command-key" as const }
+        : {}),
       runSelected: async (ids) => {
         if (retired) throw new Error("Hook dispatch snapshot is retired");
         for (const id of ids)
@@ -505,6 +562,7 @@ export class HookRegistry {
           capturedInput,
           capturedOptions,
           candidates.filter((entry) => ids.has(entry.id)),
+          options.preparedSelection === "bound-final",
         );
       },
       close: async () => {
@@ -522,6 +580,7 @@ export class HookRegistry {
     input: HookInput,
     options: HookRunOptions,
     snapshot?: readonly RegisteredHook[],
+    boundFinal = false,
   ): Promise<HookBatchResult> {
     this.validateDispatch(input, options);
     const batch = emptyBatch();
@@ -533,14 +592,13 @@ export class HookRegistry {
     const serialized = JSON.stringify(input) + "\n";
     const selected = new Map<string, RegisteredHook>();
     for (const entry of snapshot ?? this.hooks) {
-      if (!this.eligible(entry, input)) continue;
-      const key = JSON.stringify([
-        entry.origin.source,
-        entry.hook.shell ?? "bash",
-        entry.hook.command,
-        entry.hook.args ?? null,
-        entry.hook.if ?? "",
-      ]);
+      if (boundFinal) {
+        if (this.used.has(entry.id))
+          throw new Error(
+            "Bound hook dispatch was consumed by another execution",
+          );
+      } else if (!this.eligible(entry, input)) continue;
+      const key = boundFinal ? entry.id : commandSelectionKey(entry);
       selected.set(key, entry); // Same command identity runs once per source, even under overlapping matchers.
     }
     const sync: Promise<HookResult>[] = [];
@@ -811,9 +869,11 @@ export class HookRegistry {
       output = outputSchema.parse(JSON.parse(trimmed.replace(/^\uFEFF/, "")));
       const specific = output.hookSpecificOutput;
       if (specific && specific.hookEventName !== entry.event) {
-        if (output.decision === "block")
-          delete output.hookSpecificOutput; // Source fPo keeps a legacy block even when its specific payload is for another event.
-        else
+        if (output.decision === "block") {
+          // Source nZ/fPo keeps the block while withholding a mismatched specific payload.
+          delete output.hookSpecificOutput;
+          result.suppressOriginalPrompt = true;
+        } else
           throw new Error(
             `Hook output names ${specific.hookEventName}, expected ${entry.event}`,
           );
@@ -878,6 +938,11 @@ export class HookRegistry {
         result.updatedToolOutput = specific.updatedToolOutput;
       if (Object.hasOwn(specific, "updatedMCPToolOutput"))
         result.updatedMCPToolOutput = specific.updatedMCPToolOutput;
+    } else if (specific?.hookEventName === "UserPromptSubmit") {
+      if (specific.sessionTitle !== undefined)
+        result.sessionTitle = specific.sessionTitle;
+      if (specific.suppressOriginalPrompt !== undefined)
+        result.suppressOriginalPrompt = specific.suppressOriginalPrompt;
     } else if (specific?.hookEventName === "SessionStart") {
       if (specific.initialUserMessage !== undefined)
         result.initialUserMessage = specific.initialUserMessage;

@@ -116,11 +116,16 @@ test("request projection rejects outstanding tools and interrupted thinking with
   );
   const crossed = document([
     row("human", null, "user", "LIVE HUMAN"),
-    row("call", "human", "assistant", [call("pending")], { nativeMessage: { stop_reason: "tool_use" } }),
+    row("call", "human", "assistant", [call("pending")], {
+      nativeMessage: { stop_reason: "tool_use" },
+    }),
     row("new", "call", "user", "CANNOT_CROSS_PENDING_CALL"),
     row("result", "new", "user", [result("pending")]),
   ]);
-  expectCode(() => projectNativeHistoryForModelRequest(crossed, options("result")), "human-crosses-pending-response");
+  expectCode(
+    () => projectNativeHistoryForModelRequest(crossed, options("result")),
+    "human-crosses-pending-response",
+  );
   const interrupted = document([
     row("human", null, "user", "LIVE HUMAN"),
     row("partial", "human", "assistant", [text("PARTIAL")], {
