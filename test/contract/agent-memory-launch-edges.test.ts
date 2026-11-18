@@ -54,6 +54,7 @@ async function fixture(options: FixtureOptions = {}) {
     cwd,
     launch,
     model: () => "claude-test",
+    sessionId: () => "test-session",
     env: options.env ?? {},
     ...(options.remoteProjectKey === undefined
       ? {}

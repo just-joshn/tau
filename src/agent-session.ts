@@ -753,6 +753,7 @@ export async function createSessionAgentHost(options: {
             ...(memoryAccess
               ? {
                   memoryFileAllowance: memoryAccess.memoryFileAllowance,
+                  rewriteMemoryContent: memoryAccess.rewriteMemoryContent,
                   extraPathAdmission: async (request) =>
                     (await childPlan?.fileAccess.extraPathAdmission(request)) ??
                     (await memoryAccess.extraPathAdmission(request)),

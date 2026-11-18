@@ -347,6 +347,12 @@ export function createTools(options: {
     canonicalPath: string;
     signal: AbortSignal;
   }) => Promise<boolean>;
+  /** Source stampNewMemoryContent: rewrite auto-memory .md bodies before Write. */
+  rewriteMemoryContent?: (request: {
+    path: string;
+    content: string;
+    previous: string | null;
+  }) => string;
   filePermissionCandidates?: (request: {
     operation: "Read" | "Write" | "Edit";
     requestedPath: string;
@@ -1239,8 +1245,16 @@ export function createTools(options: {
               requireRead: () => readState.requireComplete(file),
             });
             if (previous !== null) readState.assertCurrent(file, previous);
+            const previousText =
+              previous === null ? null : decodeTextFile(previous).text;
+            const writtenContent =
+              options.rewriteMemoryContent?.({
+                path: file,
+                content: input.content,
+                previous: previousText,
+              }) ?? input.content;
             const updated = encodeTextFile(
-              input.content,
+              writtenContent,
               previous === null ? undefined : decodeTextFile(previous),
             );
             const mtimeMs = await writeAtomic(
@@ -1250,16 +1264,15 @@ export function createTools(options: {
             );
             readState.remember(file, updated, mtimeMs);
             if (options.hooks) {
-              const originalFile =
-                previous === null ? null : decodeTextFile(previous).text;
+              const originalFile = previousText;
               hookResponse = {
                 type: previous === null ? "create" : "update",
                 filePath: responsePath(input.file_path),
-                content: input.content,
+                content: writtenContent,
                 structuredPatch:
                   originalFile === null
                     ? []
-                    : textPatch(originalFile, input.content),
+                    : textPatch(originalFile, writtenContent),
                 originalFile,
                 userModified: false,
               };

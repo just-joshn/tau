@@ -1043,6 +1043,7 @@ async function main(): Promise<void> {
     cwd,
     launch,
     model: currentModel,
+    sessionId: () => session.id,
   });
   // Source He: the prompt promises the folder exists; a failure stays silent.
   if (memoryHost.autoMemory.enabled)
@@ -1534,6 +1535,7 @@ async function main(): Promise<void> {
         ],
         ...(planHost ? planHost.access : {}),
         memoryFileAllowance: memoryAccess.memoryFileAllowance,
+        rewriteMemoryContent: memoryAccess.rewriteMemoryContent,
         extraPathAdmission: async (request) => {
           const planned = await planHost?.access.extraPathAdmission(request);
           if (planned !== undefined) return planned;

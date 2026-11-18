@@ -12,6 +12,7 @@ import {
   resolveAutoMemoryStore,
   type AutoMemoryFacts,
 } from "./auto-memory.js";
+import { stampNewMemoryContent } from "./memory-stamp.js";
 import { inspectNativePosixPermissionPath } from "./native-file-permission-host.js";
 import { sensitiveWriteReason } from "./permission-sensitive.js";
 import {
@@ -28,6 +29,8 @@ export function createLaunchAgentMemoryHost(options: {
   cwd: string;
   launch: LaunchConfiguration;
   model(): string;
+  /** Session id stamped onto new auto-memory files as originSessionId. */
+  sessionId: () => string;
   env?: NodeJS.ProcessEnv;
   /** Already selected through the native canonical project host, never guessed from cwd. */
   remoteProjectKey?: string;
@@ -262,6 +265,22 @@ export function createLaunchAgentMemoryHost(options: {
               request.signal,
             ))
           );
+        },
+        rewriteMemoryContent: ({
+          path,
+          content,
+          previous,
+        }: {
+          path: string;
+          content: string;
+          previous: string | null;
+        }) => {
+          if (previous !== null) return content;
+          if (!autoMemoryWriteAllowed(autoMemory, path)) return content;
+          return stampNewMemoryContent({
+            content,
+            sessionId: options.sessionId(),
+          });
         },
       };
     },

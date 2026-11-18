@@ -18,6 +18,19 @@ STAGES = ["save", "recall"]
 PROMPTS = {stage: "TAU_DIFFERENTIAL_MEMORY_" + stage.upper() for stage in STAGES}
 TOPIC = "user_role.md"
 TOPIC_BODY = "---\nname: user-role\ndescription: the user's role\nmetadata:\n  type: user\n---\n\nTAU_AUTO_MEMORY_TOPIC_BODY\n"
+# Both CLIs rewrite the Write body via stampNewMemoryContent (node_type / originSessionId / modified).
+STAMPED_TOPIC = re.compile(
+    r"^---\n"
+    r"name: user-role\n"
+    r'description: "the user\'s role"\n'
+    r"metadata:\n"
+    r"  node_type: memory\n"
+    r"  type: user\n"
+    r"  originSessionId: [0-9a-f-]{36}\n"
+    r"  modified: \d{4}-\d{2}-\d{2}T[^\n]+\n"
+    r"---\n\n"
+    r"TAU_AUTO_MEMORY_TOPIC_BODY\n$"
+)
 INDEX_LINE = "- [User role](user_role.md) \u2014 TAU_AUTO_MEMORY_INDEX_LINE"
 
 
@@ -127,7 +140,7 @@ def verify(requests, stdouts, memory: Path):
         "init_memory_paths": [(_init(out) or {}).get("memory_paths") for out in stdouts] == [{"auto": folder}] * len(stdouts),
         "prompt_section": bool(save) and f"# auto memory\n\nYou have a persistent, file-based memory system at `{folder}`." in _system(save[0]),
         "writes_allowed": len(results) == 2 and not any(r.get("is_error") for r in results),
-        "topic_written": topic_text == TOPIC_BODY,
+        "topic_written": bool(topic_text and STAMPED_TOPIC.match(topic_text)),
         "index_written": index_text == INDEX_LINE + "\n",
         "index_loaded": len(index_blocks) == 1 and str(index) in index_blocks[0],
         "topic_not_loaded": not any("TAU_AUTO_MEMORY_TOPIC_BODY" in t for body in recall[:1] for t in _texts(body)),
