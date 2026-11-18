@@ -287,9 +287,9 @@ test("a search runs the side query over SSE or JSON and reports API errors", asy
   );
 });
 
-test("description fills in the current month", () => {
+test("the API description keeps the original's month placeholder", () => {
   assert.match(
-    webSearchDescription(new Date(2026, 10, 18)),
-    /The current month is November 2026\. You MUST use this year/,
+    webSearchDescription(),
+    /The current month is \(provided in the conversation below\)\. You MUST use this year/,
   );
 });

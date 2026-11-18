@@ -141,7 +141,6 @@ export interface WebToolsOptions {
 
 export function createWebTools(options: WebToolsOptions) {
   const webFetch = createWebFetch(options.fetch);
-  // Unselected but enabled tools stay callable without being advertised, like deferred tools.
   const enabled = (name: WebToolName) => {
     const policy = options.policy();
     return (
@@ -149,8 +148,8 @@ export function createWebTools(options: WebToolsOptions) {
       matchingToolRule(policy, "deny", name) === undefined
     );
   };
-  const advertised = (name: string) =>
-    isWebTool(name) && enabled(name) && options.policy().tools !== undefined;
+  // Advertised whenever enabled; the catalog layer (tool-search.ts) defers both behind ToolSearch.
+  const advertised = (name: string) => isWebTool(name) && enabled(name);
   const validate = (name: WebToolName, value: unknown) => {
     if (name === WEB_SEARCH_TOOL) {
       const parsed = webSearchInputSchema.safeParse(value);

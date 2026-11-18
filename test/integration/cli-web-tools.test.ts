@@ -147,6 +147,35 @@ async function runWorkflow(steps: Step[], args: string[]) {
       return response.end(
         message([{ type: "text", text: "FETCH_ANSWER fixture" }], "end_turn"),
       );
+    // Like the original, deferred web tools load through ToolSearch before their first call.
+    const names = body.tools?.map((tool) => tool.name) ?? [];
+    const searched = body.messages.some((entry) =>
+      blocks(entry).some(
+        (block) =>
+          typeof block === "object" &&
+          block !== null &&
+          "name" in block &&
+          block.name === "ToolSearch",
+      ),
+    );
+    if (
+      names.includes("ToolSearch") &&
+      !names.includes(steps[0]?.name ?? "") &&
+      !searched
+    )
+      return response.end(
+        message(
+          [
+            {
+              type: "tool_use",
+              id: "web-search-tools",
+              name: "ToolSearch",
+              input: { query: "select:WebFetch,WebSearch", max_results: 5 },
+            },
+          ],
+          "tool_use",
+        ),
+      );
     const step = steps[toolResults(body).length];
     response.end(
       step
@@ -306,9 +335,17 @@ test(
   async () => {
     const run = await runWorkflow(
       [{ name: "WebSearch", input: () => ({ query: "tau web search" }) }],
-      ["--tools", "Read,WebSearch", "--allowedTools", "WebSearch"],
+      ["--tools", "Read,WebSearch,ToolSearch", "--allowedTools", "WebSearch"],
     );
-    assert.ok(run.bodies[0]?.tools?.some((tool) => tool.name === "WebSearch"));
+    assert.ok(run.bodies[0]?.tools?.some((tool) => tool.name === "ToolSearch"));
+    assert.ok(!run.bodies[0]?.tools?.some((tool) => tool.name === "WebSearch"));
+    assert.ok(
+      run.bodies
+        .at(-1)
+        ?.tools?.some(
+          (tool) => tool.name === "WebSearch" && tool.defer_loading === true,
+        ),
+    );
     const side = run.bodies.find((body) =>
       body.tools?.some((tool) => tool.type === "web_search_20250305"),
     );

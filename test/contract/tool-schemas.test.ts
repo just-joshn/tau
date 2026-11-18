@@ -149,6 +149,11 @@ const BASE: Record<string, (tag: string) => Record<string, unknown>> = {
   TaskUpdate: () => ({ taskId: "1", subject: "bad-task" }),
   TaskList: () => ({}),
   TaskStop: () => ({ task_id: "none" }),
+  WebFetch: (tag) => ({
+    url: `https://bad-${tag}.invalid/`,
+    prompt: "x",
+  }),
+  WebSearch: () => ({ query: "bad search" }),
   Agent: () => ({ description: "bad", prompt: "bad" }),
   Skill: () => ({ skill: "demo" }),
 };

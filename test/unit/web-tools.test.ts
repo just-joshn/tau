@@ -97,7 +97,7 @@ const hook = (
   },
 });
 
-test("definitions carry the original names and schemas and are advertised only when selected", () => {
+test("definitions carry the original names and schemas and are advertised whenever enabled", () => {
   const [fetchTool, searchTool] = webToolDefinitions();
   assert.equal(fetchTool?.name, "WebFetch");
   assert.deepEqual(fetchTool?.input_schema.required, ["url", "prompt"]);
@@ -109,7 +109,7 @@ test("definitions carry the original names and schemas and are advertised only w
   ]);
   assert.deepEqual(
     tools().executor.definitions.map((tool) => tool.name),
-    ["Read"],
+    ["Read", "WebFetch", "WebSearch"],
   );
   assert.deepEqual(
     tools({

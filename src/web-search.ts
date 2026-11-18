@@ -252,12 +252,13 @@ export async function runWebSearch(
   return assembleSearchOutput(blocks, input.query, (now() - started) / 1000);
 }
 
-/** Original vLa (non-lean, citations off) with the current month filled in like kLa. */
-export function webSearchDescription(date = new Date()): string {
-  const month = date.toLocaleString("en-US", {
-    month: "long",
-    year: "numeric",
-  });
+/**
+ * Original vLa (non-lean, citations off). The API definition keeps the month
+ * placeholder; kLa only fills it for a separate catalog projection
+ * (chunk-xqj25vze), and the differential shows the placeholder on the wire.
+ */
+export function webSearchDescription(): string {
+  const month = "(provided in the conversation below)";
   return `
 - Allows Claude to search the web and use the results to inform responses
 - Provides up-to-date information for current events and recent data
