@@ -950,7 +950,7 @@ test("mentioning a beta name without a rejection qualifier does not disable or r
   assert.equal(f.provider.thinkingResumption, true);
 });
 
-// Last: this intentionally verifies the source's process-lifetime refusal latch.
+// This intentionally verifies the source's process-lifetime refusal latch.
 test("rejected resumption beta retries an ordinary request once and remains disabled in the process", async () => {
   const f = await fixture(
     (_body, res, count) =>

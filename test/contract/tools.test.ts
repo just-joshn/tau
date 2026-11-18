@@ -866,3 +866,28 @@ test("sensitive holds preserve plain CLAUDE and launch/worktree exceptions and c
   );
   assert.equal(approvals.length, 2);
 });
+
+test("a call denied before path resolution survives a missing workspace", () => {
+  const cwd = path.join(os.tmpdir(), `tau-tools-missing-${process.pid}`);
+  const tools = path.resolve(import.meta.dir, "../../src/tools.ts");
+  const script = `
+    const { createTools } = await import(${JSON.stringify(tools)});
+    const tools = createTools({
+      cwd: ${JSON.stringify(cwd)},
+      mode: "default",
+      policy: { tools: ["Read"] },
+      approve: async () => false,
+    });
+    const result = await tools.execute(
+      { type: "tool_use", id: "t", name: "Write", input: { file_path: "a", content: "x" } },
+      new AbortController().signal,
+    );
+    console.log(result.content);
+  `;
+  const child = Bun.spawnSync([process.execPath, "-e", script], {
+    stderr: "pipe",
+  });
+  assert.equal(child.stderr.toString(), "");
+  assert.equal(child.exitCode, 0);
+  assert.match(child.stdout.toString(), /disabled or denied/);
+});
