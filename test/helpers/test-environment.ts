@@ -2,6 +2,7 @@ import { afterEach, beforeEach, mock } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { resetProviderProcessLatches } from "../../src/provider.js";
 
 // CLI children inherit disposable configuration, never the developer's Claude
 // settings or instruction files. Individual fixtures can override these roots.
@@ -14,6 +15,7 @@ process.once("exit", () => rmSync(state, { recursive: true, force: true }));
 
 // Bun 1.4 ignores bunfig's restoreMocks/clearMocks/unstubEnvs, so every test
 // gets restored spies, cleared mock history and the environment it started with.
+// Every test also starts with a fresh process's provider beta refusal latches.
 let environment: Record<string, string | undefined> = {};
 beforeEach(() => {
   environment = { ...process.env };
@@ -21,6 +23,7 @@ beforeEach(() => {
 afterEach(() => {
   mock.restore();
   mock.clearAllMocks();
+  resetProviderProcessLatches();
   for (const key of Object.keys(process.env))
     if (!Object.hasOwn(environment, key)) delete process.env[key];
   for (const [key, value] of Object.entries(environment))

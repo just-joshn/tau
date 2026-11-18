@@ -191,6 +191,12 @@ export const QUERY_EFFORT_BETA = "effort-2025-11-24";
 let resumptionHeaderRefused = false;
 const contextRefusedModels = new Set<string>();
 const effortRefusedModels = new Set<string>();
+/** Returns the beta refusal latches to a fresh process's state. */
+export function resetProviderProcessLatches(): void {
+  resumptionHeaderRefused = false;
+  contextRefusedModels.clear();
+  effortRefusedModels.clear();
+}
 type ContextRetry = {
   suppress: boolean;
   mode: "idle" | "retrying" | "guessing" | "spent" | "unproven";

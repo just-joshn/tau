@@ -1807,7 +1807,7 @@ test("an observer error after summary commit does not count the accepted summary
   assert.equal(state.consecutiveFailures, 0);
 });
 
-// Last tests exercise the process-wide long-context refusal state.
+// These tests exercise the process-wide long-context refusal state.
 test("a failed no-beta resend does not prove rejection or suppress the next query", async () => {
   const f = await fixture((_body, res, count) => {
     if (count <= 2) {
