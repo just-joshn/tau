@@ -1,0 +1,30 @@
+
+ ▐▛███▛█   Claude Code v2.1.326
+▝▜██████▀  Sonnet 4.5 · API Usage Billing
+ ▝▝   ▝▝   /private/tmp/tau-differential-x0fuy9gs/work
+
+
+❯ TAU_PTY_TEXT
+
+⏺ TAU_PTY_TEXT_REPLY mock done
+
+✻ Cooked for 0s · done 9:15 PM
+
+❯ TAU_PTY_EDIT
+
+  Read 1 file
+
+⏺ Update(a.txt)
+  ⎿  Added 1 line, removed 1 line
+      1 -alpha
+      1 +beta
+
+⏺ TAU_PTY_EDIT_REPLY error=False
+
+  ❯ /help                       Show help and available commands
+    /debug                      Turn on debug logging and investigate problems
+    /team-onboarding            Help teammates ramp on Claude Code with a guide from your usage
+────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ /help
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏸ manual mode on

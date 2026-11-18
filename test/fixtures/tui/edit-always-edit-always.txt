@@ -1,0 +1,30 @@
+
+ ▐▛███▛█   Claude Code v2.1.326
+▝▜██████▀  Sonnet 4.5 · API Usage Billing
+ ▝▝   ▝▝   /private/tmp/tau-differential-2ftb2vxw/work
+
+
+❯ TAU_PTY_EDIT
+
+  Read 1 file
+
+⏺ Update(a.txt)
+  ⎿  Added 1 line, removed 1 line
+      1 -alpha
+      1 +beta
+
+⏺ TAU_PTY_EDIT_REPLY error=False
+
+✻ Sautéed for 0s · done 9:14 PM
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ accept edits on (shift+tab to cycle) · ← for agents
