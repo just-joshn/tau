@@ -27,6 +27,10 @@ const DEFERRED_BUILTINS: ReadonlyMap<string, string> = new Map([
     "ExitWorktree",
     "exit a worktree session and return to the original directory",
   ],
+  [
+    "Monitor",
+    "watch, monitor, or keep an eye on a process/log/command or WebSocket — stream each stdout line as a live notification",
+  ],
   ["NotebookEdit", "edit Jupyter notebook cells (.ipynb)"],
   ["SendMessage", "send messages to agent teammates"],
   ["TaskCreate", "create a task in the task list"],

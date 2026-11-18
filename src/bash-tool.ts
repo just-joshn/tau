@@ -6,7 +6,13 @@
  */
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { closeSync, mkdirSync, openSync, realpathSync } from "node:fs";
+import {
+  appendFileSync,
+  closeSync,
+  mkdirSync,
+  openSync,
+  realpathSync,
+} from "node:fs";
 import { copyFile, mkdir, open, readFile, rm, stat } from "node:fs/promises";
 import { homedir, constants as osConstants } from "node:os";
 import path from "node:path";
@@ -25,6 +31,9 @@ import {
   type BackgroundShells,
   type RunningShell,
   type ShellCompletion,
+  type ShellExit,
+  type ShellExitReport,
+  type ShellTaskSnapshot,
 } from "./background-shells.js";
 import { integerSetting } from "./env-settings.js";
 import { createNativeBashCommandProjection } from "./native-bash-command-projection.js";
@@ -33,7 +42,7 @@ import { encodeNativeProjectDirectoryName } from "./native-storage-paths.js";
 import type { ToolDefinition } from "./types.js";
 
 /** Characters other than tab and newline that an approval dialog would hide (Mh). */
-const hidden = (text: string) =>
+export const hidden = (text: string) =>
   Array.from(text).some((char) => {
     const code = char.charCodeAt(0);
     return (
@@ -355,6 +364,9 @@ export function renderBashOutcome(
   }
 }
 
+/** A local_bash task id: "b" and eight base-36 characters. */
+const taskId = () =>
+  `b${[...randomBytes(8)].map((byte) => "0123456789abcdefghijklmnopqrstuvwxyz"[byte % 36]).join("")}`;
 const KILL_GRACE_MS = 1500;
 const TIMEOUT_CODE = 143;
 const signalCode = (signal: NodeJS.Signals | null) =>
@@ -363,11 +375,11 @@ const signalCode = (signal: NodeJS.Signals | null) =>
 const quote = (text: string) => `'${text.replaceAll("'", `'"'"'`)}'`;
 const HEREDOC = /<<-?\s*['"]?[A-Za-z_]/;
 const INPUT_REDIRECT = /(?:^|[\s;&|])<(?![<(])\s*\S+/;
-/** buildExecCommand(): the snapshot, shell options, the quoted command, then record `pwd -P`. */
+/** buildExecCommand(): the snapshot, shell options, the quoted command, then record `pwd -P` unless the cwd is fixed. */
 function commandString(
   shell: string,
   command: string,
-  cwdFile: string,
+  cwdFile: string | undefined,
   snapshot: string | undefined,
 ): string {
   const steps: string[] = [];
@@ -384,7 +396,7 @@ function commandString(
   );
   const stdinFree = !HEREDOC.test(command) && !INPUT_REDIRECT.test(command);
   steps.push(`eval ${quote(command)}${stdinFree ? " < /dev/null" : ""}`);
-  steps.push(`pwd -P >| ${quote(cwdFile)}`);
+  if (cwdFile !== undefined) steps.push(`pwd -P >| ${quote(cwdFile)}`);
   return steps.join(" && ");
 }
 
@@ -392,12 +404,16 @@ function spawnShell(request: {
   shell: string;
   command: string;
   cwd: string;
-  cwdFile: string;
+  /** Absent for a Monitor (preventCwdChanges): its `cd` never moves the session. */
+  cwdFile?: string;
   outputFile: string;
   env: NodeJS.ProcessEnv;
   snapshot: string | undefined;
+  /** Pipes stdout here as well as to the output file; stderr only goes to the file. */
+  onStdout?: (text: string) => void;
 }): RunningShell & { pid: number | undefined } {
-  const fd = openSync(request.outputFile, "w");
+  const onStdout = request.onStdout;
+  const fd = openSync(request.outputFile, onStdout ? "a" : "w");
   let child;
   try {
     // getSpawnArgs(): a sourced snapshot replaces the login shell.
@@ -417,15 +433,23 @@ function spawnShell(request: {
         cwd: request.cwd,
         env: request.env,
         detached: true,
-        stdio: ["ignore", fd, fd],
+        stdio: ["ignore", onStdout ? "pipe" : fd, fd],
       },
     );
   } finally {
     closeSync(fd);
   }
+  if (onStdout)
+    child.stdout?.setEncoding("utf8").on("data", (text: string) => {
+      appendFileSync(request.outputFile, text);
+      onStdout(text);
+    });
+  // A piped stdout is read to its end before the exit counts.
   const exited = new Promise<number>((resolve) => {
     child.on("error", () => resolve(126));
-    child.on("exit", (code, signal) => resolve(code ?? signalCode(signal)));
+    child.on(onStdout ? "close" : "exit", (code, signal) =>
+      resolve(code ?? signalCode(signal)),
+    );
   });
   const group = (signal: NodeJS.Signals) => {
     if (child.pid === undefined) return;
@@ -496,6 +520,8 @@ export function createShellHost(options: ShellHostOptions) {
   const session = options.session ?? { nonInteractive: true, singleShot: true };
   const mainThread = options.mainThread ?? true;
   const startCwd = options.startCwd;
+  /** The folder `cd` stays inside and resets to; EnterWorktree moves it to the worktree. */
+  let root = startCwd;
   let cwd = startCwd;
   const shells =
     options.shells ??
@@ -541,18 +567,18 @@ export function createShellHost(options: ShellHostOptions) {
     CLAUDE_CODE_CHILD_SESSION: "1",
     CLAUDE_PID: String(process.pid),
   });
-  // `pwd -P` records physical paths, so the start folder is compared both as given and resolved.
-  let physicalStart: string | undefined;
+  // `pwd -P` records physical paths, so the root is compared both as given and resolved.
+  let physicalRoot: string | undefined;
   const inside = (directory: string) => {
-    physicalStart ??= (() => {
+    physicalRoot ??= (() => {
       try {
-        return realpathSync(startCwd);
+        return realpathSync(root);
       } catch {
-        return startCwd;
+        return root;
       }
     })();
-    return [startCwd, physicalStart].some((root) => {
-      const relative = path.relative(root, directory);
+    return [root, physicalRoot].some((base) => {
+      const relative = path.relative(base, directory);
       return (
         relative === "" ||
         (!relative.startsWith("..") && !path.isAbsolute(relative))
@@ -577,9 +603,9 @@ export function createShellHost(options: ShellHostOptions) {
       }
     }
     const maintain = facts().maintainProjectDir;
-    if (maintain || (cwd !== startCwd && !inside(cwd))) {
-      cwd = startCwd;
-      if (!maintain) return `Shell cwd was reset to ${startCwd}`;
+    if (maintain || (cwd !== root && !inside(cwd))) {
+      cwd = root;
+      if (!maintain) return `Shell cwd was reset to ${root}`;
     }
   }
   /** Output within the inline limit is read and deleted; above it the file is kept as a tool result. */
@@ -597,17 +623,19 @@ export function createShellHost(options: ShellHostOptions) {
     return persistedPreview(trimBlankLines(text), saved, size);
   }
   /** Where the next call would run; a deleted folder falls back to the start folder (TCi). */
-  async function liveCwd(): Promise<string | BashOutcome> {
+  async function liveCwd(): Promise<
+    string | Extract<BashOutcome, { kind: "refused" }>
+  > {
     try {
       if ((await stat(cwd)).isDirectory()) return cwd;
     } catch {
       /* Recover below. */
     }
     const lost = cwd;
-    cwd = startCwd;
+    cwd = root;
     return {
       kind: "refused",
-      message: `Working directory "${lost}" no longer exists, so this command was not run. Shell cwd recovered to "${startCwd}": re-issue the command if it still makes sense there.`,
+      message: `Working directory "${lost}" no longer exists, so this command was not run. Shell cwd recovered to "${root}": re-issue the command if it still makes sense there.`,
     };
   }
 
@@ -630,7 +658,7 @@ export function createShellHost(options: ShellHostOptions) {
     const shell = selectShell(env);
     const snapshot = await usableSnapshot(shell, env);
     context.signal.throwIfAborted();
-    const id = `b${[...randomBytes(8)].map((byte) => "0123456789abcdefghijklmnopqrstuvwxyz"[byte % 36]).join("")}`;
+    const id = taskId();
     const outputFile = path.join(tasksDirectory(), `${id}.output`);
     const cwdFile = path.join(
       tmpRoot(),
@@ -656,6 +684,7 @@ export function createShellHost(options: ShellHostOptions) {
         id,
         command: input.command,
         description,
+        cwd: directory,
         ...(context.toolUseId === undefined
           ? {}
           : { toolUseId: context.toolUseId }),
@@ -723,12 +752,59 @@ export function createShellHost(options: ShellHostOptions) {
     };
   }
 
+  /**
+   * Ue/v0e with kind "monitor": a background shell in the current folder whose
+   * stdout lines feed `onStdout`. Its `cd` does not move the session.
+   */
+  async function startMonitor(request: {
+    command: string;
+    description: string;
+    toolUseId?: string;
+    onStdout: (text: string) => void;
+    onExit: (ending: ShellExit | undefined) => ShellExitReport | undefined;
+  }): Promise<Readonly<ShellTaskSnapshot>> {
+    const directory = await liveCwd();
+    if (typeof directory !== "string") throw new Error(directory.message);
+    const shell = selectShell(env);
+    const snapshot = await usableSnapshot(shell, env);
+    const id = taskId();
+    const child = spawnShell({
+      shell,
+      command: request.command,
+      cwd: directory,
+      outputFile: path.join(tasksDirectory(), `${id}.output`),
+      env: childEnv(shell),
+      snapshot,
+      onStdout: request.onStdout,
+    });
+    return shells.adopt(child, {
+      id,
+      command: request.command,
+      description: request.description,
+      cwd: directory,
+      ...(request.toolUseId === undefined
+        ? {}
+        : { toolUseId: request.toolUseId }),
+      onExit: request.onExit,
+    });
+  }
+
   return {
     shells,
     facts,
     get cwd() {
       return cwd;
     },
+    get root() {
+      return root;
+    },
+    /** EnterWorktree/ExitWorktree: the session's folder and the root `cd` stays inside. */
+    relocate(next: { cwd: string; root: string }) {
+      cwd = next.cwd;
+      root = next.root;
+      physicalRoot = undefined;
+    },
+    startMonitor,
     definition(): ToolDefinition {
       const current = facts();
       return {

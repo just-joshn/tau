@@ -26,6 +26,8 @@ export interface ShellTaskSnapshot {
   command: string;
   description: string;
   outputFile: string;
+  /** Where the shell started; ExitWorktree refuses to remove a tree a running task works in. */
+  cwd?: string;
   toolUseId?: string;
   status: ShellTaskStatus;
   exitCode?: number;
@@ -35,6 +37,15 @@ export interface ShellTaskSnapshot {
 export interface ShellCompletion {
   status: Exclude<ShellTaskStatus, "running">;
   exitNote?: string;
+}
+export interface ShellExit {
+  code: number;
+  completion: ShellCompletion;
+}
+/** What the exit notification says; a Monitor replaces the Bash summary and adds its last events. */
+export interface ShellExitReport {
+  summary: string;
+  body?: string;
 }
 export interface BackgroundShellsOptions {
   /** Interprets an exit code the way the original's command semantics do. */
@@ -71,31 +82,58 @@ function summary(task: ShellTaskSnapshot, ending: Ending): string {
     : `${name} failed with exit code ${code}`;
 }
 
-/** FVn + ji + KVt: the <task-notification> the model receives in a meta user message. */
+export interface TaskNotificationFields {
+  taskId: string;
+  toolUseId?: string;
+  outputFile?: string;
+  status?: string;
+  /** Unescaped; long summaries are shortened. */
+  summary: string;
+}
+/** ji + KVt: the <task-notification> the model receives in a meta user message. */
+export function formatTaskNotification(
+  fields: TaskNotificationFields,
+  body = "",
+): string {
+  const lines: [string, string | undefined][] = [
+    ["task-id", fields.taskId],
+    ["tool-use-id", fields.toolUseId],
+    ["output-file", fields.outputFile],
+    ["status", fields.status],
+    ["summary", escape(projectTaskStopText(fields.summary))],
+  ];
+  let text = "<task-notification>";
+  for (const [name, value] of lines)
+    if (value) text += `\n<${name}>${value}</${name}>`;
+  return `<system-reminder>\n${NOTIFICATION_PREFIX}\n\n${text}${body}\n</task-notification>\n</system-reminder>`;
+}
+
+/** FVn: a background shell's ending, with the deadline note when its time limit stopped it. */
 export function formatShellNotification(
   task: ShellTaskSnapshot,
   ending: Ending,
+  report: ShellExitReport = { summary: summary(task, ending) },
 ): string {
   const status =
     ending.kind === "deadline" ? "killed" : ending.completion.status;
-  const fields: [string, string | undefined][] = [
-    ["task-id", task.id],
-    ["tool-use-id", task.toolUseId],
-    ["output-file", task.outputFile],
-    ["status", status],
-    ["summary", escape(projectTaskStopText(summary(task, ending)))],
-  ];
-  let body = "<task-notification>";
-  for (const [name, value] of fields)
-    if (value) body += `\n<${name}>${value}</${name}>`;
+  let note = "";
   if (ending.kind === "deadline") {
     const longest =
       ending.longestTimeoutMs === undefined
         ? ""
         : ` The longest \`timeout\` allowed in this session is ${ending.longestTimeoutMs} ms (${Math.round(ending.longestTimeoutMs / 60000)} minutes).`;
-    body += `\n<note>${escape(DEADLINE_NOTE + longest)}</note>`;
+    note = `\n<note>${escape(DEADLINE_NOTE + longest)}</note>`;
   }
-  return `<system-reminder>\n${NOTIFICATION_PREFIX}\n\n${body}\n</task-notification>\n</system-reminder>`;
+  return formatTaskNotification(
+    {
+      taskId: task.id,
+      ...(task.toolUseId === undefined ? {} : { toolUseId: task.toolUseId }),
+      outputFile: task.outputFile,
+      status,
+      summary: report.summary,
+    },
+    `${note}${report.body ?? ""}`,
+  );
 }
 
 interface Task {
@@ -147,9 +185,16 @@ export function createBackgroundShells(options: BackgroundShellsOptions) {
         id: string;
         command: string;
         description: string;
+        cwd?: string;
         toolUseId?: string;
         deadlineMs?: number;
         longestTimeoutMs?: number;
+        /**
+         * Runs once the shell has ended. `ending` is undefined when a stop or
+         * deadline already owns the notification; otherwise the report replaces
+         * the Bash exit summary.
+         */
+        onExit?(ending: ShellExit | undefined): ShellExitReport | undefined;
       },
     ): Readonly<ShellTaskSnapshot> {
       const snapshot: ShellTaskSnapshot = {
@@ -158,6 +203,7 @@ export function createBackgroundShells(options: BackgroundShellsOptions) {
         command: meta.command,
         description: meta.description,
         outputFile: shell.outputFile,
+        ...(meta.cwd === undefined ? {} : { cwd: meta.cwd }),
         ...(meta.toolUseId === undefined ? {} : { toolUseId: meta.toolUseId }),
         status: "running",
         startTime: now(),
@@ -169,13 +215,21 @@ export function createBackgroundShells(options: BackgroundShellsOptions) {
         settled: Promise.resolve(),
       };
       task.settled = shell.exited.then(async (code) => {
-        if (task.claimed) return;
+        if (task.claimed) {
+          meta.onExit?.(undefined);
+          return;
+        }
         task.claimed = true;
         const completion = options.interpret(meta.command, code);
         end(task, completion.status, code);
+        const report = meta.onExit?.({ code, completion });
         await trailer(task, `\n[exited with code ${code}]\n`);
         options.enqueueNotification(
-          formatShellNotification(snapshot, { kind: "exit", code, completion }),
+          formatShellNotification(
+            snapshot,
+            { kind: "exit", code, completion },
+            report,
+          ),
         );
         publish();
       });
@@ -207,6 +261,11 @@ export function createBackgroundShells(options: BackgroundShellsOptions) {
       return [...tasks.values()].some(
         (task) => task.snapshot.status === "running",
       );
+    },
+    /** A notification from a running task (a Monitor event): queued, and waiters wake. */
+    announce(text: string): void {
+      options.enqueueNotification(text);
+      publish();
     },
     subscribe(callback: () => void): () => void {
       subscribers.add(callback);
