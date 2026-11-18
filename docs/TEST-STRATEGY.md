@@ -22,6 +22,8 @@ This page lists how tau's tests are organized, which gates block a change, and w
 
 Every PR test runs offline. Tests talk only to `127.0.0.1` and never need an API key.
 
+The Grep tests need a standalone `rg` in an absolute `PATH` directory, the same requirement the Grep tool has. CI installs `ripgrep` in every job that runs tests.
+
 ## Test tiers
 
 Each test file sits in exactly one tier directory. `test/unit/test-layout.test.ts` fails when a test file sits anywhere else.

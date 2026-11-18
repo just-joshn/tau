@@ -31,6 +31,10 @@ jobs:
         with:
           bun-version-file: .bun-version
       - run: bun ci
+      - name: Install ripgrep, which the Grep tool requires
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then HOMEBREW_NO_AUTO_UPDATE=1 brew install ripgrep
+          else sudo apt-get update -q && sudo apt-get install -y -q ripgrep; fi
       - name: Random order, five reruns per file
         env:
           SEED: ${{ matrix.seed }}
@@ -50,6 +54,10 @@ jobs:
         with:
           bun-version-file: .bun-version
       - run: bun ci
+      - name: Install ripgrep, which the Grep tool requires
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then HOMEBREW_NO_AUTO_UPDATE=1 brew install ripgrep
+          else sudo apt-get update -q && sudo apt-get install -y -q ripgrep; fi
       - run: bun test --parallel
 
   mutation:
@@ -64,6 +72,10 @@ jobs:
         with:
           bun-version-file: .bun-version
       - run: bun ci
+      - name: Install ripgrep, which the Grep tool requires
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then HOMEBREW_NO_AUTO_UPDATE=1 brew install ripgrep
+          else sudo apt-get update -q && sudo apt-get install -y -q ripgrep; fi
       # STRATEGY.md section 8: every surviving permission guard mutant is
       # either killed by test/security or recorded in equivalent.ts.
       - run: bun run test:mutation -- --concurrency 4
@@ -92,6 +104,10 @@ jobs:
       - name: Record canary runtime
         run: echo "pinned $(cat .bun-version), canary $(bun --version)"
       - run: bun ci
+      - name: Install ripgrep, which the Grep tool requires
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then HOMEBREW_NO_AUTO_UPDATE=1 brew install ripgrep
+          else sudo apt-get update -q && sudo apt-get install -y -q ripgrep; fi
       - run: bun run typecheck
       - run: bun test --parallel
 

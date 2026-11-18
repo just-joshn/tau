@@ -51,6 +51,10 @@ jobs:
         with:
           bun-version-file: .bun-version
       - run: bun ci
+      - name: Install ripgrep, which the Grep tool requires
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then HOMEBREW_NO_AUTO_UPDATE=1 brew install ripgrep
+          else sudo apt-get update -q && sudo apt-get install -y -q ripgrep; fi
       - name: Run live evaluation
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

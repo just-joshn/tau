@@ -67,6 +67,10 @@ jobs:
         with:
           node-version: "26"
       - run: bun ci
+      - name: Install ripgrep, which the Grep tool requires
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then HOMEBREW_NO_AUTO_UPDATE=1 brew install ripgrep
+          else sudo apt-get update -q && sudo apt-get install -y -q ripgrep; fi
       - name: Record runtimes
         run: |
           bun --version
@@ -90,6 +94,10 @@ jobs:
         with:
           bun-version-file: .bun-version
       - run: bun ci
+      - name: Install ripgrep, which the Grep tool requires
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then HOMEBREW_NO_AUTO_UPDATE=1 brew install ripgrep
+          else sudo apt-get update -q && sudo apt-get install -y -q ripgrep; fi
       # Bun 1.4.4 silently skips the JUnit file when its directory is missing.
       - run: mkdir -p test-results
       - name: Branch coverage gate (80%) with JUnit
