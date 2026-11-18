@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { constants } from "node:fs";
 import { lstat, mkdir, open, opendir, realpath, stat } from "node:fs/promises";
 import path from "node:path";
-import { TextDecoder } from "node:util";
+import { TextDecoder, isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import type {
   PermissionMode,
@@ -34,10 +34,15 @@ import {
   renderSelectedText,
   selectTextFile,
   type FileTokenCounter,
+  type TextSelection,
 } from "./file-read.js";
+import { captureNativePersistenceJson } from "./native-persistence-events.js";
 import { readAllowance, type ReadToolContext } from "./context-room.js";
 import { MAX_EDIT_BYTES, readFileSnapshot } from "./file-snapshot.js";
 import { sensitiveWriteReason } from "./permission-sensitive.js";
+import { parseNativePermissionRule } from "./native-permission-rules.js";
+import type { FilePermissionSessionResult } from "./file-permission-session.js";
+import type { BashPermissionSessionResult } from "./bash-permission-session.js";
 import { unparsedToolInput } from "./tool-input.js";
 import { decodeTextFile, encodeTextFile } from "./text-file.js";
 import {
@@ -49,6 +54,7 @@ import {
   toolPolicySchema,
   type ToolName,
   type ToolPolicy,
+  type PolicyRuleMatch,
 } from "./tool-policy.js";
 
 const MAX_BYTES = 64 * 1024;
@@ -270,6 +276,92 @@ export interface FileToolCallContext {
   signal: AbortSignal;
 }
 
+/** Actual port short-circuit evidence. This is never a native permissionDecision. */
+export interface PortToolPermissionTrace {
+  tool: ToolName;
+  mode: PermissionMode;
+  branch:
+    | "plan"
+    | "memory"
+    | "hook"
+    | "scoped"
+    | "compatibility"
+    | "bash"
+    | "readonly"
+    | "whole"
+    | "bypass"
+    | "acceptEdits"
+    | "approval";
+  readonly: boolean;
+  asks: boolean;
+  wholeToolAsk?: PolicyRuleMatch;
+  hookPermission?: PreToolHookResult["permission"];
+  fileCandidates?: FilePermissionSessionResult & {
+    compatibilityAllow?: PolicyRuleMatch;
+  };
+  bashCandidates?: BashPermissionSessionResult;
+  planFile: boolean;
+  admittedAgentMemory?: boolean;
+  safetyAsk?: boolean;
+  matchedRule?: PolicyRuleMatch;
+  approval?: { approved: true; description: string };
+}
+export interface TextReadRawResult {
+  type: "text";
+  file: {
+    filePath: string;
+    content: string;
+    numLines: number;
+    startLine: number;
+    totalLines: number;
+  };
+}
+export interface TextReadResultCapture {
+  originalCall: Readonly<ToolUse>;
+  effectiveCall: Readonly<ToolUse>;
+  canonicalPath: string;
+  /** Actual port I/O DTO, independent of whether hookResponse is enabled. */
+  rawResult: TextReadRawResult;
+  selection: Readonly<TextSelection>;
+  render: {
+    content: string;
+    baseline: string;
+    complete: boolean;
+    projectionChanged: boolean;
+  };
+  permissionTrace: Readonly<PortToolPermissionTrace>;
+  coreResult: Readonly<ToolResult>;
+  finalResult: Readonly<ToolResult>;
+  /** Strict ordinary text adapter only; actual native decision mapping is separate. */
+  nativeCompatibility:
+    | { status: "supported" }
+    | { status: "unsupported"; reasons: readonly string[] };
+}
+/** A local recording failure must not become tool feedback or invoke failure hooks. */
+export class TextReadCaptureError extends Error {
+  constructor(cause: unknown) {
+    super("Text Read result capture failed", { cause });
+    this.name = "TextReadCaptureError";
+  }
+}
+function readCaptureSnapshot<T>(value: T): T {
+  try {
+    const copy = structuredClone(value);
+    captureNativePersistenceJson(copy);
+    const pending: object[] =
+      copy !== null && typeof copy === "object" ? [copy] : [];
+    for (const object of pending) {
+      const children: unknown[] = Object.values(object);
+      for (const child of children)
+        if (child !== null && typeof child === "object") pending.push(child);
+      Object.freeze(object);
+    }
+    return copy;
+  } catch (error) {
+    throw new TextReadCaptureError(error);
+  }
+}
+
 export function createTools(options: {
   cwd: string;
   mode: PermissionMode;
@@ -281,6 +373,7 @@ export function createTools(options: {
   sensitiveWritePaths?: readonly string[];
   hooks?: ToolHookRuntime;
   onFileToolCall?: (context: FileToolCallContext) => void | Promise<void>;
+  onTextReadResult?: (input: TextReadResultCapture) => void | Promise<void>;
   extraPathAdmission?: (request: {
     operation: string;
     requestedPath: string;
@@ -292,6 +385,27 @@ export function createTools(options: {
     canonicalPath: string;
     signal?: AbortSignal;
   }) => Promise<boolean>;
+  /** Source memory candidate, after actual tool/deny/ask/mode/baseline guards. */
+  memoryFileAllowance?: (request: {
+    operation: "Read" | "Write" | "Edit";
+    requestedPath: string;
+    canonicalPath: string;
+    signal: AbortSignal;
+  }) => Promise<boolean>;
+  filePermissionCandidates?: (request: {
+    operation: "Read" | "Write" | "Edit";
+    requestedPath: string;
+    canonicalPath: string;
+    signal: AbortSignal;
+  }) =>
+    | (FilePermissionSessionResult & {
+        compatibilityAllow?: import("./tool-policy.js").PolicyRuleMatch;
+      })
+    | undefined;
+  bashPermissionCandidates?: (request: {
+    command: string;
+    signal: AbortSignal;
+  }) => BashPermissionSessionResult | undefined;
   approve: (description: string) => Promise<boolean>;
 }): ToolExecutor {
   const readState = options.readState ?? new ReadState();
@@ -300,6 +414,36 @@ export function createTools(options: {
   if (!Number.isFinite(readMaxTokens) || readMaxTokens <= 0)
     throw new Error("File Read token limit must be positive and finite");
   const policy = toolPolicySchema.parse(options.policy ?? {});
+  for (const [behavior, rules] of [
+    ["allow", policy.allowedTools],
+    ["deny", policy.disallowedTools],
+    ["ask", policy.askedTools ?? []],
+  ] as const) {
+    for (const rule of rules) requireScopedHost(rule, behavior);
+  }
+  for (const rule of policy.sourcedRules ?? [])
+    requireScopedHost(rule.rule, rule.behavior);
+  function requireScopedHost(rule: string, behavior: string) {
+    const parsed = parseNativePermissionRule(rule);
+    if (
+      parsed.kind === "malformed" ||
+      !rule.includes("(") ||
+      (parsed.kind !== "call" &&
+        (behavior !== "allow" || parsed.toolName === "Bash"))
+    )
+      return;
+    if (
+      ["Read", "Write", "Edit"].includes(parsed.toolName) &&
+      !options.filePermissionCandidates
+    )
+      throw new Error(
+        "Scoped file permission rules require the session path host",
+      );
+    if (parsed.toolName === "Bash" && !options.bashPermissionCandidates)
+      throw new Error(
+        "Scoped Bash permission rules require the session command host",
+      );
+  }
   const available = (name: ToolName) =>
     (policy.tools === undefined || policy.tools.includes(name)) &&
     matchingToolRule(policy, "deny", name) === undefined;
@@ -461,11 +605,74 @@ export function createTools(options: {
     signal: AbortSignal,
     fileContext?: { canonical: string; input: string },
     hookPermission?: PreToolHookResult["permission"],
-  ): Promise<void> {
+    permissionInput?: unknown,
+  ): Promise<PortToolPermissionTrace> {
     const readonly = name === "Read" || name === "Glob" || name === "Grep";
-    const asks =
-      matchingToolRule(policy, "ask", name) !== undefined ||
-      hookPermission === "ask";
+    const denied = matchingToolRule(policy, "deny", name, {
+      input: permissionInput,
+    });
+    if (denied)
+      throw new ToolPermissionDenied(
+        `Permission rule denies ${name}: ${denied.rule}`,
+      );
+    const wholeToolAsk = matchingToolRule(policy, "ask", name, {
+      input: permissionInput,
+    });
+    let asks = wholeToolAsk !== undefined || hookPermission === "ask";
+    const root = fileContext === undefined ? undefined : await workspaceRoot();
+    const fileRules =
+      fileContext !== undefined &&
+      root !== undefined &&
+      (name === "Read" || name === "Write" || name === "Edit")
+        ? options.filePermissionCandidates?.({
+            operation: name,
+            requestedPath: path.resolve(root, fileContext.input),
+            canonicalPath: fileContext.canonical,
+            signal,
+          })
+        : undefined;
+    if (fileRules?.deny)
+      throw new ToolPermissionDenied(
+        `File permission rule denies ${name}: ${fileRules.deny.rule}`,
+      );
+    if (fileRules?.status === "unsupported")
+      throw new ToolPermissionDenied(
+        `File permission rules could not be evaluated: ${fileRules.unsupported.join("; ")}`,
+      );
+    asks ||= fileRules?.ask !== undefined;
+    const command =
+      name === "Bash" &&
+      typeof permissionInput === "object" &&
+      permissionInput !== null &&
+      "command" in permissionInput &&
+      typeof permissionInput.command === "string"
+        ? permissionInput.command
+        : undefined;
+    const bashRules =
+      command === undefined
+        ? undefined
+        : options.bashPermissionCandidates?.({ command, signal });
+    let bashAllow = false;
+    if (bashRules) {
+      if (bashRules.status === "unsupported")
+        throw new ToolPermissionDenied(
+          "Command permission rules could not be evaluated for this shell form",
+        );
+      if (bashRules.exact.deny)
+        throw new ToolPermissionDenied(
+          `Command permission rule denies Bash: ${bashRules.exact.deny.rule}`,
+        );
+      if (bashRules.exact.ask) asks = true;
+      else if (bashRules.prefix.deny)
+        throw new ToolPermissionDenied(
+          `Command permission rule denies Bash: ${bashRules.prefix.deny.rule}`,
+        );
+      else if (bashRules.prefix.ask) asks = true;
+      else
+        bashAllow =
+          bashRules.exact.allow?.resolved === true ||
+          bashRules.prefix.allow?.resolved === true;
+    }
     const planFile =
       !readonly &&
       fileContext !== undefined &&
@@ -476,47 +683,96 @@ export function createTools(options: {
         canonicalPath: fileContext.canonical,
         signal,
       }));
+    let admittedAgentMemory: boolean | undefined;
+    let safetyAsk: boolean | undefined;
+    const trace = (
+      branch: PortToolPermissionTrace["branch"],
+      extra: Pick<PortToolPermissionTrace, "matchedRule" | "approval"> = {},
+    ): PortToolPermissionTrace => {
+      const value: PortToolPermissionTrace = {
+        tool: name,
+        mode: options.mode,
+        branch,
+        readonly,
+        asks,
+        planFile: Boolean(planFile),
+        ...(wholeToolAsk === undefined ? {} : { wholeToolAsk }),
+        ...(hookPermission === undefined ? {} : { hookPermission }),
+        ...(fileRules === undefined ? {} : { fileCandidates: fileRules }),
+        ...(bashRules === undefined ? {} : { bashCandidates: bashRules }),
+        ...(admittedAgentMemory === undefined ? {} : { admittedAgentMemory }),
+        ...(safetyAsk === undefined ? {} : { safetyAsk }),
+        ...extra,
+      };
+      return options.onTextReadResult && name === "Read"
+        ? readCaptureSnapshot(value)
+        : value;
+    };
     signal.throwIfAborted();
     // The designated session plan bypasses the ordinary plan/sensitive hold.
     // Explicit deny/ask and full validation retain their earlier authority.
     if (options.mode === "plan" && !readonly && !planFile)
       throw new ToolPermissionDenied("Plan mode is read only");
-    if (planFile && !asks) return;
-    const root = fileContext === undefined ? undefined : await workspaceRoot();
+    if (planFile && !asks) return trace("plan");
+    admittedAgentMemory =
+      !asks &&
+      fileContext !== undefined &&
+      root !== undefined &&
+      (name === "Read" || name === "Write" || name === "Edit") &&
+      (await options.memoryFileAllowance?.({
+        operation: name,
+        requestedPath: path.resolve(root, fileContext.input),
+        canonicalPath: fileContext.canonical,
+        signal,
+      })) === true;
+    signal.throwIfAborted();
     const sensitive =
-      fileContext === undefined || root === undefined
+      readonly || fileContext === undefined || root === undefined
         ? undefined
         : (sensitiveWriteReason(
             fileContext.input,
             root,
             options.sensitiveWritePaths,
+            { admittedAgentMemory },
           ) ??
           sensitiveWriteReason(
             fileContext.canonical,
             root,
             options.sensitiveWritePaths,
+            { admittedAgentMemory },
           ));
-    const safetyAsk =
+    safetyAsk =
       !planFile &&
       sensitive !== undefined &&
       options.mode !== "bypassPermissions";
-    if (
-      !asks &&
-      !safetyAsk &&
-      (hookPermission === "allow" ||
-        readonly ||
-        matchingToolRule(policy, "allow", name) !== undefined ||
-        options.mode === "bypassPermissions" ||
-        (options.mode === "acceptEdits" && name !== "Bash"))
-    )
-      return;
+    if (!asks && !safetyAsk) {
+      // Keep the original OR's exact short-circuit order. In particular a Read
+      // reaches readonly before whole-tool, bypass or acceptEdits checks.
+      if (hookPermission === "allow") return trace("hook");
+      if (admittedAgentMemory) return trace("memory");
+      const scopedAllow = fileRules?.allow;
+      if (scopedAllow !== undefined)
+        return trace("scoped", { matchedRule: scopedAllow });
+      const compatibilityAllow = fileRules?.compatibilityAllow;
+      if (compatibilityAllow !== undefined)
+        return trace("compatibility", { matchedRule: compatibilityAllow });
+      if (bashAllow) return trace("bash");
+      if (readonly) return trace("readonly");
+      const whole = matchingToolRule(policy, "allow", name);
+      if (whole !== undefined) return trace("whole", { matchedRule: whole });
+      if (options.mode === "bypassPermissions") return trace("bypass");
+      if (options.mode === "acceptEdits" && name !== "Bash")
+        return trace("acceptEdits");
+    }
     let approved: boolean;
+    const approvalDescription = safetyAsk
+      ? `${sensitive}. Once approval is required.\n${description}`
+      : description;
+    // Approval is an external callback: retain the actual ask/candidate evidence
+    // before it can change the host's live policy/candidate objects.
+    const approvalTrace = trace("approval");
     try {
-      approved = await options.approve(
-        safetyAsk
-          ? `${sensitive}. Once approval is required.\n${description}`
-          : description,
-      );
+      approved = await options.approve(approvalDescription);
     } catch (error) {
       throw new ToolPermissionDenied(
         error instanceof Error
@@ -527,6 +783,13 @@ export function createTools(options: {
     if (signal.aborted)
       throw new ToolPermissionDenied("Permission approval aborted");
     if (!approved) throw new ToolPermissionDenied("Permission denied");
+    const accepted: PortToolPermissionTrace = {
+      ...approvalTrace,
+      approval: { approved: true, description: approvalDescription },
+    };
+    return options.onTextReadResult && name === "Read"
+      ? readCaptureSnapshot(accepted)
+      : accepted;
   }
   async function checkSensitiveReadPrecondition(
     file: string,
@@ -641,6 +904,9 @@ export function createTools(options: {
             "Read",
             `Read ${resolved} to restore file context`,
             signal,
+            { canonical: resolved, input: file },
+            undefined,
+            { file_path: file },
           );
           if (resolved !== file)
             throw new Error("File path changed since Read");
@@ -652,6 +918,8 @@ export function createTools(options: {
       let pre: PreToolHookResult | undefined;
       let effectiveCall: ToolUse = call;
       let inCall = false;
+      let readCaptureStarted = false;
+      let originalReadCall: ToolUse | undefined;
       try {
         signal.throwIfAborted();
         const name = toolNameSchema.parse(call.name);
@@ -683,6 +951,8 @@ export function createTools(options: {
           }
         };
         effectiveCall = { ...call, input: await validate(call.input) };
+        if (name === "Read" && options.onTextReadResult)
+          originalReadCall = readCaptureSnapshot(call);
         if (options.hooks) {
           pre = await options.hooks.before(effectiveCall, signal, validate);
           signal.throwIfAborted();
@@ -744,12 +1014,13 @@ export function createTools(options: {
           case "Read": {
             const input = schemas.Read.parse(effectiveCall.input);
             const file = await safePath(input.file_path, "Read", signal);
-            await permit(
+            const permissionTrace = await permit(
               name,
               `Read ${file}`,
               signal,
-              undefined,
+              { canonical: file, input: input.file_path },
               pre?.permission,
+              effectiveCall.input,
             );
             inCall = true;
             await options.onFileToolCall?.({ name, path: file, signal });
@@ -795,28 +1066,87 @@ export function createTools(options: {
                 );
               else readState.rememberPartial(file, selected.mtimeMs);
               inCall = false;
-              return await finish({
+              const rawResult: TextReadRawResult = {
+                type: "text",
+                file: {
+                  filePath: responsePath(input.file_path),
+                  content: view.baseline,
+                  numLines:
+                    view.baseline === selected.text
+                      ? selected.lineCount
+                      : selected.lineCount === 0
+                        ? 0
+                        : view.baseline.split("\n").length,
+                  startLine: input.offset,
+                  totalLines: selected.totalLines,
+                },
+              };
+              const core: ToolResult = {
                 type: "tool_result",
                 tool_use_id: call.id,
                 content: view.content,
-                ...(options.hooks
-                  ? {
-                      hookResponse: {
-                        type: "text",
-                        file: {
-                          filePath: responsePath(input.file_path),
-                          content: view.baseline,
-                          numLines:
-                            selected.lineCount === 0
-                              ? 0
-                              : view.baseline.split("\n").length,
-                          startLine: input.offset,
-                          totalLines: selected.totalLines,
-                        },
-                      },
-                    }
-                  : {}),
+                ...(options.hooks ? { hookResponse: rawResult } : {}),
+              };
+              if (!options.onTextReadResult) return await finish(core);
+              // Capture actual I/O and core state before Post can mutate its raw
+              // hookResponse; the journal receives the accepted final result too.
+              const io = readCaptureSnapshot({
+                originalCall: originalReadCall ?? call,
+                effectiveCall,
+                canonicalPath: file,
+                rawResult,
+                selection: selected,
+                render: {
+                  ...view,
+                  projectionChanged: view.baseline !== selected.text,
+                },
+                permissionTrace,
+                coreResult: core,
               });
+              const finalResult = await finish(core);
+              readCaptureStarted = true;
+              signal.throwIfAborted();
+              const reasons: string[] = [];
+              if (
+                io.render.projectionChanged ||
+                (input.offset <= 1 &&
+                  input.limit === undefined &&
+                  !view.complete)
+              )
+                reasons.push(
+                  "Whole-file projection does not expose a confirmed native unpaginated result; actual native clipping/pagination metadata is required",
+                );
+              if (pre?.updatedInput !== undefined)
+                reasons.push(
+                  "Pre-hook input rewrite observed; native restored call-input provenance requires its explicit adapter",
+                );
+              if (
+                finalResult.type !== io.coreResult.type ||
+                finalResult.tool_use_id !== io.coreResult.tool_use_id ||
+                finalResult.content !== io.coreResult.content ||
+                finalResult.is_error !== io.coreResult.is_error ||
+                finalResult.hookRewrittenOutput !== undefined ||
+                (finalResult.hookResponse !== undefined &&
+                  !isDeepStrictEqual(finalResult.hookResponse, io.rawResult))
+              )
+                reasons.push(
+                  "Final Post result differs from the original Read I/O DTO; an accepted native rewrite/result adapter is required",
+                );
+              const captured: TextReadResultCapture = readCaptureSnapshot({
+                ...io,
+                finalResult,
+                nativeCompatibility: reasons.length
+                  ? { status: "unsupported", reasons }
+                  : { status: "supported" },
+              });
+              try {
+                await options.onTextReadResult(captured);
+                signal.throwIfAborted();
+              } catch (error) {
+                signal.throwIfAborted();
+                throw new TextReadCaptureError(error);
+              }
+              return finalResult;
             } catch (error) {
               if (
                 error instanceof FileReadByteLimit ||
@@ -847,6 +1177,7 @@ export function createTools(options: {
               signal,
               { canonical: file, input: input.file_path },
               pre?.permission,
+              effectiveCall.input,
             );
             inCall = true;
             file = await safePath(input.file_path, "Write", signal);
@@ -899,6 +1230,7 @@ export function createTools(options: {
               signal,
               { canonical: file, input: input.file_path },
               pre?.permission,
+              effectiveCall.input,
             );
             inCall = true;
             file = await safePath(input.file_path, "Edit", signal);
@@ -952,6 +1284,7 @@ export function createTools(options: {
               signal,
               undefined,
               pre?.permission,
+              effectiveCall.input,
             );
             inCall = true;
             if (!(await stat(start)).isDirectory())
@@ -987,6 +1320,7 @@ export function createTools(options: {
               signal,
               undefined,
               pre?.permission,
+              effectiveCall.input,
             );
             inCall = true;
             const root = await workspaceRoot();
@@ -1090,6 +1424,7 @@ export function createTools(options: {
               signal,
               undefined,
               pre?.permission,
+              effectiveCall.input,
             );
             inCall = true;
             const result = await shell(
@@ -1146,6 +1481,8 @@ export function createTools(options: {
           ...(hookResponse === undefined ? {} : { hookResponse }),
         });
       } catch (error) {
+        if (error instanceof TextReadCaptureError) throw error;
+        if (readCaptureStarted) signal.throwIfAborted();
         let failure: ToolFailureHookResult | void = undefined;
         if (inCall && options.hooks?.failure)
           try {

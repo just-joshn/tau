@@ -9,8 +9,11 @@ import {
   type HookRegistry,
   type HookRegistryOptions,
   type HookResult,
+  type HookRunOptions,
+  type PreparedHookDispatch,
   type HookSource,
 } from "./hooks.js";
+import { createHookResultProjection } from "./hook-result-projection.js";
 
 export const SKILL_HOOK_COUNT_LIMIT = 1024;
 export const SKILL_HOOK_MATCHER_CHARACTER_LIMIT = 16384;
@@ -69,10 +72,20 @@ interface State {
   groups: Group[];
   draws: Map<string, Draw>;
 }
-export type HookRegistryApi = Pick<HookRegistry, "list" | "run" | "close">;
+export type HookRegistryApi = Pick<
+  HookRegistry,
+  "list" | "run" | "close" | "prepareDispatch"
+>;
 type ListedHook = ReturnType<HookRegistry["list"]>[number];
 function object(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+function immutable<T>(value: T): T {
+  if (value !== null && typeof value === "object") {
+    for (const child of Object.values(value)) immutable(child);
+    Object.freeze(value);
+  }
+  return value;
 }
 const isHookEvent = (value: string): value is HookEvent =>
   HOOK_EVENTS.some((event) => event === value);
@@ -409,10 +422,10 @@ export class SessionSkillHookRegistry {
     const stableIds = new Map(
       listed.map((entry, index) => [entry.id, entries[index]?.id ?? entry.id]),
     );
-    const stableResult = (result: HookResult): HookResult => ({
-      ...result,
-      id: stableIds.get(result.id) ?? result.id,
-    });
+    const resultProjection = createHookResultProjection(
+      (id) => stableIds.get(id) ?? id,
+    );
+    const stableResult = resultProjection.project;
     const observe = (input: HookInput, result: HookResult) => {
       if (result.status !== "success") return;
       const registered = listed.find(
@@ -423,16 +436,20 @@ export class SessionSkillHookRegistry {
       const rootGroups = bySource.get(registered.origin.source) ?? [],
         query = matchQuery(input);
       // Match the source getEntry lookup; a regex match alone does not prove callback admission.
-      const group = rootGroups.find(
-        (value) =>
-          value.event === registered.event &&
-          (value.matcher === query || query === "") &&
-          value.entries.some(
-            (entry) =>
-              identity(entry.hook, this.options.defaultShell ?? "bash") ===
-              identity(registered.hook, this.options.defaultShell ?? "bash"),
-          ),
-      );
+      const root = rootGroups[0]?.skillRoot;
+      const group = this.sessions
+        .get(sessionId)
+        ?.groups.find(
+          (value) =>
+            value.event === registered.event &&
+            value.skillRoot === root &&
+            (value.matcher === query || query === "") &&
+            value.entries.some(
+              (entry) =>
+                identity(entry.hook, this.options.defaultShell ?? "bash") ===
+                identity(registered.hook, this.options.defaultShell ?? "bash"),
+            ),
+        );
       const entry = group?.entries.find(
         (value) =>
           identity(value.hook, this.options.defaultShell ?? "bash") ===
@@ -451,6 +468,7 @@ export class SessionSkillHookRegistry {
         })),
       stableId: (id: string) => stableIds.get(id) ?? id,
       stableResult,
+      observeResult: resultProjection.observe,
       observe,
       createRegistry: () =>
         createHookRegistry(
@@ -467,15 +485,135 @@ export class SessionSkillHookRegistry {
 export function createSkillHookExecutionRegistry(
   store: SessionSkillHookRegistry,
   sessionId: string | (() => string),
-  registryOptions: {
-    /** Child hook scope differs from the owning session_id carried on the wire. */
-    ownerSessionId?: string | (() => string);
-  } = {},
+  registryOptions: { ownerSessionId?: string | (() => string) } = {},
 ): HookRegistryApi {
   const active = new Set<HookRegistry>();
   let closed = false;
   const current = () =>
     typeof sessionId === "string" ? sessionId : sessionId();
+  const prepareDispatch: HookRegistryApi["prepareDispatch"] = async (
+    input,
+    options,
+  ) => {
+    if (closed) throw new Error("Skill hook execution registry is closed");
+    const scopeId = current();
+    const owner =
+      registryOptions.ownerSessionId === undefined
+        ? scopeId
+        : typeof registryOptions.ownerSessionId === "string"
+          ? registryOptions.ownerSessionId
+          : registryOptions.ownerSessionId();
+    if (input.session_id !== owner)
+      throw new Error("Skill hook input belongs to a different session");
+    const capturedInput = structuredClone(input);
+    const snapshot = store.snapshot(scopeId),
+      registry = snapshot.createRegistry();
+    active.add(registry);
+    const pending = new Set<Promise<unknown>>(),
+      observed = new Set<string>();
+    let retired = false;
+    const observe = (result: HookResult) => {
+      if (result.status !== "success" || observed.has(result.id)) return;
+      observed.add(result.id);
+      snapshot.observe(capturedInput, result);
+    };
+    const release = async () => {
+      if (!retired || pending.size) return;
+      active.delete(registry);
+      await registry.close();
+    };
+    let prepared: PreparedHookDispatch;
+    try {
+      prepared = await registry.prepareDispatch(input, {
+        ...options,
+        ...(options.onResult === undefined
+          ? {}
+          : {
+              onResult: (
+                result: HookResult,
+                context: Parameters<NonNullable<HookRunOptions["onResult"]>>[1],
+              ) =>
+                snapshot.observeResult(result, (projected) =>
+                  options.onResult?.(projected, context),
+                ),
+            }),
+        onBackgroundResult: async (result) => {
+          observe(result);
+          await snapshot.observeResult(result, (projected) =>
+            options.onBackgroundResult?.(projected),
+          );
+        },
+      });
+    } catch (error) {
+      active.delete(registry);
+      await registry.close();
+      throw error;
+    }
+    const original = snapshot.list(),
+      rawIds = new Map(
+        prepared.candidates.map((entry) => [
+          snapshot.stableId(entry.id),
+          entry.id,
+        ]),
+      );
+    return {
+      ...(prepared.selection === undefined
+        ? {}
+        : { selection: prepared.selection }),
+      candidates: Object.freeze(
+        prepared.candidates.map((entry) =>
+          immutable({
+            ...entry,
+            id: snapshot.stableId(entry.id),
+            hook: structuredClone(
+              original.find((item) => item.id === snapshot.stableId(entry.id))
+                ?.hook ?? entry.hook,
+            ),
+          }),
+        ),
+      ),
+      async runSelected(ids) {
+        if (retired) throw new Error("Skill hook dispatch snapshot is retired");
+        const selected = new Set<string>();
+        for (const id of ids) {
+          const raw = rawIds.get(id);
+          if (raw === undefined)
+            throw new Error("Unknown skill hook dispatch candidate");
+          selected.add(raw);
+        }
+        const batch = await prepared.runSelected(selected);
+        for (const result of batch.results) observe(result);
+        const background = batch.background.map((task) => {
+          const completion = task.completion.then((result) => {
+            observe(result);
+            return snapshot.stableResult(result);
+          });
+          pending.add(completion);
+          void completion
+            .finally(async () => {
+              pending.delete(completion);
+              await release();
+            })
+            .catch(() => {});
+          return {
+            id: snapshot.stableId(task.id),
+            cancel: task.cancel,
+            completion,
+          };
+        });
+        return {
+          ...batch,
+          results: batch.results.map(snapshot.stableResult),
+          background,
+        };
+      },
+      async close() {
+        retired = true;
+        await prepared.close();
+        await release();
+      },
+    };
+  };
   return {
     list(event) {
       return store
@@ -483,33 +621,52 @@ export function createSkillHookExecutionRegistry(
         .list()
         .filter((entry) => event === undefined || entry.event === event);
     },
+    prepareDispatch,
     async run(input, options) {
       if (closed) throw new Error("Skill hook execution registry is closed");
-      const owner =
-        registryOptions.ownerSessionId === undefined
-          ? current()
-          : typeof registryOptions.ownerSessionId === "string"
-            ? registryOptions.ownerSessionId
-            : registryOptions.ownerSessionId();
+      const scopeId = current(),
+        owner =
+          registryOptions.ownerSessionId === undefined
+            ? scopeId
+            : typeof registryOptions.ownerSessionId === "string"
+              ? registryOptions.ownerSessionId
+              : registryOptions.ownerSessionId();
       if (input.session_id !== owner)
         throw new Error("Skill hook input belongs to a different session");
-      const snapshot = store.snapshot(current()),
+      const capturedInput = structuredClone(input),
+        snapshot = store.snapshot(scopeId),
         registry = snapshot.createRegistry();
       active.add(registry);
       try {
         const batch = await registry.run(input, {
           ...options,
+          ...(options.onResult === undefined
+            ? {}
+            : {
+                onResult: (
+                  result: HookResult,
+                  context: Parameters<
+                    NonNullable<HookRunOptions["onResult"]>
+                  >[1],
+                ) =>
+                  snapshot.observeResult(result, (projected) =>
+                    options.onResult?.(projected, context),
+                  ),
+              }),
           onBackgroundResult: async (result) => {
-            snapshot.observe(input, result);
-            await options.onBackgroundResult?.(snapshot.stableResult(result));
+            snapshot.observe(capturedInput, result);
+            await snapshot.observeResult(result, (projected) =>
+              options.onBackgroundResult?.(projected),
+            );
           },
         });
-        for (const result of batch.results) snapshot.observe(input, result);
+        for (const result of batch.results)
+          snapshot.observe(capturedInput, result);
         const background = batch.background.map((task) => ({
           id: snapshot.stableId(task.id),
           cancel: task.cancel,
           completion: task.completion.then((result) => {
-            snapshot.observe(input, result);
+            snapshot.observe(capturedInput, result);
             return snapshot.stableResult(result);
           }),
         }));

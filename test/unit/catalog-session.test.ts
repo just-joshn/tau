@@ -140,3 +140,99 @@ test("Agent catalog filters exact named denies while generic argument denial sta
     "policySettings",
   );
 });
+
+test("native catalog creation precedes display mutation and retains real row placement without API metadata leakage", async () => {
+  const messages: Message[] = [
+    { role: "assistant", content: [{ type: "text", text: "owned" }] },
+  ];
+  const records: import("../../src/native-attachment-capture.js").NativeAttachmentCaptureResult[] =
+    [];
+  let stamp = 0,
+    target: Message | undefined;
+  const base: ToolExecutor = {
+    definitions: ["Agent", "Skill"].map((name) => ({
+      name,
+      description: "owned",
+      input_schema: { type: "object" },
+    })),
+    execute: async (call) => ({
+      type: "tool_result",
+      tool_use_id: call.id,
+      content: "owned",
+    }),
+  };
+  const tools = wrapCatalogTools(base, messages, {
+    agents: () => [{ agentType: "reader", whenToUse: "Read" }],
+    skills: () => [{ name: "owned", description: "Owned" }],
+    nativeCapture: {
+      stamp: () => ({
+        uuid: `22222222-2222-2222-2222-${String(++stamp).padStart(12, "0")}`,
+        timestamp: "2026-01-01T00:00:00.000Z",
+      }),
+      capture: (row, delivery) => {
+        assert.equal(delivery.kind, "catalog");
+        if (delivery.kind !== "catalog") assert.fail("wrong delivery");
+        assert.equal(delivery.createdMessage, true);
+        assert.equal(messages.length, 1);
+        assert.deepEqual(delivery.message.content, []);
+        target = delivery.message;
+        records.push(row);
+      },
+    },
+  });
+  await tools.beforeModelRequest?.(new AbortController().signal);
+  assert.equal(messages[1], target);
+  assert.equal(target?.catalogAttachments?.length, 2);
+  assert.equal(records.length, 2);
+  assert.deepEqual(Object.keys(target ?? {}).sort(), [
+    "catalogAttachments",
+    "content",
+    "role",
+  ]);
+  await tools.beforeModelRequest?.(new AbortController().signal);
+  assert.equal(records.length, 2);
+  assert.equal(stamp, 2);
+});
+
+test("catalog sink failure leaves existing display and attachment history untouched", async () => {
+  const messages: Message[] = [
+    { role: "user", content: [{ type: "text", text: "owned" }] },
+  ];
+  const before = structuredClone(messages);
+  const tools = wrapCatalogTools(
+    {
+      definitions: [
+        {
+          name: "Skill",
+          description: "owned",
+          input_schema: { type: "object" },
+        },
+      ],
+      execute: async (call) => ({
+        type: "tool_result",
+        tool_use_id: call.id,
+        content: "owned",
+      }),
+    },
+    messages,
+    {
+      agents: () => [],
+      skills: () => [{ name: "owned", description: "Owned" }],
+      nativeCapture: {
+        stamp: () => ({
+          uuid: "33333333-3333-3333-3333-333333333333",
+          timestamp: "2026-01-01T00:00:00.000Z",
+        }),
+        capture: () => {
+          throw new Error("owner rejected catalog");
+        },
+      },
+    },
+  );
+  await assert.rejects(
+    tools.beforeModelRequest?.(new AbortController().signal) ??
+      Promise.reject(new Error("missing seam")),
+    /owner rejected catalog/,
+  );
+  assert.deepEqual(messages, before);
+});

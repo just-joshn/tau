@@ -250,11 +250,14 @@ const conversationTypes = new Set([
   "attachment",
   "system",
 ]);
-export interface NativeTranscriptNode {
+/** Actual source creation; ancestry and file line are separate persisted facts. */
+export interface NativeSourceRow {
   readonly uuid: string;
-  readonly parentUuid: string | null;
   readonly type: string;
   readonly row: NativeObject;
+}
+export interface NativeTranscriptNode extends NativeSourceRow {
+  readonly parentUuid: string | null;
   readonly line: number;
 }
 export interface NativeSessionIndex {

@@ -11,6 +11,13 @@ import type {
   ToolUse,
 } from "./types.js";
 import type { HookRegistryLike } from "./composite-hooks.js";
+import { captureNativePersistenceJson } from "./native-persistence-events.js";
+import {
+  captureNativeToolHookResult,
+  captureUnsupportedNativeHookBatch,
+  type NativeAttachmentCaptureHost,
+  type NativeAttachmentDelivery,
+} from "./native-attachment-capture.js";
 
 export interface PreToolHookResult {
   permission?: HookPermission;
@@ -130,6 +137,7 @@ export function createToolHookRuntime(options: {
     batch: HookBatchResult,
   ): void | Promise<void>;
   onDiagnostic?(message: string): void;
+  nativeCapture?: NativeAttachmentCaptureHost;
   onToolFailure?(
     call: ToolUse,
     error: unknown,
@@ -140,10 +148,60 @@ export function createToolHookRuntime(options: {
     input: HookInput,
     signal: AbortSignal,
     validateUpdatedInput?: (input: unknown) => Promise<unknown>,
+    delivery?: Extract<NativeAttachmentDelivery, { kind: "tool-hook" }>,
   ) => {
+    const runOptions = options.runOptions();
+    const nativeCapture = options.nativeCapture;
+    const observed = new Set<HookBatchResult["results"][number]>();
+    const identity = {
+      event: input.hook_event_name,
+      toolName: input.tool_name ?? "",
+      toolUseID: input.tool_use_id ?? "",
+      toolInput:
+        options.nativeCapture && delivery
+          ? captureNativePersistenceJson(input.tool_input)
+          : input.tool_input,
+    };
     const batch = await options.registry.run(input, {
-      ...options.runOptions(),
+      ...runOptions,
       signal,
+      ...(nativeCapture && delivery
+        ? {
+            onResult: async (result, context) => {
+              observed.add(result);
+              // Invocation snapshots the outcome and stamps synchronously before its
+              // first sink await, ahead of any existing observer's possible mutation.
+              const capture = captureNativeToolHookResult(
+                nativeCapture,
+                {
+                  source: "tool-hook",
+                  phase: delivery.phase,
+                  ...identity,
+                  execution: context.background ? "background" : "sync",
+                  outcome: result,
+                  transport: "command",
+                  commandHook: context.hook,
+                },
+                delivery,
+              );
+              let previous: void | Promise<void>;
+              try {
+                previous = runOptions.onResult?.(result, context);
+              } catch (error) {
+                previous = Promise.reject(error);
+              }
+              const completed = await Promise.allSettled([capture, previous]);
+              const errors = completed.flatMap((item): unknown[] =>
+                item.status === "rejected" ? [item.reason] : [],
+              );
+              if (errors.length)
+                throw new AggregateError(
+                  errors,
+                  "Hook attachment capture failed",
+                );
+            },
+          }
+        : {}),
       ...(validateUpdatedInput
         ? { validateUpdatedInput: (input) => validateUpdatedInput(input) }
         : {}),
@@ -151,6 +209,28 @@ export function createToolHookRuntime(options: {
     signal.throwIfAborted();
     if (batch.cancelled)
       throw new DOMException("Hook execution cancelled", "AbortError");
+    if (nativeCapture && delivery) {
+      const unobservedResults = batch.results.filter(
+        (result) => !observed.has(result),
+      );
+      if (
+        batch.background.length ||
+        unobservedResults.length ||
+        (batch.additionalContext.length && !batch.results.length)
+      )
+        await captureUnsupportedNativeHookBatch(
+          nativeCapture,
+          {
+            source: "tool-hook-batch",
+            phase: delivery.phase,
+            ...identity,
+            backgroundIDs: batch.background.map((task) => task.id),
+            unobservedResults,
+            aggregateAdditionalContext: [...batch.additionalContext],
+          },
+          delivery,
+        );
+    }
     await options.onBatch?.(input.hook_event_name, batch);
     return batch;
   };
@@ -166,6 +246,7 @@ export function createToolHookRuntime(options: {
         },
         signal,
         validateUpdatedInput,
+        { kind: "tool-hook", phase: "pre", call },
       );
       return {
         ...(batch.permission === undefined
@@ -196,6 +277,8 @@ export function createToolHookRuntime(options: {
             original.hookResponse ?? original.mcpResult ?? original.content,
         },
         signal,
+        undefined,
+        { kind: "tool-hook", phase: "post", call, result: original },
       );
       let result = original;
       const candidate = batch.updatedMCPToolOutput ?? batch.updatedToolOutput;
@@ -245,6 +328,8 @@ export function createToolHookRuntime(options: {
             : { duration_ms: context.durationMs }),
         },
         signal,
+        undefined,
+        { kind: "tool-hook", phase: "failure", call, error },
       );
       await options.onToolFailure?.(call, error, signal);
       // Sfn consumes failure blocks/context as attachments after the failed result.

@@ -8,12 +8,14 @@ import {
   type NativeSessionDocument,
   type NativeSessionIndex,
   type NativeTranscriptNode,
+  type NativeSourceRow,
 } from "./native-session-codec.js";
 import {
   apiToolContentSchema,
   assistantBlockSchema,
   type Message,
 } from "./types.js";
+import { validateNativePersistenceEvent } from "./native-persistence-events.js";
 
 export type NativeHistoryScope =
   | { kind: "main"; sessionId: string }
@@ -34,12 +36,17 @@ export interface NativeHistoryDiagnostic {
   uuid?: string;
   relatedUuid?: string;
 }
-export interface NativeRecoveredHistory {
+export interface NativeOrderedHistory<
+  N extends NativeSourceRow = NativeTranscriptNode,
+> {
   readonly leafUuid: string;
-  readonly nodes: readonly NativeTranscriptNode[];
+  readonly nodes: readonly N[];
   readonly diagnostics: readonly NativeHistoryDiagnostic[];
 }
-export interface NativeHistoryProjection extends NativeRecoveredHistory {
+export interface NativeRecoveredHistory extends NativeOrderedHistory {}
+export interface NativeHistoryProjection<
+  N extends NativeSourceRow = NativeTranscriptNode,
+> extends NativeOrderedHistory<N> {
   /** Detached owned messages. Mutating these cannot modify the lossless document. */
   readonly messages: Message[];
   readonly messageSources: readonly (readonly string[])[];
@@ -55,19 +62,19 @@ export class NativeHistoryProjectionError extends Error {
 }
 const display = (value: unknown): string =>
   typeof value === "string" ? value : (JSON.stringify(value) ?? "undefined");
-function fail(code: string, node?: NativeTranscriptNode): never {
+function fail(code: string, node?: NativeSourceRow): never {
   throw new NativeHistoryProjectionError(code, node?.uuid);
 }
-const message = (node: NativeTranscriptNode): NativeObject | undefined =>
+const message = (node: NativeSourceRow): NativeObject | undefined =>
   isNativeObject(node.row.message) ? node.row.message : undefined;
-const response = (node: NativeTranscriptNode): string | undefined => {
+const response = (node: NativeSourceRow): string | undefined => {
   const id = message(node)?.id;
   return node.type === "assistant" && typeof id === "string" && id
     ? id
     : undefined;
 };
 function ids(
-  node: NativeTranscriptNode,
+  node: NativeSourceRow,
   kind: "tool_use" | "tool_result",
 ): string[] {
   if (node.type !== (kind === "tool_use" ? "assistant" : "user")) return [];
@@ -508,7 +515,7 @@ export function reconstructNativeHistory(
 function strictKeys(
   object: NativeObject,
   allowed: readonly string[],
-  node: NativeTranscriptNode,
+  node: NativeSourceRow,
 ): void {
   if (Object.keys(object).some((key) => !allowed.includes(key)))
     fail("unsupported-content-field", node);
@@ -516,7 +523,7 @@ function strictKeys(
 type ProjectedRow =
   | { kind: "user"; message: Message }
   | { kind: "assistant"; message: Message; responseId: string };
-function projectRow(node: NativeTranscriptNode): ProjectedRow {
+function projectRow(node: NativeSourceRow): ProjectedRow {
   if (node.type !== "user" && node.type !== "assistant")
     fail(
       node.row.subtype === "compact_boundary"
@@ -526,6 +533,32 @@ function projectRow(node: NativeTranscriptNode): ProjectedRow {
     );
   if (node.row.sentAsUuid !== undefined || node.row.storedAnewFor !== undefined)
     fail("unsupported-user-identity-migration", node);
+  if (node.row.isMeta === true) {
+    try {
+      if (node.type !== "user")
+        throw new Error("Only actual native user feedback is admitted");
+      validateNativePersistenceEvent(
+        Object.fromEntries(
+          Object.entries(node.row).filter(([key]) =>
+            [
+              "type",
+              "uuid",
+              "timestamp",
+              "message",
+              "sourceToolAssistantUUID",
+              "toolUseResult",
+              "permissionDecision",
+              "permissionMode",
+              "promptSource",
+              "isMeta",
+            ].includes(key),
+          ),
+        ),
+      );
+    } catch {
+      fail("unsupported-resume-row-transform", node);
+    }
+  }
   if (
     node.row.isApiErrorMessage === true ||
     node.row.madeBy === "input" ||
@@ -536,7 +569,6 @@ function projectRow(node: NativeTranscriptNode): ProjectedRow {
     node.row.wireIngestContext !== undefined ||
     node.row.batchToolUses !== undefined ||
     node.row.isVirtual === true ||
-    node.row.isMeta === true ||
     node.row.turnCompanion === true ||
     node.row.sourceToolUseID !== undefined ||
     node.row.origin !== undefined ||
@@ -631,6 +663,47 @@ export function projectNativeHistory(
   document: NativeSessionDocument,
   options: NativeHistoryOptions,
 ): NativeHistoryProjection {
+  return projectNativeHistoryCore(document, options, "completed");
+}
+
+/**
+ * Ordinary request boundary, after actual tool work has settled. Kke accepts a
+ * live user/result tail; this entrypoint does not change completed resume policy.
+ * Interrupted replies and incomplete tool batches require their own adapters.
+ */
+export function projectNativeHistoryForModelRequest(
+  document: NativeSessionDocument,
+  options: NativeHistoryOptions,
+): NativeHistoryProjection {
+  return projectNativeHistoryCore(document, options, "model-request");
+}
+
+/** Base history for an actual admitted trailing context. The caller must append its real user projection. */
+export function projectNativeHistoryBeforeContextRequest(
+  document: NativeSessionDocument,
+  options: NativeHistoryOptions,
+): NativeHistoryProjection {
+  return projectNativeHistoryCore(document, options, "context-request");
+}
+
+function projectNativeHistoryCore(
+  document: NativeSessionDocument,
+  options: NativeHistoryOptions,
+  phase: "completed" | "model-request" | "context-request",
+): NativeHistoryProjection {
+  assertNativeHistoryProjectionDocument(document, options.scope);
+  const recovered = reconstructNativeHistory(
+    indexNativeSession(document),
+    options,
+  );
+  return projectNativeOwnedHistory(recovered, phase);
+}
+
+/** Query membership cannot suppress physical replacement/fork/observer ownership. */
+export function assertNativeHistoryProjectionDocument(
+  document: NativeSessionDocument,
+  scope: NativeHistoryOptions["scope"],
+): void {
   for (const line of document.lines) {
     const row = line.value;
     if (
@@ -642,14 +715,17 @@ export function projectNativeHistory(
         "fork-context-ref",
         "observer-ref",
       ].includes(row.type) &&
-      (row.sessionId === undefined || row.sessionId === options.scope.sessionId)
+      (row.sessionId === undefined || row.sessionId === scope.sessionId)
     )
       throw new NativeHistoryProjectionError(`unsupported-${row.type}`);
   }
-  const recovered = reconstructNativeHistory(
-    indexNativeSession(document),
-    options,
-  );
+}
+
+/** Project an actual ordered query vector after its owner validates the complete backing graph. */
+export function projectNativeOwnedHistory<N extends NativeSourceRow>(
+  recovered: NativeOrderedHistory<N>,
+  phase: "completed" | "model-request" | "context-request",
+): NativeHistoryProjection<N> {
   const messages: Message[] = [],
     sources: string[][] = [],
     rows = recovered.nodes.map((node) => ({
@@ -757,12 +833,57 @@ export function projectNativeHistory(
   const last = recovered.nodes.findLast(
     (node) => node.type === "assistant" || node.type === "user",
   );
-  if (
-    !last ||
-    last.type !== "assistant" ||
-    message(last)?.stop_reason !== "end_turn"
-  )
-    fail("unsupported-incomplete-turn", last);
+  if (phase === "completed") {
+    if (
+      !last ||
+      last.type !== "assistant" ||
+      message(last)?.stop_reason !== "end_turn"
+    )
+      fail("unsupported-incomplete-turn", last);
+  } else {
+    if (
+      !last ||
+      (phase === "model-request"
+        ? last.type !== "user"
+        : last.type !== "assistant" ||
+          !["end_turn", "stop_sequence", "refusal"].some(
+            (reason) => message(last)?.stop_reason === reason,
+          ))
+    )
+      fail("unsupported-model-request-tail", last);
+    for (const node of recovered.nodes) {
+      if (node.row.resumedFromIncompleteThinking === true)
+        fail("unsupported-incomplete-thinking-request", node);
+      const stopReason = message(node)?.stop_reason;
+      if (
+        node.type === "assistant" &&
+        !["end_turn", "tool_use", "stop_sequence", "refusal"].includes(
+          typeof stopReason === "string" ? stopReason : "",
+        )
+      )
+        fail("unsupported-interrupted-model-request", node);
+    }
+    const pending = new Set<string>();
+    for (const [i, item] of messages.entries()) {
+      const hasResults = item.content.some(
+        (block) => block.type === "tool_result",
+      );
+      const meta = sources[i]?.every(
+        (uuid) =>
+          recovered.nodes.find((node) => node.uuid === uuid)?.row.isMeta ===
+          true,
+      );
+      if (item.role === "user" && !hasResults && !meta && pending.size)
+        throw new NativeHistoryProjectionError(
+          "human-crosses-pending-response",
+          [...pending][0],
+        );
+      for (const block of item.content) {
+        if (block.type === "tool_use") pending.add(block.id);
+        if (block.type === "tool_result") pending.delete(block.tool_use_id);
+      }
+    }
+  }
   return Object.freeze({
     ...recovered,
     messages,

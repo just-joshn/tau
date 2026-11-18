@@ -1,6 +1,7 @@
 import type { HookBatchResult, HookPermission, HookRegistry } from "./hooks.js";
 
-export type HookRegistryLike = Pick<HookRegistry, "list" | "run" | "close">;
+export type HookRegistryLike = Pick<HookRegistry, "list" | "run" | "close"> &
+  Partial<Pick<HookRegistry, "prepareDispatch">>;
 
 /** Keep static one-shot state alive while session registrations change. */
 export function composeHookRegistries(
@@ -11,8 +12,20 @@ export function composeHookRegistries(
       return registries.flatMap((registry) => registry.list(event));
     },
     async run(input, options) {
-      const batches = await Promise.all(
-        registries.map((registry) => registry.run(input, options)),
+      const settled = await Promise.allSettled(
+        registries.map(async (registry) => registry.run(input, options)),
+      );
+      const errors = settled.flatMap((result): unknown[] =>
+        result.status === "rejected" ? [result.reason] : [],
+      );
+      if (errors.length === 1) throw errors[0];
+      if (errors.length)
+        throw new AggregateError(
+          errors,
+          "Hook registries failed after sibling settlement",
+        );
+      const batches = settled.flatMap((result) =>
+        result.status === "fulfilled" ? [result.value] : [],
       );
       const merged: HookBatchResult = {
         results: [],

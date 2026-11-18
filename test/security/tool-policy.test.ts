@@ -83,14 +83,7 @@ test("aliases and repeated allow/deny flags accumulate without consuming prompts
 });
 
 test("unsupported grammar and ambiguous variadic lists fail closed", () => {
-  for (const rule of [
-    "Bash(git *)",
-    "Read(*)",
-    "*",
-    "Read:/tmp",
-    "Unknown",
-    "read",
-  ]) {
+  for (const rule of ["*", "Read:/tmp", "Unknown", "read"]) {
     for (const flag of ["--tools", "--allowedTools", "--disallowed-tools"]) {
       assert.throws(() => parseOptions([flag, rule]), /Unsupported tool rule/);
     }
@@ -138,7 +131,7 @@ test("settings permission composition preserves source and CLI arrays instead of
   assert.equal(combineToolPolicy(cli, []).askedTools, undefined);
 });
 
-test("source call-form '*' and empty bodies normalize to whole-tool rules without guessing path grammar", async () => {
+test("compatibility wildcard allows stay scoped while restrictive wildcards cover the whole tool", async () => {
   const { combineToolPolicy, inheritedReadDeny, matchingToolRule } =
     await import("../../src/tool-policy.js");
   const records = [
@@ -148,14 +141,52 @@ test("source call-form '*' and empty bodies normalize to whole-tool rules withou
   const combined = combineToolPolicy(parseToolPolicy({}), records);
   assert.equal(matchingToolRule(combined, "deny", "Read")?.rule, "Read(*)");
   assert.equal(inheritedReadDeny(combined)?.source, "flagSettings");
-  assert.equal(matchingToolRule(combined, "allow", "Write")?.rule, "Write()");
-  for (const rule of [
-    "Read(**/.env)",
-    "Bash(git status:*)",
-    "mcp__*__tool",
-    "Unknown",
-    "Read(value",
-  ]) {
+  assert.equal(matchingToolRule(combined, "allow", "Write"), undefined);
+  const scoped = parseOptions([
+    "--allowedTools",
+    "Bash(git *) Read(*) Edit(/out/**)",
+  ]).toolPolicy;
+  assert.deepEqual(scoped.allowedTools, [
+    "Bash(git *)",
+    "Read(*)",
+    "Edit(/out/**)",
+  ]);
+  assert.equal(matchingToolRule(scoped, "allow", "Bash"), undefined);
+  assert.equal(matchingToolRule(scoped, "allow", "Read"), undefined);
+  for (const rule of ["Read(*)", "Bash(git *)"])
+    assert.throws(
+      () => parseOptions(["--tools", rule]),
+      /Unsupported tool rule/,
+    );
+  const paths = combineToolPolicy(parseToolPolicy({}), [
+    { source: "userSettings", behavior: "deny", rule: "Read(**/.env)" },
+    {
+      source: "projectSettings",
+      behavior: "allow",
+      rule: "Bash(git status:*)",
+    },
+  ]);
+  assert.equal(matchingToolRule(paths, "deny", "Read"), undefined);
+  assert.equal(inheritedReadDeny(paths), undefined);
+  assert.equal(matchingToolRule(paths, "allow", "Bash"), undefined);
+  for (const rule of ["Bash(*)", "Bash()"])
+    assert.equal(
+      matchingToolRule(
+        parseToolPolicy({ allowedTools: [rule] }),
+        "allow",
+        "Bash",
+      )?.rule,
+      rule,
+    );
+  const finiteSet = combineToolPolicy(parseToolPolicy({}), [
+    { source: "userSettings", behavior: "allow", rule: "Glob(*)" },
+    { source: "userSettings", behavior: "allow", rule: "Grep()" },
+    { source: "userSettings", behavior: "allow", rule: "Bash(*)" },
+  ]);
+  assert.equal(matchingToolRule(finiteSet, "allow", "Glob"), undefined);
+  assert.equal(matchingToolRule(finiteSet, "allow", "Grep"), undefined);
+  assert.equal(matchingToolRule(finiteSet, "allow", "Bash")?.rule, "Bash(*)");
+  for (const rule of ["mcp__*__tool", "Unknown", "Read(value"]) {
     assert.throws(
       () =>
         combineToolPolicy(parseToolPolicy({}), [

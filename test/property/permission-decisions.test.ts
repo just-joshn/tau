@@ -1,9 +1,15 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { onTestFinished, test } from "bun:test";
+import {
+  loadLaunchConfiguration,
+  type LaunchConfiguration,
+} from "../../src/launch-configuration.js";
+import { parseOptions } from "../../src/options.js";
+import { createLaunchScopedPermissionHost } from "../../src/scoped-permission-launch.js";
 import { combineToolPolicy, type ToolPolicy } from "../../src/tool-policy.js";
 import { createTools } from "../../src/tools.js";
 import type { PermissionMode } from "../../src/types.js";
@@ -96,16 +102,39 @@ interface Outcome {
   permissionDenied: boolean;
 }
 
-async function workspace() {
+interface Workspace {
+  cwd: string;
+  launch: LaunchConfiguration;
+}
+
+async function workspace(): Promise<Workspace> {
   const base = await realpath(
     await mkdtemp(path.join(os.tmpdir(), "tau-prop-perm-")),
   );
   onTestFinished(() => rm(base, { recursive: true, force: true }));
-  await writeFile(path.join(base, "existing.txt"), "hello\n");
-  return base;
+  const cwd = path.join(base, "work");
+  const config = path.join(base, "config");
+  await mkdir(cwd);
+  await mkdir(config);
+  await writeFile(path.join(cwd, "existing.txt"), "hello\n");
+  // Scoped spellings such as Read(*) need the session path host, as in the CLI.
+  const launch = await loadLaunchConfiguration(parseOptions([]), {
+    cwd,
+    homeDirectory: base,
+    nonInteractive: true,
+    env: {
+      CLAUDE_CONFIG_DIR: config,
+      TAU_MANAGED_ROOT: path.join(base, "managed"),
+    },
+  });
+  return { cwd, launch };
 }
 
-async function decide(cwd: string, input: Case, id: string): Promise<Outcome> {
+async function decide(
+  { cwd, launch }: Workspace,
+  input: Case,
+  id: string,
+): Promise<Outcome> {
   const policy: ToolPolicy = combineToolPolicy(
     {
       ...(input.tools === undefined ? {} : { tools: input.tools }),
@@ -116,10 +145,12 @@ async function decide(cwd: string, input: Case, id: string): Promise<Outcome> {
     input.sourcedRules,
   );
   let asked = false;
+  const host = createLaunchScopedPermissionHost({ cwd, launch, env: {} });
   const tools = createTools({
     cwd,
     mode: input.mode,
     policy,
+    ...host.scope({ policy: () => policy, mode: () => input.mode }),
     approve: async () => {
       asked = true;
       return input.approves;
@@ -147,7 +178,7 @@ async function decide(cwd: string, input: Case, id: string): Promise<Outcome> {
 }
 
 test("INV-01 a matching deny never yields allow and rule order never changes a decision", async () => {
-  const cwd = await workspace();
+  const space = await workspace();
   let denied = 0;
   let executed = 0;
   await forAll(
@@ -158,7 +189,7 @@ test("INV-01 a matching deny never yields allow and rule order never changes a d
       return { input, permuted: permute(rng, input) };
     },
     async ({ input, permuted }, index) => {
-      const outcome = await decide(cwd, input, `c${index}`);
+      const outcome = await decide(space, input, `c${index}`);
       const deny =
         input.disallowedTools.includes(input.call) ||
         input.sourcedRules.some(
@@ -185,7 +216,7 @@ test("INV-01 a matching deny never yields allow and rule order never changes a d
       if (outcome.asked && !input.approves)
         assert.equal(outcome.executed, false);
       assert.deepEqual(
-        await decide(cwd, permuted, `p${index}`),
+        await decide(space, permuted, `p${index}`),
         outcome,
         "permuting the rule lists changed the decision",
       );

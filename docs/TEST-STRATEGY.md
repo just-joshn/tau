@@ -26,7 +26,7 @@ The Grep tests need a standalone `rg` in an absolute `PATH` directory, the same 
 
 ## Test tiers
 
-Each test file sits in exactly one tier directory. `test/unit/test-layout.test.ts` fails when a test file sits anywhere else.
+Each test file sits in exactly one tier directory, directly or in a subfolder that groups related files. `test/unit/test-layout.test.ts` fails when a test file sits anywhere else.
 
 | Directory          | Strategy tier | What belongs there                                                                                         | Files |
 | ------------------ | ------------- | ---------------------------------------------------------------------------------------------------------- | ----- |

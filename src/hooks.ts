@@ -8,6 +8,7 @@ export const HOOK_EVENTS = [
   "PostToolUseFailure",
   "Stop",
   "SessionStart",
+  "UserPromptSubmit",
   "TaskCreated",
   "TaskCompleted",
   "SubagentStart",
@@ -30,6 +31,8 @@ export interface HookInput {
   duration_ms?: number;
   stop_hook_active?: boolean;
   source?: string;
+  prompt?: string;
+  session_title?: string;
   effort?: { level: string };
   [key: string]: unknown;
 }
@@ -98,6 +101,12 @@ const startOutput = z.object({
   watchPaths: z.array(z.string()).optional(),
   reloadSkills: z.boolean().optional(),
 });
+const userPromptOutput = z.object({
+  hookEventName: z.literal("UserPromptSubmit"),
+  additionalContext: z.string().optional(),
+  sessionTitle: z.string().optional(),
+  suppressOriginalPrompt: z.boolean().optional(),
+});
 const subagentStartOutput = z.object({
   hookEventName: z.literal("SubagentStart"),
   additionalContext: z.string().optional(),
@@ -120,6 +129,7 @@ const outputSchema = z.object({
       failureOutput,
       stopOutput,
       startOutput,
+      userPromptOutput,
       subagentStartOutput,
       subagentStopOutput,
     ])
@@ -147,6 +157,8 @@ export interface HookResult {
   preventContinuation?: boolean;
   stopReason?: string;
   suppressOutput?: boolean;
+  /** Source per-command block feedback disposition; never reduced into a batch verdict. */
+  suppressOriginalPrompt?: boolean;
   updatedToolOutput?: unknown;
   updatedMCPToolOutput?: unknown;
   initialUserMessage?: string;
@@ -178,7 +190,34 @@ export interface HookBatchResult {
   watchPaths: string[];
   reloadSkills: boolean;
 }
+export type HookDispatchCandidate = Readonly<RegisteredHook>;
+export interface PreparedHookDispatch {
+  readonly candidates: readonly HookDispatchCandidate[];
+  /** Present only for opt-in immutable final execution plans. */
+  readonly selection?: "ordinary-command-key" | "native-origin-reduced";
+  runSelected(ids: ReadonlySet<string>): Promise<HookBatchResult>;
+  /** Retire the snapshot, not its borrowed registry or already-started processes. */
+  close(): Promise<void>;
+}
+function commandSelectionKey(entry: RegisteredHook): string {
+  return JSON.stringify([
+    entry.origin.source,
+    entry.hook.shell ?? "bash",
+    entry.hook.command,
+    entry.hook.args ?? null,
+    entry.hook.if ?? "",
+  ]);
+}
+function freezeDispatch<T>(value: T): T {
+  if (value !== null && typeof value === "object") {
+    for (const child of Object.values(value)) freezeDispatch(child);
+    Object.freeze(value);
+  }
+  return value;
+}
 export interface HookRunOptions {
+  /** Bind final command winners before any native progress is produced. */
+  preparedSelection?: "bound-final";
   /** Caller-supplied roots/environment; no personal configuration or process env is read. */
   cwd: string;
   projectDir: string;
@@ -196,11 +235,18 @@ export interface HookRunOptions {
     context: { input: HookInput; origin: HookOrigin },
   ) => unknown;
   forceSyncExecution?: boolean;
+  /** Observe each actual command settlement, before phase reduction; batch result order remains unchanged. */
+  onResult?: (
+    result: HookResult,
+    context: { background: boolean; hook: Readonly<CommandHook> },
+  ) => void | Promise<void>;
   onBackgroundResult?: (result: HookResult) => void | Promise<void>;
 }
 export interface HookRegistryOptions {
   disabled?: boolean;
   managedOnly?: boolean;
+  /** Direct registry extension; native settings dispatch has no once-removal callback. */
+  consumeOnce?: boolean;
   matchesCondition?: (condition: string, input: HookInput) => boolean;
 }
 
@@ -220,7 +266,7 @@ function matcherValue(input: HookInput): string | undefined {
     input.hook_event_name === "SubagentStop"
   )
     return typeof input.agent_type === "string" ? input.agent_type : undefined;
-  return undefined; // Stop has no matcher query in the source.
+  return undefined; // Stop and UserPromptSubmit have no matcher query in the source.
 }
 function matches(matcher: string | undefined, input: HookInput): boolean {
   const value = matcherValue(input);
@@ -339,10 +385,7 @@ export class HookRegistry {
     this.stopping.abort(new Error("Hook registry closed"));
     await Promise.allSettled([...this.running].map((task) => task.completion));
   }
-  async run(
-    input: HookInput,
-    options: HookRunOptions,
-  ): Promise<HookBatchResult> {
+  private validateDispatch(input: HookInput, options: HookRunOptions): void {
     if (!HOOK_EVENTS.includes(input.hook_event_name))
       throw new Error("Unsupported hook event");
     for (const field of ["session_id", "transcript_path", "cwd"] as const)
@@ -410,6 +453,27 @@ export class HookRegistry {
       typeof input.source !== "string"
     )
       throw new Error("SessionStart input requires source");
+    if (input.hook_event_name === "UserPromptSubmit") {
+      if (typeof input.prompt !== "string")
+        throw new Error("UserPromptSubmit input requires prompt");
+      if (
+        input.source !== undefined &&
+        ![
+          "user",
+          "sdk",
+          "system",
+          "loop_wakeup",
+          "schedule_wakeup",
+          "poll_event",
+        ].includes(input.source)
+      )
+        throw new Error("UserPromptSubmit source is unsupported");
+      if (
+        input.session_title !== undefined &&
+        typeof input.session_title !== "string"
+      )
+        throw new Error("UserPromptSubmit session_title must be a string");
+    }
     if (
       input.hook_event_name === "TaskCreated" ||
       input.hook_event_name === "TaskCompleted"
@@ -442,6 +506,83 @@ export class HookRegistry {
         options.maxOutputBytes <= 0)
     )
       throw new Error("Hook output bound must be a positive safe integer");
+  }
+  private eligible(entry: RegisteredHook, input: HookInput): boolean {
+    return (
+      entry.event === input.hook_event_name &&
+      !this.used.has(entry.id) &&
+      !(
+        this.options.managedOnly &&
+        entry.origin.source !== "policySettings" &&
+        entry.origin.managed !== true
+      ) &&
+      matches(entry.matcher, input) &&
+      (!entry.hook.if ||
+        this.options.matchesCondition?.(entry.hook.if, input) === true)
+    );
+  }
+  async prepareDispatch(
+    input: HookInput,
+    options: HookRunOptions,
+  ): Promise<PreparedHookDispatch> {
+    this.validateDispatch(input, options);
+    const capturedInput = structuredClone(input);
+    const capturedOptions = { ...options, env: { ...options.env } };
+    const eligible =
+      this.options.disabled ||
+      options.signal.aborted ||
+      this.stopping.signal.aborted
+        ? []
+        : this.hooks.filter((entry) => this.eligible(entry, capturedInput));
+    const final = new Map<string, RegisteredHook>();
+    if (options.preparedSelection === "bound-final")
+      for (const entry of eligible)
+        final.set(commandSelectionKey(entry), entry);
+    const candidates = Object.freeze(
+      (options.preparedSelection === "bound-final"
+        ? [...final.values()]
+        : eligible
+      ).map((entry) => freezeDispatch(structuredClone(entry))),
+    );
+    const valid = new Set(candidates.map((entry) => entry.id)),
+      consumed = new Set<string>();
+    let retired = false;
+    return {
+      candidates,
+      ...(options.preparedSelection === "bound-final"
+        ? { selection: "ordinary-command-key" as const }
+        : {}),
+      runSelected: async (ids) => {
+        if (retired) throw new Error("Hook dispatch snapshot is retired");
+        for (const id of ids)
+          if (!valid.has(id) || consumed.has(id))
+            throw new Error("Unknown or consumed hook dispatch candidate");
+        for (const id of ids) consumed.add(id);
+        return this.runSnapshot(
+          capturedInput,
+          capturedOptions,
+          candidates.filter((entry) => ids.has(entry.id)),
+          options.preparedSelection === "bound-final",
+        );
+      },
+      close: async () => {
+        retired = true;
+      },
+    };
+  }
+  async run(
+    input: HookInput,
+    options: HookRunOptions,
+  ): Promise<HookBatchResult> {
+    return this.runSnapshot(input, options);
+  }
+  private async runSnapshot(
+    input: HookInput,
+    options: HookRunOptions,
+    snapshot?: readonly RegisteredHook[],
+    boundFinal = false,
+  ): Promise<HookBatchResult> {
+    this.validateDispatch(input, options);
     const batch = emptyBatch();
     if (this.options.disabled) return batch;
     if (options.signal.aborted || this.stopping.signal.aborted) {
@@ -450,33 +591,19 @@ export class HookRegistry {
     }
     const serialized = JSON.stringify(input) + "\n";
     const selected = new Map<string, RegisteredHook>();
-    for (const entry of this.hooks) {
-      if (
-        entry.event !== input.hook_event_name ||
-        this.used.has(entry.id) ||
-        (this.options.managedOnly &&
-          entry.origin.source !== "policySettings" &&
-          entry.origin.managed !== true) ||
-        !matches(entry.matcher, input)
-      )
-        continue;
-      if (
-        entry.hook.if &&
-        !this.options.matchesCondition?.(entry.hook.if, input)
-      )
-        continue;
-      const key = JSON.stringify([
-        entry.origin.source,
-        entry.hook.shell ?? "bash",
-        entry.hook.command,
-        entry.hook.args ?? null,
-        entry.hook.if ?? "",
-      ]);
+    for (const entry of snapshot ?? this.hooks) {
+      if (boundFinal) {
+        if (this.used.has(entry.id))
+          throw new Error(
+            "Bound hook dispatch was consumed by another execution",
+          );
+      } else if (!this.eligible(entry, input)) continue;
+      const key = boundFinal ? entry.id : commandSelectionKey(entry);
       selected.set(key, entry); // Same command identity runs once per source, even under overlapping matchers.
     }
     const sync: Promise<HookResult>[] = [];
     for (const entry of selected.values()) {
-      if (entry.hook.once)
+      if (entry.hook.once && this.options.consumeOnce !== false)
         for (const candidate of this.hooks) {
           if (
             candidate.event === entry.event &&
@@ -501,13 +628,21 @@ export class HookRegistry {
         this.stopping.signal,
         controller.signal,
       ]);
-      const promise = this.execute(
+      const executed = this.execute(
         entry,
         input,
         serialized,
         { ...options, signal },
         background,
       );
+      const promise = options.onResult
+        ? executed.then(async (result) => {
+            // Calling the observer starts synchronously at settlement. Creation
+            // identities must be assigned before its first asynchronous await.
+            await options.onResult?.(result, { background, hook: entry.hook });
+            return result;
+          })
+        : executed;
       if (!background) {
         sync.push(promise);
         continue;
@@ -519,17 +654,35 @@ export class HookRegistry {
       };
       this.running.add(task);
       batch.background.push(task);
-      void promise
+      // Keep the original background result callback even if an observer fails.
+      // task.completion still exposes that observer failure to its actual owner.
+      void executed
         .then(async (result) => {
           try {
-            await options.onBackgroundResult?.(result);
+            try {
+              await promise;
+            } finally {
+              await options.onBackgroundResult?.(result);
+            }
           } finally {
             this.running.delete(task);
           }
         })
         .catch(() => this.running.delete(task));
     }
-    batch.results = await Promise.all(sync);
+    if (options.onResult) {
+      // Drain sibling commands before reporting observer errors; never re-run a
+      // command or abandon its owned cleanup because a capture sink failed.
+      const settled = await Promise.allSettled(sync);
+      const errors = settled.flatMap((item): unknown[] =>
+        item.status === "rejected" ? [item.reason] : [],
+      );
+      if (errors.length)
+        throw new AggregateError(errors, "Hook result observation failed");
+      batch.results = settled.flatMap((item) =>
+        item.status === "fulfilled" ? [item.value] : [],
+      );
+    } else batch.results = await Promise.all(sync);
     // Keep raw per-hook outcomes for consumers that implement the full host arbitration pipeline.
     const rank: Record<HookPermission, number> = {
       allow: 1,
@@ -716,9 +869,11 @@ export class HookRegistry {
       output = outputSchema.parse(JSON.parse(trimmed.replace(/^\uFEFF/, "")));
       const specific = output.hookSpecificOutput;
       if (specific && specific.hookEventName !== entry.event) {
-        if (output.decision === "block")
-          delete output.hookSpecificOutput; // Source fPo keeps a legacy block even when its specific payload is for another event.
-        else
+        if (output.decision === "block") {
+          // Source nZ/fPo keeps the block while withholding a mismatched specific payload.
+          delete output.hookSpecificOutput;
+          result.suppressOriginalPrompt = true;
+        } else
           throw new Error(
             `Hook output names ${specific.hookEventName}, expected ${entry.event}`,
           );
@@ -783,6 +938,11 @@ export class HookRegistry {
         result.updatedToolOutput = specific.updatedToolOutput;
       if (Object.hasOwn(specific, "updatedMCPToolOutput"))
         result.updatedMCPToolOutput = specific.updatedMCPToolOutput;
+    } else if (specific?.hookEventName === "UserPromptSubmit") {
+      if (specific.sessionTitle !== undefined)
+        result.sessionTitle = specific.sessionTitle;
+      if (specific.suppressOriginalPrompt !== undefined)
+        result.suppressOriginalPrompt = specific.suppressOriginalPrompt;
     } else if (specific?.hookEventName === "SessionStart") {
       if (specific.initialUserMessage !== undefined)
         result.initialUserMessage = specific.initialUserMessage;

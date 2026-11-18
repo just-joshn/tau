@@ -158,6 +158,27 @@ function canonicalGitRoot(root: string): string {
     return root;
   }
 }
+/** Native ordinary folder identity, sharing Git/worktree handling without a realpath fallback. */
+export function resolveWorkspaceProjectIdentity(
+  directory: string,
+  excludedGitDirectories: readonly string[] = [],
+): {
+  gitRoot: string | null;
+  canonicalGitRoot: string | null;
+  projectKey: string;
+} {
+  const cwd = nfc(resolve(directory));
+  const gitRoot = findGitRoot(
+    cwd,
+    new Set(excludedGitDirectories.map((value) => resolve(value))),
+  );
+  const canonical = gitRoot === null ? null : canonicalGitRoot(gitRoot);
+  return {
+    gitRoot,
+    canonicalGitRoot: canonical,
+    projectKey: key(canonical ?? cwd),
+  };
+}
 function ownership(root: string): LocalStoreOwnership | undefined {
   try {
     let claudeEntryUid: number | null = null;
@@ -434,10 +455,13 @@ export async function inspectWorkspaceConfiguration(
   const excluded = new Set(
     (options.excludedGitDirectories ?? []).map((value) => resolve(value)),
   );
-  const gitRoot =
-    cwd === null || options.diskless ? null : findGitRoot(cwd, excluded);
-  const canonical = gitRoot === null ? null : canonicalGitRoot(gitRoot);
-  const projectKey = cwd === null ? null : key(canonical ?? cwd);
+  const identity =
+    cwd === null || options.diskless
+      ? undefined
+      : resolveWorkspaceProjectIdentity(cwd, [...excluded]);
+  const gitRoot = identity?.gitRoot ?? null;
+  const canonical = identity?.canonicalGitRoot ?? null;
+  const projectKey = cwd === null ? null : (identity?.projectKey ?? key(cwd));
   const trusted = new Set(
     options.ignorePersistedTrust ? [] : (options.trustedProjectKeys ?? []),
   );

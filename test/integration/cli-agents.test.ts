@@ -235,6 +235,502 @@ function result(body: Body, id: string) {
 }
 
 test(
+  "agent frontmatter registers after Start, deduplicates settings commands and retains Stop continuation",
+  async () => {
+    const f = await fixture(),
+      script = join(f.config, "definition-hooks.cjs"),
+      log = join(f.cwd, "definition-hooks.jsonl"),
+      count = join(f.cwd, "definition-stop-count");
+    await writeFile(
+      script,
+      String.raw`let raw='';process.stdin.on('data',x=>raw+=x);process.stdin.on('end',()=>{const fs=require('node:fs'),i=JSON.parse(raw),kind=process.argv[4];fs.appendFileSync(process.argv[2],JSON.stringify({kind,input:i})+'\n');if(kind==='start')process.stdout.write(JSON.stringify({hookSpecificOutput:{hookEventName:'SubagentStart',additionalContext:'GLOBAL_START_CONTEXT'}}));else if(kind==='stop'){const p=process.argv[3],n=fs.existsSync(p)?+fs.readFileSync(p,'utf8'):0;fs.writeFileSync(p,String(n+1));process.stdout.write(JSON.stringify(n===0?{hookSpecificOutput:{hookEventName:'SubagentStop',additionalContext:'DEFINITION_STOP_RETRY'}}:{continue:false}));}else process.stdout.write('{}');});`,
+    );
+    const command = (kind: string) => ({
+      type: "command",
+      command: process.execPath,
+      args: [script, log, count, kind],
+      once: true,
+    });
+    await writeFile(
+      join(f.config, "settings.json"),
+      JSON.stringify({
+        hooks: {
+          PreToolUse: [{ matcher: "Read", hooks: [command("read")] }],
+          SubagentStart: [{ hooks: [command("start")] }],
+        },
+      }),
+    );
+    await writeFile(
+      join(f.config, "agents", "reader.md"),
+      `---\nname: reader\ndescription: Owned hook guard\ntools: Read\nmaxTurns: 5\nhooks: ${JSON.stringify({ PreToolUse: [{ matcher: "Read", hooks: [command("read")] }], SubagentStart: [{ hooks: [command("forbidden-own-start")] }], Stop: [{ hooks: [command("stop")] }] })}\n---\nCHILD_SYSTEM_MARKER`,
+    );
+    let parent = 0,
+      child = 0;
+    f.respond((body) => {
+      if (JSON.stringify(body.system).includes("CHILD_SYSTEM_MARKER")) {
+        const n = ++child;
+        if (n <= 2)
+          return {
+            type: "tool_use",
+            id: `definition-read-${n}`,
+            name: "Read",
+            input: { file_path: "owned.txt" },
+          };
+        if (n === 4)
+          assert.match(JSON.stringify(body.messages), /DEFINITION_STOP_RETRY/);
+        return { type: "text", text: `OWNED_CHILD_${n}` };
+      }
+      const n = ++parent;
+      if (n === 1) return agent();
+      if (n === 2)
+        return {
+          type: "tool_use",
+          id: "parent-after-definition",
+          name: "Read",
+          input: { file_path: "owned.txt" },
+        };
+      return { type: "text", text: "PARENT_DONE" };
+    });
+    const execution = await f.cli(["--max-turns", "3"]);
+    assert.equal(execution.code, 0, execution.err);
+    assert.equal(parent, 3);
+    assert.equal(child, 4);
+    assert.match(JSON.stringify(f.body(1).messages), /GLOBAL_START_CONTEXT/);
+    const rows = (await readFile(log, "utf8"))
+      .trim()
+      .split("\n")
+      .map((row) =>
+        z
+          .object({
+            kind: z.string(),
+            input: z.object({
+              agent_id: z.string().optional(),
+              session_id: z.string(),
+              hook_event_name: z.string(),
+            }),
+          })
+          .parse(JSON.parse(row)),
+      );
+    assert.equal(rows.filter((row) => row.kind === "start").length, 1);
+    assert.equal(
+      rows.filter((row) => row.kind === "forbidden-own-start").length,
+      0,
+    );
+    const reads = rows.filter((row) => row.kind === "read"),
+      stops = rows.filter((row) => row.kind === "stop");
+    assert.equal(
+      reads.filter((row) => row.input.agent_id !== undefined).length,
+      2,
+    );
+    assert.equal(
+      reads.filter((row) => row.input.agent_id === undefined).length,
+      1,
+    );
+    assert.equal(stops.length, 2);
+    assert.ok(
+      stops.every(
+        (row) =>
+          row.input.hook_event_name === "SubagentStop" &&
+          row.input.agent_id === reads[0]?.input.agent_id,
+      ),
+    );
+    assert.equal(new Set(rows.map((row) => row.input.session_id)).size, 1);
+  },
+  { timeout: 15000 },
+);
+
+test(
+  "agent definition PreToolUse denial survives the automatic memory allowance",
+  async () => {
+    const f = await fixture(),
+      script = join(f.config, "deny-memory.cjs"),
+      directory = join(f.config, "agent-memory", "reader"),
+      target = join(directory, "MEMORY.md");
+    await mkdir(directory, { recursive: true });
+    await writeFile(target, "OWNED_INDEX\n");
+    await writeFile(
+      script,
+      String.raw`let raw='';process.stdin.on('data',x=>raw+=x);process.stdin.on('end',()=>process.stdout.write(JSON.stringify({hookSpecificOutput:{hookEventName:'PreToolUse',permissionDecision:'deny',permissionDecisionReason:'OWNED_DEFINITION_DENY'}})));`,
+    );
+    await writeFile(
+      join(f.config, "agents", "reader.md"),
+      `---\nname: reader\ndescription: Guarded memory\ntools: Read\nmemory: user\nhooks: ${JSON.stringify({ PreToolUse: [{ matcher: "Write", hooks: [{ type: "command", command: process.execPath, args: [script] }] }] })}\n---\nCHILD_SYSTEM_MARKER`,
+    );
+    f.respond((_body, index) =>
+      index === 1
+        ? agent()
+        : index === 2
+          ? {
+              type: "tool_use",
+              id: "guarded-memory-read",
+              name: "Read",
+              input: { file_path: target },
+            }
+          : index === 3
+            ? {
+                type: "tool_use",
+                id: "guarded-memory",
+                name: "Write",
+                input: { file_path: target, content: "MUST_NOT_WRITE" },
+              }
+            : { type: "text", text: "DONE" },
+    );
+    const execution = await f.cli(
+      [],
+      { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "false" },
+      "Agent,Read,Write,Edit",
+    );
+    assert.equal(execution.code, 0, execution.err);
+    assert.equal(f.bodies.length, 5);
+    assert.equal(result(f.body(3), "guarded-memory").is_error, true);
+    assert.match(
+      JSON.stringify(result(f.body(3), "guarded-memory")),
+      /OWNED_DEFINITION_DENY/,
+    );
+    assert.equal(await readFile(target, "utf8"), "OWNED_INDEX\n");
+  },
+  { timeout: 15000 },
+);
+
+test(
+  "nested agents use root Start hooks and keep definition Stop in its own child scope",
+  async () => {
+    const f = await fixture(),
+      script = join(f.config, "nested-hooks.cjs"),
+      log = join(f.cwd, "nested-hooks.jsonl");
+    await writeFile(
+      script,
+      String.raw`let raw='';process.stdin.on('data',x=>raw+=x);process.stdin.on('end',()=>{require('node:fs').appendFileSync(process.argv[2],JSON.stringify({kind:process.argv[3],input:JSON.parse(raw)})+'\n');process.stdout.write('{}');});`,
+    );
+    const command = (kind: string) => ({
+      type: "command",
+      command: process.execPath,
+      args: [script, log, kind],
+    });
+    await writeFile(
+      join(f.config, "settings.json"),
+      JSON.stringify({
+        hooks: {
+          SubagentStart: [{ hooks: [command("start")] }],
+          SubagentStop: [{ hooks: [command("stop")] }],
+        },
+      }),
+    );
+    await writeFile(
+      join(f.config, "agents", "reader.md"),
+      `---\nname: reader\ndescription: Nested hook scope\ntools: Agent,Read\nhooks: ${JSON.stringify({ SubagentStart: [{ hooks: [command("forbidden-parent-start")] }], Stop: [{ hooks: [command("stop")] }] })}\n---\nCHILD_SYSTEM_MARKER`,
+    );
+    await writeFile(
+      join(f.config, "agents", "inner.md"),
+      "---\nname: inner\ndescription: Owned inner\ntools: Read\n---\nINNER_SYSTEM_MARKER",
+    );
+    let parent = 0,
+      outer = 0;
+    f.respond((body) => {
+      if (JSON.stringify(body.system).includes("INNER_SYSTEM_MARKER"))
+        return { type: "text", text: "INNER_DONE" };
+      if (JSON.stringify(body.system).includes("CHILD_SYSTEM_MARKER"))
+        return ++outer === 1
+          ? {
+              type: "tool_use",
+              id: "nested-agent",
+              name: "Agent",
+              input: {
+                description: "Owned inner",
+                prompt: "INNER_TASK",
+                subagent_type: "inner",
+                run_in_background: false,
+              },
+            }
+          : { type: "text", text: "OUTER_DONE" };
+      return ++parent === 1 ? agent() : { type: "text", text: "PARENT_DONE" };
+    });
+    const execution = await f.cli();
+    assert.equal(execution.code, 0, execution.err);
+    assert.equal(f.bodies.length, 5);
+    const rows = (await readFile(log, "utf8"))
+      .trim()
+      .split("\n")
+      .map((row) =>
+        z
+          .object({
+            kind: z.string(),
+            input: z.object({ agent_id: z.string(), agent_type: z.string() }),
+          })
+          .parse(JSON.parse(row)),
+      );
+    assert.equal(
+      rows.filter((row) => row.kind === "forbidden-parent-start").length,
+      0,
+    );
+    assert.deepEqual(
+      rows
+        .filter((row) => row.kind === "start")
+        .map((row) => row.input.agent_type),
+      ["reader", "inner"],
+    );
+    assert.deepEqual(
+      rows
+        .filter((row) => row.kind === "stop")
+        .map((row) => row.input.agent_type),
+      ["inner", "reader"],
+    );
+    assert.equal(new Set(rows.map((row) => row.input.agent_id)).size, 2);
+  },
+  { timeout: 15000 },
+);
+
+test(
+  "memory is primed before Start while definition hooks become active afterward",
+  async () => {
+    const f = await fixture(),
+      directory = join(f.config, "agent-memory", "reader"),
+      index = join(directory, "MEMORY.md"),
+      script = join(f.config, "memory-start.cjs");
+    await mkdir(directory, { recursive: true });
+    await writeFile(index, "OWNED_BEFORE_START\n");
+    await writeFile(
+      script,
+      String.raw`let raw='';process.stdin.on('data',x=>raw+=x);process.stdin.on('end',()=>{require('node:fs').writeFileSync(process.argv[2],'OWNED_AFTER_START\n');process.stdout.write('{}');});`,
+    );
+    await writeFile(
+      join(f.config, "settings.json"),
+      JSON.stringify({
+        hooks: {
+          SubagentStart: [
+            {
+              hooks: [
+                {
+                  type: "command",
+                  command: process.execPath,
+                  args: [script, index],
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    );
+    await writeFile(
+      join(f.config, "agents", "reader.md"),
+      `---\nname: reader\ndescription: Primed memory timing\ntools: Read\nmemory: user\nhooks: ${JSON.stringify({ PreToolUse: [{ matcher: "Read", hooks: [{ type: "command", command: process.execPath, args: ["-e", "process.stdout.write(JSON.stringify({hookSpecificOutput:{hookEventName:'PreToolUse',additionalContext:'OWNED_AFTER_START_HOOK'}}))"] }] }] })}\n---\nCHILD_SYSTEM_MARKER`,
+    );
+    f.respond((body, n) => {
+      if (n === 1) return agent();
+      if (n === 2) {
+        const text = JSON.stringify(body.system);
+        assert.match(text, /OWNED_BEFORE_START/);
+        assert.equal(text.includes("OWNED_AFTER_START"), false);
+        return {
+          type: "tool_use",
+          id: "read-primed-index",
+          name: "Read",
+          input: { file_path: index },
+        };
+      }
+      if (n === 3) {
+        assert.match(
+          JSON.stringify(result(body, "read-primed-index")),
+          /OWNED_AFTER_START/,
+        );
+        assert.match(JSON.stringify(body.messages), /OWNED_AFTER_START_HOOK/);
+      }
+      return { type: "text", text: "DONE" };
+    });
+    const execution = await f.cli(
+      [],
+      { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "false" },
+      "Agent,Read,Write,Edit",
+    );
+    assert.equal(execution.code, 0, execution.err);
+    assert.equal(f.bodies.length, 4);
+    assert.equal(await readFile(index, "utf8"), "OWNED_AFTER_START\n");
+  },
+  { timeout: 15000 },
+);
+
+test(
+  "restricted sessions keep empty and disabled hook declarations inert",
+  async () => {
+    const f = await fixture(),
+      marker = join(f.cwd, "restricted-hook-must-not-run"),
+      hook = {
+        type: "command",
+        command: process.execPath,
+        args: [
+          "-e",
+          `require('node:fs').writeFileSync(${JSON.stringify(marker)},'BAD')`,
+        ],
+      };
+    await writeFile(
+      join(f.config, "agents", "reader.md"),
+      "---\nname: reader\ndescription: Empty scoped hooks\ntools: Read\nhooks: {}\n---\nCHILD_SYSTEM_MARKER",
+    );
+    f.respond((_body, index) =>
+      index === 1 ? agent() : { type: "text", text: "DONE" },
+    );
+    const empty = await f.cli([], {
+      CLAUDE_CODE_RESTRICT_PERSONAL_CONFIG: "true",
+    });
+    assert.equal(empty.code, 0, empty.err);
+    assert.equal(f.bodies.length, 3);
+    f.bodies.length = 0;
+    await writeFile(
+      join(f.config, "settings.json"),
+      JSON.stringify({
+        disableAllHooks: true,
+        hooks: { SubagentStart: [{ hooks: [hook] }] },
+      }),
+    );
+    await writeFile(
+      join(f.config, "agents", "reader.md"),
+      `---\nname: reader\ndescription: Disabled scoped hooks\ntools: Read\nhooks: ${JSON.stringify({ Stop: [{ hooks: [hook] }] })}\n---\nCHILD_SYSTEM_MARKER`,
+    );
+    const disabled = await f.cli([], {
+      CLAUDE_CODE_RESTRICT_PERSONAL_CONFIG: "true",
+    });
+    assert.equal(disabled.code, 0, disabled.err);
+    assert.equal(f.bodies.length, 3);
+    await assert.rejects(readFile(marker), { code: "ENOENT" });
+    f.bodies.length = 0;
+    const managedPath = join(
+      f.config,
+      "..",
+      "managed",
+      "managed-settings.json",
+    );
+    await writeFile(
+      managedPath,
+      JSON.stringify({ allowManagedHooksOnly: true }),
+    );
+    await writeFile(
+      join(f.config, "settings.json"),
+      JSON.stringify({ hooks: { SubagentStart: [{ hooks: [hook] }] } }),
+    );
+    const managedOnly = await f.cli([], {
+      CLAUDE_CODE_RESTRICT_PERSONAL_CONFIG: "true",
+    });
+    assert.equal(managedOnly.code, 0, managedOnly.err);
+    assert.equal(f.bodies.length, 3);
+    await assert.rejects(readFile(marker), { code: "ENOENT" });
+    await writeFile(managedPath, "{}");
+    f.bodies.length = 0;
+    await writeFile(
+      join(f.config, "settings.json"),
+      JSON.stringify({ hooks: { SubagentStart: [{ hooks: [hook] }] } }),
+    );
+    const enabled = await f.cli([], {
+      CLAUDE_CODE_RESTRICT_PERSONAL_CONFIG: "true",
+    });
+    assert.equal(enabled.code, 1);
+    assert.match(enabled.err, /Restricted personal hook provenance requires/);
+    assert.equal(f.bodies.length, 0);
+    await assert.rejects(readFile(marker), { code: "ENOENT" });
+  },
+  { timeout: 15000 },
+);
+
+test(
+  "project agent hooks require exact persisted origin trust while settings once remains metadata",
+  async () => {
+    const f = await fixture(),
+      script = join(f.config, "project-origin-hooks.cjs"),
+      log = join(f.cwd, "project-origin-hooks.jsonl"),
+      agents = join(f.cwd, ".claude", "agents");
+    await mkdir(agents, { recursive: true });
+    await writeFile(
+      script,
+      String.raw`let raw='';process.stdin.on('data',x=>raw+=x);process.stdin.on('end',()=>{require('node:fs').appendFileSync(process.argv[2],JSON.stringify({kind:process.argv[3],input:JSON.parse(raw)})+'\n');process.stdout.write('{}');});`,
+    );
+    const command = (kind: string) => ({
+      type: "command",
+      command: process.execPath,
+      args: [script, log, kind],
+      once: true,
+    });
+    await writeFile(
+      join(f.config, "settings.json"),
+      JSON.stringify({
+        hooks: {
+          PreToolUse: [{ matcher: "Read", hooks: [command("shared")] }],
+        },
+      }),
+    );
+    await writeFile(
+      join(agents, "project-guard.md"),
+      `---\nname: project-guard\ndescription: Project hook origin\ntools: Read\nmaxTurns: 4\nhooks: ${JSON.stringify({ PreToolUse: [{ matcher: "Read", hooks: [command("shared"), command("definition")] }], Stop: [{ hooks: [command("stop")] }] })}\n---\nPROJECT_GUARD_SYSTEM`,
+    );
+    for (const trust of ["session-only", "ancestor", "exact"]) {
+      f.bodies.length = 0;
+      await writeFile(log, "");
+      await writeFile(
+        join(f.config, ".claude.json"),
+        JSON.stringify({
+          projects:
+            trust === "session-only"
+              ? {}
+              : {
+                  [trust === "exact" ? f.cwd : join(f.cwd, "..")]: {
+                    hasTrustDialogAccepted: true,
+                  },
+                },
+        }),
+      );
+      let parent = 0,
+        child = 0;
+      f.respond((body) => {
+        if (JSON.stringify(body.system).includes("PROJECT_GUARD_SYSTEM")) {
+          const n = ++child;
+          return n <= 2
+            ? {
+                type: "tool_use",
+                id: `project-read-${n}`,
+                name: "Read",
+                input: { file_path: "owned.txt" },
+              }
+            : { type: "text", text: "PROJECT_CHILD_DONE" };
+        }
+        const n = ++parent;
+        if (n === 1) return agent({ subagent_type: "project-guard" });
+        if (n === 2)
+          return {
+            type: "tool_use",
+            id: "parent-project-read",
+            name: "Read",
+            input: { file_path: "owned.txt" },
+          };
+        return { type: "text", text: "PARENT_DONE" };
+      });
+      const execution = await f.cli(["--max-turns", "3"]);
+      assert.equal(execution.code, 0, execution.err);
+      assert.equal(parent, 3);
+      assert.equal(child, 3);
+      const rows = (await readFile(log, "utf8"))
+        .trim()
+        .split("\n")
+        .filter(Boolean)
+        .map((row) => z.object({ kind: z.string() }).parse(JSON.parse(row)));
+      assert.equal(
+        rows.filter((row) => row.kind === "shared").length,
+        3,
+        trust,
+      );
+      assert.equal(
+        rows.filter((row) => row.kind === "definition").length,
+        trust === "exact" ? 2 : 0,
+        trust,
+      );
+      assert.equal(
+        rows.filter((row) => row.kind === "stop").length,
+        trust === "exact" ? 1 : 0,
+        trust,
+      );
+    }
+  },
+  { timeout: 15000 },
+);
+
+test(
   "compiled foreground Agent isolates child history, narrows tools and uses independent query defaults",
   async () => {
     const f = await fixture();

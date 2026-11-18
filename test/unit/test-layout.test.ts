@@ -17,11 +17,11 @@ const testFiles = readdirSync(testRoot, { recursive: true, encoding: "utf8" })
   .filter((path) => path.endsWith(".test.ts"))
   .map((path) => relative(testRoot, join(testRoot, path)).split(sep));
 
-// Also keeps test/helpers and test/fixtures free of test files.
-test("every test file sits directly in one strategy tier", () => {
+// A tier may group files in subfolders; test/helpers and test/fixtures hold no tests.
+test("every test file sits in one strategy tier", () => {
   assert.ok(testFiles.length > 0);
   const misplaced = testFiles.filter(
-    (parts) => parts.length !== 2 || !TIERS.has(parts[0] ?? ""),
+    (parts) => parts.length < 2 || !TIERS.has(parts[0] ?? ""),
   );
   assert.deepEqual(misplaced, []);
 });

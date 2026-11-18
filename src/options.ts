@@ -219,7 +219,7 @@ Usage: tau [options] [prompt]
   -p, --print                       Run once, then exit (also used for piped input)
       --model NAME                  Model ID (or ANTHROPIC_MODEL)
       --cwd PATH                    Project directory
-  -r, --resume UUID                 Resume a tau session in this project
+  -r, --resume UUID_OR_FILE         Resume a tau session or ordinary native .jsonl file
   -c, --continue                    Resume most recently saved session
       --permission-mode MODE        default | acceptEdits | plan | bypassPermissions
       --dangerously-skip-permissions  Explicitly approve all tools; shell is NOT sandboxed
@@ -231,7 +231,7 @@ Usage: tau [options] [prompt]
       --permission-prompts host     Use host permission prompts
       --allowedTools LIST           Preapprove exact names (alias: --allowed-tools)
       --disallowedTools LIST        Deny exact names (alias: --disallowed-tools); deny wins
-                                    Quote comma/space lists; no command or path rules
+                                    Quote lists and scoped file/Bash rules
                                     MCP: mcp__server or mcp__server__tool (suffix supports *)
       --mcp-config JSON_OR_PATH     Explicit stdio MCP servers; repeat to merge configs
       --plugin-dir PATH            Load an explicit local plugin directory; repeat to add

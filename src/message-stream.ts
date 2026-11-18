@@ -8,6 +8,11 @@ import {
 import { classifyStreamFailure, type StreamFailureCause } from "./recovery.js";
 import { normalizeToolInput, normalizeToolName } from "./tool-input.js";
 import { clearedInputTokens } from "./context-usage.js";
+import {
+  NativeStreamResponseRecording,
+  unsupportedNativeResponse,
+  type NativeResponseRecordingContext,
+} from "./native-response-recording.js";
 
 const count = z.number().int().nonnegative();
 const cacheUsage = {
@@ -183,11 +188,18 @@ export class MessageStream {
   private responseId: string | undefined;
   private resumable: boolean | undefined;
   private clearedTokens: number | undefined;
+  private readonly nativeRecording: NativeStreamResponseRecording | undefined;
   visibleText = "";
   constructor(
     private readonly onText: CompletionRequest["onText"],
     private readonly onProgress?: CompletionRequest["onStreamProgress"],
-  ) {}
+    nativeRecording?: NativeResponseRecordingContext,
+  ) {
+    this.nativeRecording =
+      nativeRecording === undefined
+        ? undefined
+        : new NativeStreamResponseRecording(nativeRecording);
+  }
   private finishProgress(): void {
     if (this.started && !this.progressEnded) {
       this.progressEnded = true;
@@ -235,7 +247,7 @@ export class MessageStream {
       complete: this.coherent,
     });
   }
-  accept(event: Event): void {
+  accept(event: Event, recordingSource: unknown = event): void {
     if (this.stopped) throw protocolError();
     if (event.type === "ping") return;
     if (event.type === "error") {
@@ -272,6 +284,7 @@ export class MessageStream {
       this.usage = mergeUsage(this.usage, event.message.usage);
       this.responseModel = event.message.model;
       this.responseId = event.message.id;
+      this.nativeRecording?.start(recordingSource);
       this.onProgress?.({ type: "response_start" });
       return;
     }
@@ -393,6 +406,7 @@ export class MessageStream {
             break;
         }
         this.closed.add(block);
+        this.nativeRecording?.closeBlock(event.index, this.content.at(-1));
         this.lastOpen = undefined;
         this.onProgress?.({
           type: "assistant",
@@ -404,6 +418,7 @@ export class MessageStream {
         break;
       }
       case "message_delta":
+        this.nativeRecording?.delta(recordingSource);
         if (event.context_management != null)
           this.clearedTokens = clearedInputTokens(event.context_management);
         if (typeof event.delta.resumable === "boolean")
@@ -437,6 +452,9 @@ export class MessageStream {
       stop_reason: this.stopReason,
       usage: this.usage,
       ...(this.responseId === undefined ? {} : { responseId: this.responseId }),
+      ...(this.nativeRecording === undefined
+        ? {}
+        : { nativeResponse: this.nativeRecording.completed() }),
       ...(this.responseModel === undefined
         ? {}
         : { responseModel: this.responseModel }),
@@ -455,6 +473,13 @@ export class MessageStream {
         : "end_turn",
       usage: this.usage,
       partial: { cause },
+      ...(this.nativeRecording === undefined
+        ? {}
+        : {
+            nativeResponse: unsupportedNativeResponse(
+              `Partial stream requires its native recovery adapter: ${cause}`,
+            ),
+          }),
     };
   }
   outputLimited(): Completion {
@@ -464,6 +489,13 @@ export class MessageStream {
       stop_reason: "max_tokens",
       usage: this.usage,
       resumable: false,
+      ...(this.nativeRecording === undefined
+        ? {}
+        : {
+            nativeResponse: unsupportedNativeResponse(
+              "Output-limit recovery requires its native provenance adapter",
+            ),
+          }),
       ...(this.responseId === undefined ? {} : { responseId: this.responseId }),
       ...(this.responseModel === undefined
         ? {}

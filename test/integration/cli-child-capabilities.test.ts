@@ -408,11 +408,11 @@ test(
         if (step === 1) {
           const context = userText(body);
           assert.ok(
-            context.indexOf("CHILD_PRIVATE_TASK") <
-              context.indexOf("START_CAP_CONTEXT"),
+            context.indexOf("START_CAP_CONTEXT") <
+              context.indexOf("CHILD_PRIVATE_TASK"),
           );
           assert.ok(
-            context.indexOf("START_CAP_CONTEXT") <
+            context.indexOf("CHILD_PRIVATE_TASK") <
               context.indexOf("PASSIVE_A_BODY"),
           );
           assert.ok(
@@ -518,6 +518,130 @@ test(
       );
     assert.equal(stored.status, "completed");
     assert.equal(stored.owner, undefined);
+  },
+  { timeout: 15000 },
+);
+
+test(
+  "a foreground child approves its designated plan through validated hook input and restores the parent mode",
+  async () => {
+    const f = await fixture(),
+      hook = join(f.config, "approve-child-plan.cjs");
+    await writeFile(
+      hook,
+      "process.stdin.resume();process.stdin.on('end',()=>process.stdout.write(JSON.stringify({hookSpecificOutput:{hookEventName:'PreToolUse',permissionDecision:'allow',updatedInput:{}}})));",
+    );
+    const bridge = join(f.config, "plan-approval.cjs");
+    await writeFile(
+      bridge,
+      String.raw`const rl=require('node:readline').createInterface({input:process.stdin});const send=(id,result)=>process.stdout.write(JSON.stringify({jsonrpc:'2.0',id,result})+'\n');process.stdin.on('end',()=>process.exit(0));rl.on('line',line=>{const m=JSON.parse(line);if(m.method==='server/discover')process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,error:{code:-32601,message:'owned legacy'}})+'\n');else if(m.method==='initialize')send(m.id,{protocolVersion:'2025-11-25',capabilities:{tools:{}},serverInfo:{name:'owned-approval',version:'1'}});else if(m.method==='tools/list')send(m.id,{tools:[{name:'approve',description:'Owned approval bridge',inputSchema:{type:'object'}}]});else if(m.method==='tools/call')send(m.id,{content:[{type:'text',text:JSON.stringify({behavior:'allow',updatedInput:m.params.arguments.input})}]});});`,
+    );
+    await writeFile(
+      join(f.config, "settings.json"),
+      JSON.stringify({
+        hooks: {
+          PreToolUse: [
+            {
+              matcher: "ExitPlanMode",
+              hooks: [
+                { type: "command", command: process.execPath, args: [hook] },
+              ],
+            },
+          ],
+        },
+      }),
+    );
+    await writeFile(
+      join(f.config, "agents", "planner.md"),
+      `---\n${JSON.stringify({ name: "planner", description: "Owned child plan", tools: "Read,Write,ExitPlanMode", model: "inherit", maxTurns: 3 })}\n---\nCHILD_PLAN_SYSTEM`,
+    );
+    let childRequests = 0,
+      parentRequests = 0,
+      planFile = "";
+    f.respond((body) => {
+      if (system(body).includes("CHILD_PLAN_SYSTEM")) {
+        if (++childRequests === 1) {
+          const path = /Agent plan file: ([^\n]+)/.exec(userText(body))?.[1];
+          if (!path) throw new Error("Owned child plan path missing");
+          planFile = path;
+          assert.match(path, /-agent-agent-/);
+          return use(
+            "Write",
+            { file_path: path, content: "# CHILD_ACTOR_PLAN\n" },
+            "write-plan",
+          );
+        }
+        if (childRequests === 2) {
+          assert.equal(result(body, "write-plan").is_error, undefined);
+          return use("ExitPlanMode", {}, "exit-plan");
+        }
+        assert.equal(
+          result(body, "exit-plan").is_error,
+          undefined,
+          JSON.stringify(result(body, "exit-plan")),
+        );
+        assert.equal(
+          body.tools.some((tool) => tool.name === "ExitPlanMode"),
+          false,
+        );
+        return { type: "text", text: "CHILD_PLAN_APPROVED" };
+      }
+      if (++parentRequests === 1)
+        return use(
+          "Agent",
+          {
+            description: "Owned planning",
+            prompt: "Prepare the child plan",
+            subagent_type: "planner",
+            run_in_background: false,
+          },
+          "delegate-plan",
+        );
+      if (parentRequests === 2) {
+        assert.match(
+          JSON.stringify(result(body, "delegate-plan")),
+          /CHILD_PLAN_APPROVED/,
+        );
+        return use(
+          "Write",
+          { file_path: "after-plan.txt", content: "PARENT_MODE_RESTORED" },
+          "after-plan",
+        );
+      }
+      assert.equal(result(body, "after-plan").is_error, undefined);
+      return { type: "text", text: "PARENT_PLAN_FINISHED" };
+    });
+    const execution = await f.cli(
+      "Agent,Read,Write,EnterPlanMode,ExitPlanMode",
+      [
+        "--permission-mode",
+        "plan",
+        "--allowed-tools",
+        "Write",
+        "--max-turns",
+        "3",
+        "--permission-prompt-tool",
+        "mcp__approval__approve",
+        "--mcp-config",
+        JSON.stringify({
+          mcpServers: {
+            approval: {
+              type: "stdio",
+              command: process.execPath,
+              args: [bridge],
+            },
+          },
+        }),
+      ],
+    );
+    assert.equal(execution.code, 0, execution.stderr);
+    assert.equal(childRequests, 3);
+    assert.equal(parentRequests, 3);
+    assert.equal(await readFile(planFile, "utf8"), "# CHILD_ACTOR_PLAN\n");
+    assert.equal(
+      await readFile(join(f.cwd, "after-plan.txt"), "utf8"),
+      "PARENT_MODE_RESTORED",
+    );
   },
   { timeout: 15000 },
 );

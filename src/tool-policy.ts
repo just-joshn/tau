@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { sanitizeMcpName } from "./mcp-config.js";
 import { parseSkillToolList } from "./skills.js";
+import { parseNativePermissionRule } from "./native-permission-rules.js";
 import {
   matchesLocalSkillPermissionRule,
   parseSkillPermissionRule,
@@ -55,6 +56,26 @@ export const selectableToolNameSchema = z.union([
   agentPolicyNameSchema,
   backgroundTaskPolicyNameSchema,
 ]);
+const scopedBuiltinFamilies = new Set(["Read", "Write", "Edit", "Bash"]);
+// Ng/joi's finite native compatibility set, under fYr's default-true feature.
+// Bash is deliberately absent: xr normalizes Bash()/Bash(*) to bare Bash.
+const compatibilityWildcardTools = new Set([
+  "Read",
+  "Edit",
+  "Write",
+  "NotebookEdit",
+  "Glob",
+  "Grep",
+  "LSP",
+  "SendUserFile",
+]);
+function builtinCallRule(rule: string): boolean {
+  if (!rule.includes("(")) return false;
+  const parsed = parseNativePermissionRule(rule);
+  return (
+    parsed.kind !== "malformed" && scopedBuiltinFamilies.has(parsed.toolName)
+  );
+}
 export const toolRuleNameSchema = z.union([
   toolNameSchema,
   taskPolicyNameSchema,
@@ -62,6 +83,7 @@ export const toolRuleNameSchema = z.union([
   backgroundTaskPolicyNameSchema,
   z.string().regex(/^(TaskStop|KillShell|KillBash)\([\s\S]*\)$/),
   z.string().refine((rule) => agentRule(rule) !== null),
+  z.string().refine(builtinCallRule),
   z.string().refine((rule) => parseSkillPermissionRule(rule) !== undefined),
   z.string().regex(/^mcp__[a-zA-Z0-9_-]+(?:__[a-zA-Z0-9_*-]+)?$/),
 ]);
@@ -98,7 +120,7 @@ function parseNames(value: string, builtinsOnly = false): string[] {
     ).safeParse(name);
     if (!result.success)
       throw new Error(
-        `Unsupported tool rule: ${name}. Use exact built-in names${builtinsOnly ? " or Skill" : ", Skill[(name)], or mcp__server[__tool-pattern] (tool suffix supports *)"}; command, path and cross-server wildcard rules are not supported.`,
+        `Unsupported tool rule: ${name}. Use exact tool names${builtinsOnly ? "" : ", Read(path), Edit(path), Bash(command), Skill[(name)], or mcp__server[__tool-pattern]"}; cross-server wildcards are not supported.`,
       );
     return result.data;
   });
@@ -165,6 +187,10 @@ export interface PolicyRuleMatch {
 }
 interface ParsedSettingsRule {
   tool: string;
+  /** Native Ng preserves allow Tool()/Tool(*) as compatibility content under its default feature. */
+  compatibilityWildcard?: true;
+  /** Dedicated native file/Bash consumers, never a whole-tool or generic key-pattern rule. */
+  dedicated?: true;
   parameter?: { key: string; pattern: string };
   skillRule?: string;
   agentRule?: string;
@@ -179,6 +205,23 @@ function splitSourcedRule(rule: string): ParsedSettingsRule {
       : { tool: "Skill", skillRule: trimmed };
   const agent = agentRule(trimmed);
   if (agent) return { tool: "Agent", agentRule: trimmed };
+  if (builtinCallRule(trimmed)) {
+    const parsed = parseNativePermissionRule(trimmed);
+    if (parsed.kind === "bare")
+      return compatibilityWildcardTools.has(parsed.toolName)
+        ? { tool: parsed.toolName, compatibilityWildcard: true }
+        : { tool: parsed.toolName };
+    if (parsed.kind === "call") {
+      const colon = parsed.content.indexOf(":"),
+        key = parsed.content.slice(0, colon).trim(),
+        pattern = parsed.content.slice(colon + 1).trim();
+      return {
+        tool: parsed.toolName,
+        dedicated: true,
+        ...(colon > 0 && key && pattern ? { parameter: { key, pattern } } : {}),
+      };
+    }
+  }
   const open = trimmed.indexOf("(");
   if (open === -1) {
     if (!toolRuleNameSchema.safeParse(trimmed).success)
@@ -190,7 +233,10 @@ function splitSourcedRule(rule: string): ParsedSettingsRule {
   if (!trimmed.endsWith(")") || !toolRuleNameSchema.safeParse(tool).success)
     throw new Error(`Unsupported settings permission rule: ${rule}`);
   // Source xr treats empty or '*' call content as a whole-tool rule.
-  if (body === "" || body === "*") return { tool };
+  if (body === "" || body === "*")
+    return compatibilityWildcardTools.has(tool)
+      ? { tool, compatibilityWildcard: true }
+      : { tool };
   // Generic source Gc/lpe applies primitive argument matching to exact MCP names.
   // Built-in path and shell rules have their own dedicated parsers and are not guessed here.
   const decodedBody = body
@@ -208,7 +254,7 @@ function splitSourcedRule(rule: string): ParsedSettingsRule {
     if (key && pattern) return { tool, parameter: { key, pattern } };
   }
   throw new Error(
-    `Unsupported settings permission rule: ${rule}. Dedicated built-in command/path rules are not implemented; use exact tool names or exact MCP primitive argument rules.`,
+    `Unsupported settings permission rule: ${rule}. Use exact tool names, supported file/Bash call rules, or exact MCP primitive argument rules.`,
   );
 }
 
@@ -237,7 +283,24 @@ export function matchesPermissionArgument(
   return true;
 }
 
-function matchesName(rule: string, name: string, serverName?: string): boolean {
+function matchesName(
+  rule: string,
+  name: string,
+  serverName?: string,
+  behavior?: PermissionRuleBehavior,
+): boolean {
+  if (
+    serverName === undefined &&
+    scopedBuiltinFamilies.has(name) &&
+    builtinCallRule(rule)
+  ) {
+    const parsed = parseNativePermissionRule(rule);
+    return (
+      parsed.kind === "bare" &&
+      parsed.toolName === name &&
+      (behavior !== "allow" || !compatibilityWildcardTools.has(name))
+    );
+  }
   if (
     (name === "Agent" || name === "Task") &&
     (rule === "Agent" || rule === "Task")
@@ -251,6 +314,37 @@ function matchesName(rule: string, name: string, serverName?: string): boolean {
   return serverName === undefined
     ? rule === name
     : matchesMcpRule(rule, name, serverName);
+}
+
+function matchesBuiltinPrimitive(
+  rule: string,
+  name: string,
+  behavior: PermissionRuleBehavior,
+  input: unknown,
+): boolean {
+  if (
+    behavior === "allow" ||
+    !scopedBuiltinFamilies.has(name) ||
+    !builtinCallRule(rule)
+  )
+    return false;
+  const parsed = splitSourcedRule(rule);
+  if (
+    parsed.tool !== name ||
+    !parsed.parameter ||
+    typeof input !== "object" ||
+    input === null ||
+    !Object.hasOwn(input, parsed.parameter.key)
+  )
+    return false;
+  const value: unknown = Reflect.get(input, parsed.parameter.key);
+  return (
+    (typeof value === "string" ||
+      typeof value === "number" ||
+      typeof value === "boolean" ||
+      typeof value === "bigint") &&
+    matchesPermissionArgument(parsed.parameter.pattern, String(value).trim())
+  );
 }
 
 /** Native Xie/G9r compare Agent(type) content exactly; Task is the legacy tool alias. */
@@ -368,12 +462,20 @@ export function matchingToolRule(
       ? matchesSkillRule(rule, behavior, context.input)
       : name === "Agent" || name === "Task"
         ? matchesAgentRule(rule, context.input, behavior)
-        : matchesName(rule, name, context.serverName),
+        : matchesName(rule, name, context.serverName, behavior) ||
+          (context.serverName === undefined &&
+            matchesBuiltinPrimitive(rule, name, behavior, context.input)),
   );
   if (direct !== undefined) return { rule: direct, source: "cliArg" };
   for (const sourced of policy.sourcedRules ?? []) {
     if (sourced.behavior !== behavior) continue;
     const parsed = splitSourcedRule(sourced.rule);
+    if (parsed.compatibilityWildcard && behavior === "allow") continue;
+    if (
+      parsed.dedicated &&
+      (behavior === "allow" || parsed.parameter === undefined)
+    )
+      continue;
     if (!matchesName(parsed.tool, name, context.serverName)) continue;
     if (
       parsed.agentRule !== undefined &&
@@ -431,7 +533,11 @@ export function inheritedReadDeny(
     )
       continue;
     const parsed = splitSourcedRule(rule.rule);
-    if (parsed.tool === "Read" && parsed.parameter === undefined)
+    if (
+      parsed.tool === "Read" &&
+      parsed.parameter === undefined &&
+      !parsed.dedicated
+    )
       return {
         rule: rule.rule,
         source: rule.source,

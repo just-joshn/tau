@@ -20,6 +20,8 @@ export interface LaunchConfiguration {
   snapshot: ConfigurationSnapshot;
   userConfigDir: string;
   globalConfigPath: string;
+  /** Exact persisted project records; session/ancestor acceptance is a separate channel. */
+  trustedProjectKeys?: readonly string[];
   workspace: WorkspaceConfiguration;
   managedRoot?: string;
   importHome: string;
@@ -241,6 +243,7 @@ export async function loadLaunchConfiguration(
     snapshot,
     userConfigDir,
     globalConfigPath,
+    trustedProjectKeys,
     workspace,
     managedRoot,
     importHome: homeDirectory,

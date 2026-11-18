@@ -4,6 +4,10 @@ import {
 } from "./catalog-projection.js";
 import { activeContextStart } from "./context-usage.js";
 import type { Message, ToolExecutor } from "./types.js";
+import {
+  captureNativeCatalogAttachments,
+  type NativeAttachmentCaptureHost,
+} from "./native-attachment-capture.js";
 
 /** Catalog records share the lifetime of the corresponding retained user message. */
 export function wrapCatalogTools(
@@ -17,6 +21,7 @@ export function wrapCatalogTools(
       | CatalogProjectionOptions["skills"]
       | Promise<CatalogProjectionOptions["skills"]>;
     skillBudget?: CatalogProjectionOptions["skillBudget"];
+    nativeCapture?: NativeAttachmentCaptureHost;
   },
 ): ToolExecutor {
   return {
@@ -65,10 +70,22 @@ export function wrapCatalogTools(
       });
       if (!projection.blocks.length) return;
       let row = messages.at(-1);
+      const createdMessage = row?.role !== "user";
       if (row?.role !== "user") {
         row = { role: "user", content: [] };
-        messages.push(row);
       }
+      if (options.nativeCapture)
+        await captureNativeCatalogAttachments(
+          options.nativeCapture,
+          projection,
+          {
+            kind: "catalog",
+            message: row,
+            createdMessage,
+          },
+        );
+      signal.throwIfAborted();
+      if (createdMessage) messages.push(row);
       row.content.push(
         ...projection.blocks.map(({ type, text }) => ({ type, text })),
       );

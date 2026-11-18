@@ -102,7 +102,7 @@ test("hook events this host cannot run reject the hook file, and keep the plugin
     ".claude-plugin/plugin.json": { name: "hooky" },
     "hooks/hooks.json": {
       hooks: {
-        UserPromptSubmit: [{ hooks: [{ type: "command", command: "true" }] }],
+        Notification: [{ hooks: [{ type: "command", command: "true" }] }],
       },
     },
   });

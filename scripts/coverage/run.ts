@@ -74,6 +74,8 @@ const rawFiles = existsSync(rawDir)
   ? readdirSync(rawDir).filter((name) => name.endsWith(".json"))
   : [];
 for (const name of rawFiles) map.merge(readCoverage(join(rawDir, name)));
+// Each process dumps the whole map, so the raw files reach gigabytes; the merged reports replace them.
+rmSync(rawDir, { recursive: true, force: true });
 if (saved !== undefined) map.merge(saved.fresh);
 console.log(
   `merged ${rawFiles.length} raw coverage files${mergePath === undefined ? "" : ` and ${mergePath}`}`,
