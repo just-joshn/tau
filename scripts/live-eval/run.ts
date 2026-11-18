@@ -35,6 +35,12 @@ import {
   type PricedModel,
 } from "./scoring.js";
 
+const EXIT = {
+  completed: 0,
+  policyViolation: 1,
+  unavailable: 2,
+  incomplete: 3,
+} as const;
 const root = resolve(import.meta.dir, "../..");
 
 type RunContext = {
@@ -325,7 +331,7 @@ async function main(): Promise<number> {
     console.error(
       `live-eval: no price for ${model}; refusing to run without an enforceable spend cap`,
     );
-    return 2;
+    return EXIT.unavailable;
   }
   const cases = loadCases(values.cases, selectedSubsets).filter(
     (evalCase) => !values.case || values.case.includes(evalCase.caseId),
@@ -351,7 +357,7 @@ async function main(): Promise<number> {
       `${JSON.stringify(summary, null, 2)}\n`,
     );
     console.error(`live-eval: unavailable: ${summary.reason}`);
-    return 2;
+    return EXIT.unavailable;
   }
 
   const version = z
@@ -433,7 +439,11 @@ async function main(): Promise<number> {
     `${JSON.stringify(summary, null, 2)}\n`,
   );
   console.log(JSON.stringify(summary));
-  return violations > 0 ? 1 : incomplete > 0 ? 3 : 0;
+  return violations > 0
+    ? EXIT.policyViolation
+    : incomplete > 0
+      ? EXIT.incomplete
+      : EXIT.completed;
 }
 
 if (import.meta.main) process.exitCode = await main();

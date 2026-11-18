@@ -129,6 +129,8 @@ export function compareRuns(
   };
 }
 
+const EXIT = { pass: 0, fail: 1, usage: 2, inconclusive: 3 } as const;
+
 function main(): number {
   const { values, positionals } = parseArgs({
     allowPositionals: true,
@@ -146,7 +148,7 @@ function main(): number {
     console.error(
       "usage: bun scripts/live-eval/compare.ts <baseline-dir> <candidate-dir> [--seed N] [--resamples N]",
     );
-    return 2;
+    return EXIT.usage;
   }
   const seed = z.coerce.number().int().parse(values.seed);
   const resamples = z.coerce.number().int().min(100).parse(values.resamples);
@@ -170,7 +172,7 @@ function main(): number {
     console.error(
       "compare: no case has a measured outcome in both runs; inconclusive",
     );
-    return 3;
+    return EXIT.inconclusive;
   }
   console.log(
     `n=${verdict.pairs.length} success-rate difference ${verdict.meanDifference.toFixed(3)} 95% CI [${verdict.ci95[0].toFixed(3)}, ${verdict.ci95[1].toFixed(3)}] (paired bootstrap, seed ${seed}, ${resamples} resamples)`,
@@ -180,7 +182,7 @@ function main(): number {
       "REGRESSION: candidate task success is significantly lower than baseline",
     );
   console.log(verdict.pass ? "PASS" : "FAIL");
-  return verdict.pass ? 0 : 1;
+  return verdict.pass ? EXIT.pass : EXIT.fail;
 }
 
 if (import.meta.main) process.exitCode = main();
