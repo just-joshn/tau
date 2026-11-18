@@ -8,7 +8,13 @@ import {
   type CoverageMapData,
   type FileCoverageData,
 } from "istanbul-lib-coverage";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
@@ -42,6 +48,11 @@ test("--focus without a value fails the run", () => {
 const path = join(root, "src/example.ts");
 const source = "export const pick = (a: boolean) => (a ? 1 : 2);\n";
 
+/** A fresh empty directory. */
+function scratch(): string {
+  return mkdtempSync(join(tmpdir(), "tau-coverage-"));
+}
+
 /** `code` instrumented as `path`, every counter at zero. */
 function instrumented(code: string): FileCoverageData {
   const instrumenter = createInstrumenter(INSTRUMENTER_OPTIONS);
@@ -54,7 +65,7 @@ function savedRun(code: string): CoverageMapData {
   const data = instrumented(code);
   for (const [id, arms] of Object.entries(data.b))
     data.b[id] = arms.map(() => 1);
-  const file = join(mkdtempSync(join(tmpdir(), "tau-coverage-")), "saved.json");
+  const file = join(scratch(), "saved.json");
   writeFileSync(file, JSON.stringify({ [path]: data }));
   return readCoverage(file);
 }
@@ -77,4 +88,40 @@ test("--merge ignores a saved run of a since-edited source", () => {
   assert.equal(branches.total, 2);
   assert.equal(branches.covered, 0);
   assert.deepEqual(stale, [path]);
+});
+
+const instrumentPath = join(root, "scripts/coverage/instrument.ts");
+
+test("a child killed while flushing coverage leaves no partial raw file", () => {
+  const outputDir = scratch();
+  const child = join(scratch(), "child.js");
+  writeFileSync(
+    child,
+    `await import(process.argv[2]);
+globalThis.__coverage__ = { "/x.ts": { path: "/x.ts", pad: "x".repeat(1 << 20) } };
+`,
+  );
+  // A file size limit kills the child with SIGXFSZ partway through the write.
+  const run = Bun.spawnSync(
+    [
+      "/bin/sh",
+      "-c",
+      'ulimit -f 8 && exec "$@"',
+      "sh",
+      process.execPath,
+      child,
+      instrumentPath,
+    ],
+    { env: { PATH: process.env.PATH, TAU_COVERAGE_DIR: outputDir } },
+  );
+  assert.notEqual(run.exitCode, 0);
+  const rawDir = join(outputDir, "raw");
+  assert.ok(existsSync(rawDir));
+  for (const name of readdirSync(rawDir).filter((file) =>
+    file.endsWith(".json"),
+  ))
+    assert.doesNotThrow(
+      () => JSON.parse(readFileSync(join(rawDir, name), "utf8")),
+      name,
+    );
 });
