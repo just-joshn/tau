@@ -1,9 +1,12 @@
 // Bun preload that loads <repo>/src/**/*.ts instrumented with istanbul,
 // because Bun's own coverage has no branch data. scripts/coverage/run.ts
-// instruments every source into the cache before tests start, then loads this
-// preload into the test runner and every descendant bun process through
-// BUN_OPTIONS. Each process only reads the cache, so a spawned CLI pays
-// neither babel nor the istanbul import, and writes its counters to
+// instruments every source into the cache before tests start and sets
+// TAU_COVERAGE_DIR. bunfig.toml lists this preload first, because bun test
+// runs bunfig preloads before BUN_OPTIONS ones and a preload that imports src
+// would otherwise load it uninstrumented; BUN_OPTIONS carries it into every
+// descendant bun process. Without TAU_COVERAGE_DIR it does nothing. Each
+// process only reads the cache, so a spawned CLI pays neither babel nor the
+// istanbul import, and writes its counters to
 // $TAU_COVERAGE_DIR/raw/<pid>-<n>.json.
 import { plugin } from "bun";
 import type { CoverageMapData } from "istanbul-lib-coverage";
@@ -24,12 +27,12 @@ export const INSTRUMENTER_OPTIONS = {
   parserPlugins: ["typescript"],
   coverageVariable: "__coverage__",
 };
-const version = instrumenterVersion();
+let version: string | undefined;
 
 /** Where the instrumented copy of `source`, read from `path`, is cached. */
 export function cachedInstrumentation(path: string, source: string): string {
   const key = createHash("sha256")
-    .update(version)
+    .update((version ??= instrumenterVersion()))
     .update("\0")
     .update(path)
     .update("\0")
@@ -44,7 +47,15 @@ if (outputDir !== undefined) {
 }
 
 function installLoader() {
-  const sourceRoot = join(root, "src").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const srcDir = join(root, "src");
+  const early = Object.keys(require.cache).filter((path) =>
+    path.startsWith(`${srcDir}/`),
+  );
+  if (early.length > 0)
+    throw new Error(
+      `loaded before the coverage preload, so uninstrumented: ${early.join(", ")}`,
+    );
+  const sourceRoot = srcDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   plugin({
     name: "tau-istanbul",
     setup(build) {

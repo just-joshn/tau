@@ -1,6 +1,11 @@
 [test]
 root = "./test"
-preload = ["./test/helpers/test-environment.ts"]
+# The coverage preload goes first so src loads instrumented under
+# scripts/coverage/run.ts; it does nothing in a plain run.
+preload = [
+  "./scripts/coverage/instrument.ts",
+  "./test/helpers/test-environment.ts",
+]
 # Bun's native coverage reports lines and functions only. The branch gate is
 # the istanbul run in scripts/coverage/run.ts (bun run test:coverage).
 coverageReporter = ["text", "lcov"]
