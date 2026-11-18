@@ -2011,11 +2011,20 @@ async function main(): Promise<void> {
       }
     }
     if (!tui) await activeHooks().settleRewakes();
+    // The original's help puts bundled skills and built-in commands under
+    // "Commands" with their menu text; everything else is a custom command.
+    const builtin = (skill: { source: string }) =>
+      skill.source === "bundled" || skill.source === "builtinCommand";
     const skillEntries = () =>
       (skillHost?.runtime.catalog() ?? []).map((skill) => ({
         name: skill.name,
-        description: skill.description,
+        description: builtin(skill)
+          ? skill.menuDescription || skill.description
+          : skill.description,
+        builtin: builtin(skill),
       }));
+    const customEntries = () =>
+      skillEntries().filter((skill) => !skill.builtin);
     while (tui && !closing) {
       tui.setCommands(commandEntries(skillEntries(), session.model));
       tui.setModel(modelLabel(session.model));
@@ -2037,11 +2046,11 @@ async function main(): Promise<void> {
           closing = true;
           break;
         case "help":
-          tui.showHelp(skillEntries());
+          tui.showHelp(customEntries());
           break;
         case "skills":
           reply(
-            skillEntries()
+            customEntries()
               .map((skill) => `/${skill.name} ${skill.description}`)
               .join("\n") || "No local skills available.",
           );

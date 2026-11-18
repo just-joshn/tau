@@ -49,6 +49,7 @@
           "Glob",
           "Grep",
           "Read",
+          "Skill",
           "ToolSearch",
           "Write"
         ],
@@ -56,6 +57,9 @@
           {
             "role": "user",
             "blocks": [
+              {
+                "kind": "text"
+              },
               {
                 "kind": "text"
               },
@@ -94,6 +98,7 @@
           "Glob",
           "Grep",
           "Read",
+          "Skill",
           "ToolSearch",
           "Write"
         ],
@@ -101,6 +106,9 @@
           {
             "role": "user",
             "blocks": [
+              {
+                "kind": "text"
+              },
               {
                 "kind": "text"
               },

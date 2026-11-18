@@ -415,16 +415,20 @@
     {
       "name": "Skill",
       "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
         "properties": {
           "skill": {
+            "description": "The name of a skill from the available-skills list. Do not guess names.",
             "type": "string"
           },
           "args": {
+            "description": "Optional arguments for the skill",
             "type": "string"
           }
         },
-        "required": ["skill"]
+        "required": ["skill"],
+        "additionalProperties": false
       }
     }
   ]

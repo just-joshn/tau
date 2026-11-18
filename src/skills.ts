@@ -44,6 +44,8 @@ export interface LocalSkill {
   contentLength: number;
   argumentHint?: string;
   whenToUse?: string;
+  /** Built-in skills' shorter /help text. */
+  menuDescription?: string;
   version?: string;
   model?: string;
   effort?: SkillEffort;

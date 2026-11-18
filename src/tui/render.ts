@@ -528,7 +528,8 @@ function paneRows(state: AppState, view: View, columns: number): Line[] {
                 ),
                 ...commandList(
                   state.commands.filter(
-                    (entry) => !view.custom.includes(entry),
+                    (entry) =>
+                      !view.custom.some((custom) => custom.name === entry.name),
                   ),
                   columns,
                 ),

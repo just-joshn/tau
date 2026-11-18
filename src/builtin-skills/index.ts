@@ -135,6 +135,9 @@ export function builtinSkillDefinitions(options: {
         ? {}
         : { argumentHint: spec.argumentHint }),
       ...(spec.whenToUse === undefined ? {} : { whenToUse: spec.whenToUse }),
+      ...(spec.menuDescription === undefined
+        ? {}
+        : { menuDescription: spec.menuDescription }),
       ...(spec.model === undefined ? {} : { model: spec.model }),
       ...(spec.context === undefined ? {} : { context: spec.context }),
     };
