@@ -9,14 +9,16 @@ import {
   type FileCoverageData,
 } from "istanbul-lib-coverage";
 import {
+  copyFileSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import {
   mergeableCoverage,
   parseRunArgs,
@@ -124,4 +126,50 @@ globalThis.__coverage__ = { "/x.ts": { path: "/x.ts", pad: "x".repeat(1 << 20) }
       () => JSON.parse(readFileSync(join(rawDir, name), "utf8")),
       name,
     );
+});
+
+/** The instrumentation cache file for one source under an install whose
+ * packages have the given versions. */
+function cacheKey(versions: Record<string, string>): string {
+  const fakeRoot = scratch();
+  mkdirSync(join(fakeRoot, "scripts/coverage"), { recursive: true });
+  copyFileSync(
+    instrumentPath,
+    join(fakeRoot, "scripts/coverage/instrument.ts"),
+  );
+  for (const [name, version] of Object.entries(versions)) {
+    mkdirSync(join(fakeRoot, "node_modules", name), { recursive: true });
+    writeFileSync(
+      join(fakeRoot, "node_modules", name, "package.json"),
+      JSON.stringify({ name, version }),
+    );
+  }
+  const probe = join(scratch(), "probe.js");
+  writeFileSync(
+    probe,
+    `const { cachedInstrumentation } = await import(process.argv[2]);
+console.log(cachedInstrumentation("/src/a.ts", "export {};"));
+`,
+  );
+  const run = Bun.spawnSync(
+    [process.execPath, probe, join(fakeRoot, "scripts/coverage/instrument.ts")],
+    { env: { PATH: process.env.PATH } },
+  );
+  assert.equal(run.exitCode, 0, run.stderr.toString());
+  return basename(run.stdout.toString().trim());
+}
+
+test("upgrading babel invalidates the instrumentation cache", () => {
+  const installed = {
+    "istanbul-lib-instrument": "6.0.3",
+    "@babel/core": "7.29.13",
+    "@babel/parser": "7.29.14",
+  };
+  const before = cacheKey(installed);
+  assert.equal(cacheKey(installed), before);
+  assert.notEqual(cacheKey({ ...installed, "@babel/core": "7.30.0" }), before);
+  assert.notEqual(
+    cacheKey({ ...installed, "@babel/parser": "7.30.0" }),
+    before,
+  );
 });
