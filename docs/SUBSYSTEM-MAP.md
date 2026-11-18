@@ -1,6 +1,6 @@
 # Claude Code reconstruction: subsystem and workflow map
 
-Current checkpoint (2026-11-18, branch `recon/workflows-2026-11-18`): `bun test ./test` 5586 tests, 0 fail; typecheck and lint clean. Full reconstruction remains the objective; this map is the inventory, not a completion claim.
+Current checkpoint (2026-11-18, branch `recon/workflows-2026-11-18`): `bun test ./test` 5622 tests, 0 fail; typecheck and lint clean. Full reconstruction remains the objective; this map is the inventory, not a completion claim.
 
 This session's workflow additions, each with a disposable original-vs-tau differential (verified isolation, dummy credentials, loopback mock):
 
@@ -8,11 +8,12 @@ This session's workflow additions, each with a disposable original-vs-tau differ
 | ------------------------------------------------------------ | -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------- |
 | WebFetch / WebSearch                                         | `src/web-*.ts`, deferred behind ToolSearch   | `scripts/differential/compare_web.py`: every side-query field, tool schema/description and model-visible result equal, with and without the domain preflight                | `artifacts/web-tools-ghidra` 9/9 COMPLETE |
 | Deferred catalog, ToolSearch, NotebookEdit                   | `src/tool-search.ts`, `src/notebook-edit.ts` | `run_catalog.py compare`: all 9 gated fields equal (listing header, placeholder, defer_loading per request, tool_reference result, notebook Read/Edit results, final bytes) | `artifacts/catalog-ghidra` 10/10 COMPLETE |
+| Print-mode SDK protocol (json, stream-json, `--verbose` gate, partial messages, stdin stream-json, `--session-id`, result subtypes, `system/permission_denied`) | `src/sdk-messages.ts` reducer | `compare_sdk_io.py`: type sequence and compared fields equal in all 10 cases | `artifacts/sdk-io-ghidra` 10/10 COMPLETE |
 | `--no-session-persistence` and the recovered interactive bit | `src/launch-mode.ts` (promoted Codex drafts) | flag now accepted by tau in every runner                                                                                                                                    | drafts' own reports, 11 + 10 slices       |
 
-Known remaining differences surfaced by these runs: system prompt (tau 932 B vs original ~27 KB plus 8 first-turn reminders, billing/identity system blocks on side queries); eager tool order (original alphabetical); original-only tools ListAgents, ReportFindings, ScheduleWakeup, Workflow, Cron*, Monitor, SendMessage, Enter/ExitWorktree; stream-json/json SDK message schema. Lanes in flight: SDK headless I/O, system prompt, async hooks.
+Known remaining differences surfaced by these runs: system prompt (tau 932 B vs original ~27 KB plus 8 first-turn reminders, billing/identity system blocks on side queries); eager tool order (original alphabetical); original-only tools ListAgents, ReportFindings, ScheduleWakeup, Workflow, Cron*, Monitor, SendMessage, Enter/ExitWorktree; SDK init/result fields not yet produced (capabilities, fast_mode_*, subagent_stats, timing), structured `tool_use_result`, stdin control frames. Lanes in flight: system prompt, async hooks, Bash parity.
 
-Evidence tooling: `scripts/ghidra/needles_to_spans.py` + `scripts/ghidra/span_provenance.py` turn ported literals into batched Ghidra byte checks. Original oracles for print/stream-json/json/stdin/partial runs are in `artifacts/workflow-oracles-2026-11-18`. Craft Anything findings fnd_1..fnd_3 (session ledger) record the restored chunks and the web/catalog results.
+Evidence tooling: `scripts/ghidra/needles_to_spans.py` + `scripts/ghidra/span_provenance.py` turn ported literals into batched Ghidra byte checks. Original oracles for print/stream-json/json/stdin/partial runs are in `artifacts/workflow-oracles-2026-11-18`. Craft Anything findings fnd_1..fnd_4 (session ledger) record the restored chunks and the web/catalog results.
 
 Authorization: the original runs only inside `scripts/differential/isolation.py`'s verified disposable boundary (dummy HOME/config/credentials, deny-default Seatbelt, external network blocked, exact loopback port). Recovered JavaScript is the primary application-logic evidence; Ghidra is for batched byte provenance and native behavior. Older checkpoints and per-lane detail: [HANDOFF](HANDOFF.md) and the contract docs.
 
