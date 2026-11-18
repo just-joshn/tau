@@ -561,7 +561,7 @@ export function createBackgroundAgentRuntime(
   };
   return {
     limitations: [
-      "One ordinary local run only; no resume, messaging, names, remote/team/worktree/forced-fork or native parked-child keepalive",
+      "One ordinary local run only; no resume, messaging, names, remote/team/worktree/forced-fork or native parked-child keepalive. A fork is rejected here because this scheduler cannot inherit the parent transcript",
       "Persistence and notification projection are explicit host adapters; native JSONL, symlink/sidecar and peer discovery are not inferred",
       ...(options.watchdog.kind === "unsupported"
         ? [
