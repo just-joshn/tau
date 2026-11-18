@@ -14,6 +14,7 @@ export const toolNameSchema = z.enum([
   "Glob",
   "Grep",
   "Bash",
+  "NotebookEdit",
 ]);
 export type ToolName = z.infer<typeof toolNameSchema>;
 export const taskPolicyNameSchema = z.enum([

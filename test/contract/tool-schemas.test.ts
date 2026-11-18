@@ -140,6 +140,10 @@ const BASE: Record<string, (tag: string) => Record<string, unknown>> = {
   Glob: () => ({ pattern: "*.txt" }),
   Grep: () => ({ pattern: "present" }),
   Bash: (tag) => ({ command: `touch bad-${tag}.txt` }),
+  NotebookEdit: (tag) => ({
+    notebook_path: `bad-${tag}.ipynb`,
+    new_source: "x",
+  }),
   TaskCreate: () => ({ subject: "bad-task", description: "bad-task" }),
   TaskGet: () => ({ taskId: "1" }),
   TaskUpdate: () => ({ taskId: "1", subject: "bad-task" }),
