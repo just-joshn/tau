@@ -1,0 +1,617 @@
+#!/usr/bin/env node
+import { realpath } from "node:fs/promises";
+import { resolve } from "node:path";
+import { createInterface } from "node:readline/promises";
+import { stdin, stdout, stderr } from "node:process";
+import { terminalText as safe, replaceProvisional } from "./terminal.js";
+import { runAgent } from "./agent.js";
+import { help, parseOptions, permissionModeSchema } from "./options.js";
+import { buildBaseSystemPrompt } from "./prompt.js";
+import { AnthropicProvider } from "./provider.js";
+import { newSession, SessionStore } from "./session.js";
+import { createTools } from "./tools.js";
+import { ReadState } from "./read-state.js";
+import { defaultOutputTokens, resolveModelFacts } from "./reasoning.js";
+import { compactContext, freshCompactionState } from "./compaction.js";
+import { ApiAttemptBudget } from "./attempt-ledger.js";
+import { McpManager } from "./mcp.js";
+import { loadLaunchMcp } from "./mcp-launch.js";
+import { routeExternalTools } from "./tool-router.js";
+import { loadLaunchConfiguration } from "./launch-configuration.js";
+import { combineToolPolicy, inheritedReadDeny } from "./tool-policy.js";
+import { createInstructionCatalog } from "./instructions.js";
+import { InstructionContext } from "./instruction-context.js";
+import { createHookRegistry, type HookSource } from "./hooks.js";
+import { createSessionHookHost } from "./session-hooks.js";
+import { createSessionSkillHost, resolveDirectSkillModelAlias } from "./skill-session.js";
+import { SessionSkillHookRegistry, createSkillHookExecutionRegistry } from "./skill-hook-registry.js";
+import { composeHookRegistries } from "./composite-hooks.js";
+import { createSessionTaskHost } from "./task-session.js";
+import { createSessionAgentHost } from "./agent-session.js";
+import { wrapCatalogTools } from "./catalog-session.js";
+import { formatBackgroundNotification } from "./background-notifications.js";
+import type { BackgroundAgentCompletion } from "./background-agent-runtime.js";
+import { createBackgroundTaskTools } from "./background-task-tools.js";
+import { createChildCapabilityTools } from "./child-capability-tools.js";
+import { builtinAgentProfile, createBuiltinAgentCatalog, createExplorePlanAvailability } from "./builtin-agent-definitions.js";
+import { loadLaunchPlugins } from "./plugin-launch.js";
+import { createSubagentLifecycle } from "./subagent-lifecycle.js";
+import { pluginCustomizationOnly } from "./plugin-policy.js";
+import { createToolHookRuntime } from "./tool-hook-runtime.js";
+import { nativeTasksEnabled } from "./task-runtime.js";
+import { triBoolean } from "./env-settings.js";
+import { createLaunchPlanHost } from "./plan-launch.js";
+import { createMcpPermissionPrompt } from "./permission-prompt.js";
+import { buildQueryEffortSettings, firstPartyQueryEffortFacts, queryEffortSettingsCap, sessionQueryEffort, resolveQueryEffort,
+  firstPartyLegacyUserEffortApplies, queryEffortLabel, type QueryEffortSettingsLayer } from "./query-model-effort.js";
+import type { AgentEvent } from "./types.js";
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "Unknown error";
+}
+async function readStdin(): Promise<string> {
+  const chunks: Buffer[] = [];
+  let bytes = 0;
+  for await (const chunk of stdin) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+    bytes += buffer.length;
+    if (bytes > 1024 * 1024) throw new Error("Piped input exceeds 1 MiB");
+    chunks.push(buffer);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+async function main(): Promise<void> {
+  const options = parseOptions(process.argv.slice(2));
+  if (options.help) { stdout.write(help); return; }
+  if (options.version) { stdout.write("tau 0.1.0\n"); return; }
+  const cwd = await realpath(options.cwd);
+  const interactive = !options.print && Boolean(stdin.isTTY && stdout.isTTY);
+  const launch = await loadLaunchConfiguration(options, { cwd, nonInteractive: !interactive });
+  const policy = combineToolPolicy(options.toolPolicy, launch.snapshot.permissionRules);
+  const plugins = await loadLaunchPlugins({ cwd, directories: options.pluginDirectories, launch,
+    onDiagnostic: message => stderr.write(`Plugins: ${safe(message)}\n`) });
+  for (const diagnostic of launch.snapshot.diagnostics) stderr.write(`Settings: ${safe(diagnostic.message)}${diagnostic.path ? ` (${safe(diagnostic.path)})` : ""}\n`);
+  if (interactive && options.format !== "text") throw new Error("Structured output requires --print or piped input");
+  if (interactive && options.maxThinkingTokens !== undefined) throw new Error("--max-thinking-tokens requires print or piped mode");
+  const prompt = [options.prompt, !stdin.isTTY ? await readStdin() : ""].filter(Boolean).join("\n\n").trim();
+  if (!interactive && !prompt) throw new Error("Provide a prompt with -p or on stdin");
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error("Set ANTHROPIC_API_KEY; tau does not use Claude Code credentials");
+  const baseUrl = process.env.ANTHROPIC_BASE_URL;
+  const effortLayers: QueryEffortSettingsLayer[] = launch.snapshot.documents.flatMap(document => document.effective === undefined ? [] : [{ source: document.source,
+    ...document.effective }]);
+  const modelIdentity = (model: string) => resolveModelFacts(resolveDirectSkillModelAlias(model)).canonical;
+  const effortTable = buildQueryEffortSettings(effortLayers, modelIdentity);
+  const effortFacts = (model: string) => firstPartyQueryEffortFacts(resolveModelFacts(model).wire);
+  const effortSelection = (model: string) => {
+    const facts = effortFacts(model), cap = queryEffortSettingsCap(effortLayers, model, modelIdentity);
+    const selected = sessionQueryEffort({ table: effortTable, model, identity: modelIdentity,
+      legacyUserApplies: firstPartyLegacyUserEffortApplies(resolveModelFacts(model).wire) ?? false });
+    return { ...(facts ? { defaults: facts.defaults } : {}), ...(cap === undefined ? {} : { settingsCap: cap }),
+      ...(selected === undefined ? {} : { sessionEffort: selected }) };
+  };
+  const provider = new AnthropicProvider({ apiKey, maxRetries: options.maxRetries, allowNonStreamingFallback: options.allowNonStreamingFallback, ...(baseUrl ? { baseUrl } : {}), ...(launch.fallbackModel ? { fallbackModel: launch.fallbackModel } : {}),
+    queryEffortPolicy: { capabilities: model => effortFacts(model)?.capabilities, selection: request => effortSelection(request.model) },
+    thinking: { ...(options.thinking ? { mode: options.thinking } : {}), ...(options.maxThinkingTokens === undefined ? {} : { maxThinkingTokens: options.maxThinkingTokens }) } });
+  const store = await SessionStore.create(cwd);
+  let session = options.resume ? await store.load(options.resume) : options.continue ? await store.latest() : newSession(cwd, launch.model);
+  if (options.modelExplicit) session.model = options.model;
+  let queryModelForTools = session.model;
+  let mode = !options.modeExplicit && session.planState?.active ? "plan" as const : launch.mode;
+  let readState = new ReadState();
+  const currentSystem = await buildBaseSystemPrompt(cwd, options.systemPrompt, options.appendSystemPrompt);
+  const system = () => options.systemPromptSnapshot === false ? currentSystem : session.systemPrompt ??= currentSystem;
+  const terminal = interactive ? createInterface({ input: stdin, output: stdout }) : undefined;
+  let active: AbortController | undefined;
+  let mcp: McpManager | undefined;
+  let permissionPrompt: ReturnType<typeof createMcpPermissionPrompt> | undefined;
+  let closing = false;
+  const interrupt = () => {
+    if (active) { active.abort(); stderr.write("\nCancelling…\n"); }
+    else { closing = true; terminal?.close(); }
+  };
+  process.on("SIGINT", interrupt);
+  terminal?.on("SIGINT", interrupt);
+  terminal?.on("close", () => { closing = true; active?.abort(); });
+  const approve = async (description: string): Promise<boolean> => {
+    if (!terminal || closing || active?.signal.aborted) return false;
+    const answer = await terminal.question(`\n${safe(description)}\nAllow once? [y/N] `, active ? { signal: active.signal } : {});
+    return /^(y|yes)$/i.test(answer.trim());
+  };
+  const createHookHost = () => {
+    const hookSessionId = session.id;
+    const sources: HookSource[] = launch.snapshot.documents.flatMap(document => {
+      if (document.source !== "policySettings" && pluginCustomizationOnly(launch.snapshot.policy.strictPluginOnlyCustomization, "hooks")) return [];
+      if (document.effective?.hooks === undefined || (document.source === "projectSettings" || document.source === "localSettings") && !launch.workspace.currentWorkspaceTrusted) return [];
+      return [{ source: document.source, hooks: document.effective.hooks, managed: document.source === "policySettings",
+        ...(document.path === undefined ? {} : { path: document.path }) }];
+    });
+    const settings = { disabled: launch.snapshot.effective.disableAllHooks === true,
+      managedOnly: launch.snapshot.policy.allowManagedHooksOnly === true,
+      strictPluginOnly: pluginCustomizationOnly(launch.snapshot.policy.strictPluginOnlyCustomization, "hooks") };
+    const base = createHookRegistry([...sources, ...plugins.hookSources], settings), skillHooks = new SessionSkillHookRegistry(settings);
+    const registry = composeHookRegistries(base, createSkillHookExecutionRegistry(skillHooks, () => hookSessionId));
+    const childRegistry = (plan: Readonly<import("./subagent-runtime.js").SubagentPlan>) => composeHookRegistries(base, createSkillHookExecutionRegistry(skillHooks, () => plan.agentId, { ownerSessionId: () => hookSessionId }));
+    const childContext = (plan: Readonly<import("./subagent-runtime.js").SubagentPlan>) => {
+      const facts = effortFacts(plan.model), effort = facts && resolveQueryEffort({ ...effortSelection(plan.model), capabilities: facts.capabilities,
+        ...(process.env.CLAUDE_CODE_EFFORT_LEVEL === undefined ? {} : { environment: process.env.CLAUDE_CODE_EFFORT_LEVEL }),
+        ...(plan.effort === undefined ? {} : { turnEffort: plan.effort }) });
+      return { session_id: hookSessionId, transcript_path: store.pathFor(hookSessionId), cwd, permission_mode: plan.permissionMode,
+        agent_id: plan.agentId, agent_type: plan.definition.agentType, ...(typeof effort === "string" ? { effort: { level: effort } } : {}) };
+    };
+    const stopCap = Number.parseInt(process.env.CLAUDE_CODE_STOP_HOOK_BLOCK_CAP ?? "8", 10);
+    const agentLifecycle = createSubagentLifecycle({ registryForStart: () => registry, registryForStop: childRegistry,
+      context: plan => plan ? childContext(plan) : { session_id: hookSessionId, transcript_path: store.pathFor(hookSessionId), cwd },
+      childTranscriptPath: plan => store.subagentPathFor(plan.parent.sessionId, plan.agentId), stopBlockCap: Number.isFinite(stopCap) ? stopCap : 8,
+      runOptions: () => ({ cwd, projectDir: cwd, env: process.env, maxOutputBytes: 16 * 1024 * 1024, attended: interactive }),
+      onDiagnostic: message => stderr.write(`Hooks: ${safe(message)}\n`),
+    });
+    let revision = 0;
+    const host = createSessionHookHost({ registry,
+      context: () => ({ session_id: hookSessionId, transcript_path: store.pathFor(hookSessionId), cwd, permission_mode: mode }),
+      runOptions: () => ({ cwd, projectDir: cwd, env: process.env, maxOutputBytes: 16 * 1024 * 1024, attended: interactive }),
+      onDiagnostic: message => stderr.write(`Hooks: ${safe(message)}\n`),
+    });
+    return { ...host, agentLifecycle, get hasToolHooks() { return host.hasToolHooks; }, get revision() { return revision; },
+      childTask: (plan: Readonly<import("./subagent-runtime.js").SubagentPlan>, event: "TaskCreated" | "TaskCompleted", task: { taskId: string; subject: string; description: string }, signal: AbortSignal) =>
+        createSessionHookHost({ registry: childRegistry(plan), context: () => childContext(plan),
+          runOptions: () => ({ cwd, projectDir: cwd, env: process.env, maxOutputBytes: 16 * 1024 * 1024, attended: interactive && !plan.isAsync }),
+          onDiagnostic: message => stderr.write(`Hooks: ${safe(message)}\n`) }).task(event, task, signal),
+      childRuntime: (plan: Readonly<import("./subagent-runtime.js").SubagentPlan>) => createToolHookRuntime({
+        registry: childRegistry(plan), context: () => childContext(plan),
+        runOptions: () => ({ cwd, projectDir: cwd, env: process.env, maxOutputBytes: 16 * 1024 * 1024, attended: interactive }),
+        onDiagnostic: message => stderr.write(`Hooks: ${safe(message)}\n`),
+      }),
+      registerSkillHooks: (request: import("./skill-hook-registry.js").SkillHookRequest) => {
+        const result = skillHooks.register(request); if (result.registered) revision++; return result;
+      } };
+  };
+  let hookHost: ReturnType<typeof createHookHost> | undefined;
+  let skillHost: Awaited<ReturnType<typeof createSessionSkillHost>> | undefined;
+  let taskHost: ReturnType<typeof createSessionTaskHost> | undefined;
+  let agentHost: Awaited<ReturnType<typeof createSessionAgentHost>> | undefined;
+  const agentHosts: Awaited<ReturnType<typeof createSessionAgentHost>>[] = [];
+  const agentConcurrencySlots = new Set<string>();
+  const retiredHookHosts: ReturnType<typeof createHookHost>[] = [];
+  const notifications: { sessionId: string; notification: Readonly<BackgroundAgentCompletion> }[] = [];
+  const notificationSessions = new Map<string, string>();
+  const commitNotifications = () => {
+    const ready = notifications.splice(0).filter(entry => entry.sessionId === session.id);
+    if (ready.length) session.messages.push({ role: "user", content: ready.map(entry => ({ type: "text", text: formatBackgroundNotification(entry.notification) })) });
+    return ready.length;
+  };
+  const hasBackgroundWork = () => agentHosts.some(host => host.background?.hasUnsettled || host.background?.hasPendingNotifications);
+  const waitForBackground = (signal: AbortSignal) => new Promise<void>((resolveWait, reject) => {
+    const unsubscribers: (() => void)[] = [];
+    const finish = () => { for (const unsubscribe of unsubscribers) unsubscribe(); signal.removeEventListener("abort", abort); resolveWait(); };
+    const abort = () => { for (const unsubscribe of unsubscribers) unsubscribe(); reject(signal.reason ?? new Error("Interrupted")); };
+    signal.addEventListener("abort", abort, { once: true });
+    for (const host of agentHosts) if (host.background) unsubscribers.push(host.background.subscribe(finish));
+    if (signal.aborted) abort(); else if (notifications.length || !hasBackgroundWork()) finish();
+  });
+  const taskStopTools = (plan?: Readonly<import("./subagent-runtime.js").SubagentPlan>, hooks?: import("./tool-hook-runtime.js").ToolHookRuntime) => createBackgroundTaskTools({
+    get: id => agentHosts.flatMap(host => host.background?.list() ?? []).find(task => task.id === id),
+    list: () => agentHosts.flatMap(host => host.background?.list() ?? []),
+    stop: async (id, request) => {
+      request.signal.throwIfAborted();
+      const owner = agentHosts.find(host => host.background?.list().some(task => task.id === id));
+      if (!owner?.background) throw new Error(`No task found with ID: ${id}`);
+      return owner.background.stop(id, { ...(request.callerAgentId === undefined ? {} : { callerAgentId: request.callerAgentId }), killedBy: request.killedBy });
+    },
+    context: () => plan === undefined ? {} : { callerAgentId: plan.agentId }, enabled: () => true,
+    policy: () => {
+      const current = skillHost?.policy() ?? policy;
+      return plan === undefined ? current : { ...current, tools: plan.selectedToolNames.filter((name): name is NonNullable<typeof current.tools>[number] =>
+        name === "TaskStop" && (current.tools === undefined || current.tools.some(tool => ["TaskStop", "KillShell", "KillBash"].includes(tool)))) };
+    },
+    authorize: async (_call, _context, permission) => permission !== "ask" || (!plan?.isAsync && await approve("Stop this background task?")),
+    hooks: hooks ?? { before: (...args) => activeHooks().runtime.before(...args), after: (...args) => activeHooks().runtime.after(...args),
+      failure: (...args) => activeHooks().runtime.failure?.(...args) ?? Promise.resolve() },
+    onDiagnostic: message => stderr.write(`Tasks: ${safe(message)}\n`),
+  });
+  let planHost: ReturnType<typeof createLaunchPlanHost> | undefined;
+  const activeHooks = () => { if (!hookHost) throw new Error("Session hooks are not initialized"); return hookHost; };
+  const currentModel = () => skillHost?.model(session.model) ?? session.model;
+  const currentQueryEffort = () => skillHost?.runtime.queryContext.layers.findLast(layer => layer.kind === "effort")?.effort;
+  const currentEffortDisplay = () => {
+    const model = currentModel(), facts = effortFacts(model), turnEffort = currentQueryEffort();
+    const effort = facts && resolveQueryEffort({ ...effortSelection(model), capabilities: facts.capabilities,
+      ...(process.env.CLAUDE_CODE_EFFORT_LEVEL === undefined ? {} : { environment: process.env.CLAUDE_CODE_EFFORT_LEVEL }),
+      ...(turnEffort === undefined ? {} : { turnEffort }) });
+    return queryEffortLabel(effort || undefined);
+  };
+  const createSkills = () => createSessionSkillHost({ cwd, launch, policy, interactive, sessionId: () => session.id, mode: () => mode, model: currentModel,
+    pluginPrompts: plugins.prompts,
+    effortLevel: currentEffortDisplay,
+    approve, ignorePersistedTrust: options.ignorePersistedTrust,
+    hooks: { before: (...args) => activeHooks().runtime.before(...args), after: (...args) => activeHooks().runtime.after(...args),
+      failure: (...args) => activeHooks().runtime.failure?.(...args) ?? Promise.resolve() },
+    registerHooks: request => activeHooks().registerSkillHooks({ ...request, personal: request.source !== "policySettings" }),
+    onDiagnostic: message => stderr.write(`Skills: ${safe(message)}\n`),
+  });
+  const createTasks = () => createSessionTaskHost({ userConfigDir: launch.userConfigDir, sessionId: session.id,
+    ...(process.env.CLAUDE_CODE_TASK_LIST_ID === undefined ? {} : { environmentListId: process.env.CLAUDE_CODE_TASK_LIST_ID }),
+    enabled: () => {
+      const tasks = triBoolean(process.env.CLAUDE_CODE_ENABLE_TASKS), todoTools = triBoolean(process.env.CLAUDE_CODE_ENABLE_TODO_TOOLS);
+      return nativeTasksEnabled({ canonicalModel: resolveModelFacts(queryModelForTools).canonical,
+        ...(tasks === undefined ? {} : { enabled: tasks }), ...(todoTools === undefined ? {} : { todoTools }) });
+    },
+    policy: () => skillHost?.policy() ?? policy, approve,
+    hooks: { before: (...args) => activeHooks().runtime.before(...args), after: (...args) => activeHooks().runtime.after(...args),
+      failure: (...args) => activeHooks().runtime.failure?.(...args) ?? Promise.resolve() },
+    lifecycle: (event, task, signal) => activeHooks().task(event, task, signal),
+    onDiagnostic: message => stderr.write(`Tasks: ${safe(message)}\n`),
+  });
+  const visibleMcp = () => { const manager = mcp; return manager && { get definitions() { return manager.definitions.filter(tool => tool.name !== options.permissionPromptTool); },
+    lookup: (name: string) => name === options.permissionPromptTool ? undefined : manager.lookup(name), refreshTools: () => manager.refreshTools(),
+    callTool: (name: string, input: unknown, signal: AbortSignal) => manager.callTool(name, input, signal) }; };
+  const explorePlanEnabled = createExplorePlanAvailability(() => process.env.CLAUDE_CODE_DISABLE_EXPLORE_PLAN_AGENTS);
+  const createAgents = async () => {
+    const owningHooks = activeHooks(), ownerSessionId = session.id, owningSkills = skillHost, owningTasks = taskHost;
+    if (!owningSkills || !owningTasks) throw new Error("Session Skill and task hosts must precede agent initialization");
+    notificationSessions.set(ownerSessionId, ownerSessionId);
+    const builtin = await createBuiltinAgentCatalog({ profile: builtinAgentProfile({ headless: !interactive,
+      disableBuiltinAgents: process.env.CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS, coordinator: false }), promptContext: "subagent",
+      safeMode: triBoolean(process.env.CLAUDE_CODE_SAFE_MODE) === true,
+      agentViewDisabled: Boolean(process.env.CLAUDE_CODE_DISABLE_AGENT_VIEW) || launch.snapshot.effective.disableAgentView === true,
+      explorePlanEnabled: explorePlanEnabled(), entrypoint: process.env.CLAUDE_CODE_ENTRYPOINT ?? (interactive ? "cli" : "sdk-cli"),
+      guideToolMode: "native-search", webFetch: { enabled: false }, deniedAgentTypes: [], isToolDenied: () => false, isToolEnabled: () => false });
+    const host = await createSessionAgentHost({ cwd, launch, provider, sessionId: () => ownerSessionId, model: currentModel,
+    builtinAgents: builtin.definitions,
+    concurrencySlots: agentConcurrencySlots,
+    background: {
+      outputFile: plan => store.backgroundOutputPathFor(plan.parent.sessionId, plan.agentId),
+      persist: snapshot => store.saveBackgroundTask(snapshot),
+      enqueueNotification: notification => { notifications.push({ sessionId: notificationSessions.get(ownerSessionId) ?? ownerSessionId, notification }); },
+    },
+    pluginAgents: plugins.agents,
+    childCapabilities: (plan, context) => createChildCapabilityTools({ cwd, launch, agentId: plan.agentId, agentType: plan.definition.agentType,
+      isAsync: plan.isAsync === true, sessionId: () => plan.parent.sessionId, selectedToolNames: plan.selectedToolNames,
+      policy: context.policy, mode: context.mode, model: () => plan.model, effort: () => plan.effort, hooks: context.hooks,
+      interactive, approve, registry: owningSkills.registry, env: process.env, signal: context.signal,
+      ignorePersistedTrust: options.ignorePersistedTrust,
+      effortLevel: ({ model, effort: turnEffort }) => {
+        const facts = effortFacts(model); if (!facts) return undefined;
+        const effort = resolveQueryEffort({ ...effortSelection(model), capabilities: facts.capabilities,
+          ...(process.env.CLAUDE_CODE_EFFORT_LEVEL === undefined ? {} : { environment: process.env.CLAUDE_CODE_EFFORT_LEVEL }),
+          ...(turnEffort === undefined ? {} : { turnEffort }) });
+        return queryEffortLabel(effort || undefined);
+      },
+      registerSkillHooks: request => owningHooks.registerSkillHooks({ ...request, personal: request.source !== "policySettings" }),
+      publishSessionCommandDenies: rules => {
+        combineToolPolicy(owningSkills.policy(), rules.map(rule => ({ rule, behavior: "deny" as const, source: "command" })));
+        owningSkills.runtime.appendCommandDenies(rules);
+      },
+      preloadRender: (skill, request) => owningSkills.renderPreload(skill.name, { sessionId: plan.parent.sessionId, signal: request.signal, effortLevel: currentEffortDisplay() }),
+      tasks: { store: owningTasks.store, enabled: () => plan.selectedToolNames.some(name => ["TaskCreate", "TaskGet", "TaskUpdate", "TaskList"].includes(name)),
+        lifecycle: {
+          created: async ({ task, signal }) => ({ blockingErrors: await owningHooks.childTask({ ...plan, permissionMode: context.mode() }, "TaskCreated", { taskId: task.id, subject: task.subject, description: task.description }, signal) }),
+          completed: async ({ task, signal }) => ({ blockingErrors: await owningHooks.childTask({ ...plan, permissionMode: context.mode() }, "TaskCompleted", { taskId: task.id, subject: task.subject, description: task.description }, signal) }),
+        } },
+      onDiagnostic: message => stderr.write(`Agents: ${safe(message)}\n`),
+    }),
+    lifecycle: { start: (...args) => owningHooks.agentLifecycle.start(...args), stop: (...args) => owningHooks.agentLifecycle.stop(...args),
+      teardown: (...args) => owningHooks.agentLifecycle.teardown(...args), cleanup: (...args) => owningHooks.agentLifecycle.cleanup(...args),
+      finishQuery: (...args) => owningHooks.agentLifecycle.finishQuery(...args),
+      resetContinuationCount: (...args) => owningHooks.agentLifecycle.resetContinuationCount(...args) },
+    mode: () => mode, policy: () => skillHost?.policy() ?? policy, system, approve,
+    hooks: { before: (...args) => owningHooks.runtime.before(...args), after: (...args) => owningHooks.runtime.after(...args),
+      failure: (...args) => owningHooks.runtime.failure?.(...args) ?? Promise.resolve() }, childHooks: plan => owningHooks.childRuntime(plan),
+    externalTools: (base, mode, policy, hooks, context) => { const external = visibleMcp(); return external ? routeExternalTools(base, external, { mode, policy, hooks, approve: context?.isAsync ? async () => false : approve }) : base; },
+    taskTools: (base, plan, hooks) => taskStopTools(plan, hooks).wrap(base),
+    saveChild: (plan, messages, status) => store.saveSubagent({ version: 1, parentSessionId: plan.parent.sessionId, agentId: plan.agentId,
+      agentType: plan.definition.agentType, cwd, model: plan.model, updatedAt: new Date().toISOString(), messages, status }),
+    onDiagnostic: message => stderr.write(`Agents: ${safe(message)}\n`),
+  });
+    agentHosts.push(host); return host;
+  };
+  const createPlans = () => createLaunchPlanHost({ cwd, userConfigDir: launch.userConfigDir,
+    ...(typeof launch.snapshot.effective.plansDirectory === "string" ? { configuredDirectory: launch.snapshot.effective.plansDirectory } : {}),
+    sessionId: () => session.id, saved: () => session.planState, save: state => { session.planState = state; },
+    mode: () => mode, setMode: next => { mode = next; }, policy: () => skillHost?.policy() ?? policy,
+    canRequestApproval: () => !closing && (Boolean(terminal) || options.permissionPromptTool !== undefined), approve,
+    ...(options.permissionPromptTool === undefined ? {} : { requestApproval: async (call: import("./types.js").ToolUse, signal: AbortSignal) => {
+      if (!permissionPrompt) return { approved: false, reason: "The configured MCP permission prompt tool is not available" };
+      const reply = await permissionPrompt.request(call, signal);
+      if (reply.interrupt) active?.abort(new Error(reply.reason ?? "Permission prompt requested interruption"));
+      if (reply.updatedPermissions?.length) stderr.write("Permissions: approval metadata updates are not yet applied by this CLI.\n");
+      return reply;
+    } }),
+    hooks: { before: (...args) => activeHooks().runtime.before(...args), after: (...args) => activeHooks().runtime.after(...args),
+      failure: (...args) => activeHooks().runtime.failure?.(...args) ?? Promise.resolve() },
+    // This legacy result field refers to the subagent Agent tool, not Task CRUD.
+    hasTaskTool: () => agentHost?.available() ?? false,
+    onDiagnostic: message => stderr.write(`Plans: ${safe(message)}\n`),
+  });
+  const createInstructions = () => new InstructionContext({ cwd,
+    catalog: createInstructionCatalog({ cwd, userConfigDir: launch.userConfigDir,
+      ...(launch.managedRoot === undefined ? {} : { managedRoot: launch.managedRoot }), importHome: launch.importHome,
+      sources: { user: launch.snapshot.enabledSources.includes("userSettings"), project: launch.snapshot.enabledSources.includes("projectSettings"), local: launch.snapshot.enabledSources.includes("localSettings") },
+      ...(typeof launch.snapshot.effective.claudeMdExcludes === "object" && Array.isArray(launch.snapshot.effective.claudeMdExcludes) ? { excludePatterns: launch.snapshot.effective.claudeMdExcludes.filter((value): value is string => typeof value === "string") } : {}),
+      managedInstructionsOnly: launch.snapshot.effective.managedInstructionsOnly === true,
+      ...(typeof launch.snapshot.policy.claudeMd === "string" ? { managedInline: [{ path: "[managed settings instructions]", content: launch.snapshot.policy.claudeMd }] } : {}),
+      readPolicy: (_path, _canonical, kind) => kind === "Managed" || kind === "User" || !inheritedReadDeny(policy),
+      approveExternalImport: ({ path, parent }) => approve(`Load instruction import ${path} from ${parent}?`),
+    }), model: currentModel, contextWindow: () => provider.contextWindowTokens(currentModel()),
+    onDiagnostic: message => stderr.write(`Instructions: ${safe(message)}\n`),
+  });
+  let instructions = createInstructions();
+  const createSessionTools = async () => {
+    await mcp?.refreshTools();
+    let cached: import("./types.js").ToolExecutor | undefined, cachedPolicy: string | undefined;
+    const base = () => {
+    const currentPolicy = skillHost?.policy() ?? policy;
+    const key = JSON.stringify([currentPolicy, activeHooks().revision, mode]);
+    if (cached && cachedPolicy === key) return cached;
+    const planPath = planHost?.location();
+    const builtins = createTools({ cwd, mode, policy: currentPolicy, readState, restorationExcludedPaths: [...instructions.excludedPaths, ...planPath ? [planPath] : []],
+      ...(planHost ? planHost.access : {}),
+      extraPathAdmission: async request => {
+        const planned = await planHost?.access.extraPathAdmission(request);
+        if (planned !== undefined) return planned;
+        if (request.operation !== "Read") return undefined;
+        const path = resolve(request.requestedPath);
+        return agentHosts.some(host => host.background?.list().some(task => task.outputFile === path)) ? path : undefined;
+      },
+      onFileToolCall: ({ name, path }) => { if (name === "Write" || triBoolean(process.env.CLAUDE_CODE_SIMPLE) !== true) skillHost?.runtime.activateForPaths([path], launch.workspace.gitRoot ?? cwd); },
+      sensitiveWritePaths: launch.snapshot.documents.flatMap(document => document.path === undefined ? [] : [document.path]),
+      ...(activeHooks().hasToolHooks ? { hooks: activeHooks().runtime } : {}),
+      readTokenCounter: (text, signal) => provider.countFileTokens({ model: currentModel(), text, signal }), approve });
+    const external = visibleMcp();
+    const combined = external ? routeExternalTools(builtins, external, { mode, policy: currentPolicy, approve,
+      ...(activeHooks().hasToolHooks ? { hooks: activeHooks().runtime } : {}) }) : builtins;
+    cachedPolicy = key;
+    return cached = activeHooks().wrap(instructions.wrap(taskStopTools().wrap(taskHost?.wrap(combined) ?? combined), session.messages, readState), session.messages);
+    };
+    const agentTools = agentHost ? agentHost.wrap(base) : undefined;
+    const withAgents = () => agentTools ?? base();
+    const wrapped = skillHost ? skillHost.runtime.wrap(withAgents, session.messages) : withAgents();
+    const planned = planHost ? planHost.wrap(wrapped, session.messages) : wrapped;
+    const notified = { ...planned, get definitions() { return planned.definitions; },
+      beforeModelRequest: async (signal: AbortSignal) => { await planned.beforeModelRequest?.(signal); signal.throwIfAborted(); commitNotifications(); } };
+    return wrapCatalogTools(notified, session.messages, {
+      agents: () => agentHost?.catalog() ?? [], skills: () => skillHost?.runtime.catalog("model") ?? [],
+      skillBudget: { contextTokens: provider.contextWindowTokens(currentModel()) },
+    });
+  };
+  const turn = async (input: string): Promise<void> => {
+    active = new AbortController();
+    const turnSignal = active.signal;
+    const historyStart = session.messages.length;
+    let text = "";
+    let committedText = "";
+    let provisionalText = "";
+    let partial = false;
+    let resultUsage = { input_tokens: 0, output_tokens: 0 }, resultTurns = 0, resultIndex = -1;
+    const started = Date.now();
+    let failure: string | undefined;
+    const onEvent = (event: AgentEvent) => {
+      if (options.format === "stream-json") stdout.write(JSON.stringify(event) + "\n");
+      switch (event.type) {
+        case "usage":
+          session.usage.input_tokens += event.usage.input_tokens;
+          session.usage.output_tokens += event.usage.output_tokens;
+          resultUsage.input_tokens += event.usage.input_tokens;
+          resultUsage.output_tokens += event.usage.output_tokens;
+          resultTurns++;
+          break;
+        case "text":
+          text += event.text;
+          provisionalText += event.text;
+          if (options.format === "text" && interactive) stdout.write(safe(event.text));
+          break;
+        case "text_reset":
+          text = committedText + event.text;
+          if (options.format === "text" && provisionalText !== event.text) {
+            if (interactive) {
+              stdout.write(replaceProvisional(provisionalText, event.text, stdout.columns ?? 80));
+            }
+          }
+          provisionalText = event.text;
+          break;
+        case "assistant":
+          committedText = text; provisionalText = ""; break;
+        case "warning": partial = true; stderr.write(`\n${safe(event.message)}\n`); break;
+        case "thinking_stripped": break;
+        case "compaction":
+          if (options.format === "text") {
+            if (event.stage === "start") stderr.write("\nCompacting conversation context...\n");
+            else if (event.stage === "complete") stderr.write(`Context compacted (${event.beforeTokens} → ${event.afterTokens} estimated tokens).\n`);
+            else if (event.stage === "failed") stderr.write("Context compaction failed; original conversation preserved.\n");
+          }
+          break;
+        case "tool_start":
+          if (options.format === "text") stderr.write(`\n[${safe(event.tool.name)}] ${safe(JSON.stringify(event.tool.input)).slice(0, 500)}\n`);
+          break;
+        case "tool_result":
+          if (options.format === "text") stderr.write(`${event.result.is_error ? "[tool error] " : ""}${safe(event.result.content).slice(0, 1200)}\n`);
+          break;
+        default: { const exhaustive: never = event; throw new Error(`Unknown event: ${exhaustive}`); }
+      }
+    };
+    try {
+      skillHost?.runtime.resetQuery(session.messages);
+      const userMessage: import("./types.js").Message = { role: "user", content: [{ type: "text", text: input }] };
+      await instructions.announce(userMessage, session.messages);
+      turnSignal.throwIfAborted();
+      session.messages.push(userMessage);
+      const command = /^\/([^\s]+)(?:\s+([\s\S]*))?$/.exec(input);
+      const commandName = command?.[1];
+      if (command && commandName !== undefined && skillHost?.has(commandName)) {
+        const execution = await skillHost.runtime.invokeUser(commandName, command[2], turnSignal);
+        session.messages.push(...execution.newMessages);
+      }
+      // The original scheduler selects its primary model at query entry.
+      // Inline Skill layers update tool context without rerouting later API rounds.
+      const queryModel = currentModel();
+      queryModelForTools = queryModel;
+      const tools = await createSessionTools();
+      const available = tools.definitions.map(tool => tool.name).join(", ") || "none";
+      const runQuery = async (fresh = false) => {
+        const model = fresh ? currentModel() : queryModel; queryModelForTools = model;
+        resultUsage = { input_tokens: 0, output_tokens: 0 }; resultTurns = 0; resultIndex++;
+        const outcome = await runAgent({ provider, tools, messages: session.messages,
+        model, system: `${system()}\n\nAvailable tools for this session: ${available}. Permission mode: ${mode}.`, maxTokens: options.maxTokensExplicit ? options.maxTokens : defaultOutputTokens(model), maxTurns: options.maxTurns,
+        queryEffort: currentQueryEffort,
+        useModelTokenDefaults: !options.maxTokensExplicit,
+        compactionState: session.compaction ??= freshCompactionState(),
+        ...(options.maxApiAttempts === undefined ? {} : { maxApiAttempts: options.maxApiAttempts }),
+        signal: turnSignal, onEvent, stopHook: context => {
+          const { runtime } = activeHooks();
+          if (!runtime.stop) throw new Error("Session hooks do not provide a Stop hook runner");
+          return runtime.stop(context);
+        } });
+        resultUsage = { input_tokens: outcome.usage.input_tokens, output_tokens: outcome.usage.output_tokens }; resultTurns = outcome.turns;
+        return outcome;
+      };
+      await runQuery();
+      // Terminal output is held until child settlement and notification queries have drained.
+      while (hasBackgroundWork() || notifications.some(entry => entry.sessionId === session.id)) {
+        turnSignal.throwIfAborted();
+        if (!commitNotifications()) { await waitForBackground(turnSignal); continue; }
+        skillHost?.runtime.resetQuery(session.messages);
+        await runQuery(true);
+      }
+    } catch (error) {
+      failure = turnSignal.aborted ? "Interrupted" : errorMessage(error);
+    } finally {
+      skillHost?.runtime.flushContext(session.messages);
+      active = undefined;
+      try { await store.save(session); } catch (error) {
+        const saveError = `Session save failed: ${errorMessage(error)}`;
+        failure = failure ? `${failure}; ${saveError}` : saveError;
+      }
+    }
+    const lastBlock = session.messages.slice(historyStart).findLast(message => message.role === "assistant")?.content.at(-1);
+    const answer = failure === undefined ? lastBlock?.type === "text" ? lastBlock.text : "" : text;
+    const result = { type: "result", session_id: session.id, result: answer, is_error: failure !== undefined, ...(partial ? { is_partial: true } : {}),
+      ...(failure ? { error: failure } : {}), usage: resultUsage, num_turns: resultTurns, result_index: Math.max(0, resultIndex), duration_ms: Date.now() - started };
+    if (options.format !== "text") stdout.write(JSON.stringify(result) + "\n");
+    else { if (!interactive) stdout.write(safe(answer)); stdout.write("\n"); if (failure) stderr.write(`tau: ${safe(failure)}\n`); }
+    if (failure && !interactive) process.exitCode = 1;
+  };
+  const compactManually = async (): Promise<void> => {
+    active = new AbortController();
+    try {
+      queryModelForTools = currentModel();
+      const tools = await createSessionTools();
+      const available = tools.definitions.map(tool => tool.name).join(", ") || "none";
+      const compacted = await compactContext({ provider, state: session.compaction ??= freshCompactionState(), reason: "manual", ...(tools.prepareCompaction ? { prepareCompaction: tools.prepareCompaction } : {}), request: {
+        model: session.model, system: `${system()}\n\nAvailable tools for this session: ${available}. Permission mode: ${mode}.`, messages: session.messages, tools: tools.definitions, signal: active.signal,
+        maxTokens: options.maxTokensExplicit ? options.maxTokens : defaultOutputTokens(session.model),
+        useModelTokenDefaults: !options.maxTokensExplicit,
+        ...(options.maxApiAttempts === undefined ? {} : { attemptBudget: new ApiAttemptBudget(options.maxApiAttempts) }),
+      }, onEvent: event => {
+        if (event.type === "usage") { session.usage.input_tokens += event.usage.input_tokens; session.usage.output_tokens += event.usage.output_tokens; }
+        else if (event.type === "compaction" && event.stage === "start") stderr.write("Compacting conversation context...\n");
+      } });
+      stdout.write(compacted ? "Conversation context compacted.\n" : "Conversation context was preserved; compaction did not complete.\n");
+    } catch (error) { stderr.write(`tau: ${active.signal.aborted ? "Interrupted" : safe(errorMessage(error))}\n`); }
+    finally {
+      active = undefined;
+      try { await store.save(session); } catch (error) { stderr.write(`tau: ${safe(errorMessage(error))}\n`); }
+    }
+  };
+  try {
+    hookHost = createHookHost();
+    skillHost = await createSkills();
+    taskHost = createTasks();
+    agentHost = await createAgents();
+    planHost = createPlans();
+    active = new AbortController();
+    try {
+      const { configs } = await loadLaunchMcp({ cwd, launch, specs: options.mcpConfig, strict: options.strictMcpConfig, plugins: plugins.plugins,
+        nonInteractive: !interactive, bypassPermissions: mode === "bypassPermissions", signal: active.signal,
+        approveProject: (name, source) => approve(`Connect project MCP server ${name}${source ? ` from ${source}` : ""}?`),
+        onDiagnostic: message => stderr.write(`MCP: ${safe(message)}\n`) });
+      if (Object.keys(configs).length) {
+        mcp = await McpManager.connect(configs, { cwd, signal: active.signal,
+          onWarning: message => stderr.write(`MCP: ${safe(message)}\n`) });
+      }
+      if (options.permissionPromptTool && mcp) permissionPrompt = createMcpPermissionPrompt({ toolName: options.permissionPromptTool, registry: mcp,
+        onDiagnostic: message => stderr.write(`Permissions: ${safe(message)}\n`) });
+      await store.save(session);
+      await activeHooks().start(options.resume || options.continue ? "resume" : "startup", active.signal);
+    } finally { active = undefined; }
+    if (interactive) {
+      stdout.write(`tau · ${safe(session.model)} · ${safe(cwd)}\nSession ${session.id} · permissions: ${mode}\n/help for commands; Ctrl-C cancels a turn.\n`);
+    }
+    if (mode === "bypassPermissions" || policy.allowedTools.includes("Bash")) {
+      stderr.write("WARNING: tools are explicitly preapproved; availability and deny rules still apply. Shell commands are NOT sandboxed.\n");
+    }
+    if (prompt) await turn(prompt);
+    while (terminal && !closing) {
+      let input: string;
+      try { input = (await terminal.question("\ntau> ")).trim(); } catch (error) { if (closing) break; throw error; }
+      if (!input) continue;
+      if (!input.startsWith("/")) { await turn(input); continue; }
+      const [command, ...rest] = input.split(/\s+/);
+      const value = rest.join(" ");
+      switch (command) {
+        case "/exit": case "/quit": closing = true; break;
+        case "/help": stdout.write("/help · /exit · /clear · /compact · /model [ID] · /permissions [MODE] · /status · /save · /resume UUID · /skills · /SKILL [args]\n"); break;
+        case "/skills": stdout.write((skillHost?.runtime.catalog().map(skill => `/${skill.name} ${skill.description}`).join("\n") || "No local skills available.") + "\n"); break;
+        case "/compact": await compactManually(); break;
+        case "/clear":
+          await store.save(session); retiredHookHosts.push(activeHooks()); session = newSession(cwd, session.model);
+          notifications.length = 0; for (const owner of notificationSessions.keys()) notificationSessions.set(owner, session.id);
+          hookHost = createHookHost();
+          skillHost = await createSkills();
+          taskHost = createTasks();
+          agentHost = await createAgents();
+          planHost = createPlans();
+          readState = new ReadState(); instructions = createInstructions(); provider.resetRequestLimits();
+          active = new AbortController();
+          try { await store.save(session); await activeHooks().start("clear", active.signal); }
+          finally { active = undefined; }
+          stdout.write(`New session ${session.id}\n`); break;
+        case "/model":
+          if (value) session.model = value;
+          stdout.write(`Model: ${safe(session.model)}\n`); break;
+        case "/permissions": {
+          if (value) {
+            const parsed = permissionModeSchema.safeParse(value);
+            if (!parsed.success) { stderr.write("Invalid permission mode\n"); break; }
+            if (parsed.data === "bypassPermissions" && !await approve("Disable all approval prompts? Shell commands are NOT sandboxed.")) break;
+            mode = parsed.data;
+            if (session.planState) session.planState = { ...session.planState, active: mode === "plan" };
+          }
+          stdout.write(`Permissions: ${mode}\n`); break;
+        }
+        case "/status": stdout.write(JSON.stringify({ session_id: session.id, model: session.model, permissions: mode, tool_policy: policy, messages: session.messages.length, usage: session.usage }, null, 2) + "\n"); break;
+        case "/save": await store.save(session); stdout.write(`Saved ${session.id}\n`); break;
+        case "/resume":
+          try {
+            const loaded = await store.load(value); await store.save(session); retiredHookHosts.push(activeHooks()); session = loaded;
+            notifications.length = 0; for (const owner of notificationSessions.keys()) notificationSessions.set(owner, session.id);
+            hookHost = createHookHost();
+            skillHost = await createSkills();
+            taskHost = createTasks();
+            agentHost = await createAgents();
+            if (session.planState?.active) mode = "plan";
+            planHost = createPlans();
+            readState = new ReadState(); instructions = createInstructions(); provider.resetRequestLimits(); active = new AbortController();
+            try { await activeHooks().start("resume", active.signal); } finally { active = undefined; }
+            stdout.write(`Resumed ${session.id}\n`);
+          }
+          catch (error) { stderr.write(`tau: ${safe(errorMessage(error))}\n`); }
+          break;
+        default: if (command && skillHost?.has(command.slice(1))) await turn(input); else stderr.write("Unknown command. Use /help.\n");
+      }
+    }
+  } finally {
+    terminal?.close();
+    process.removeListener("SIGINT", interrupt);
+    await Promise.all(agentHosts.map(host => host.close()));
+    await Promise.all(retiredHookHosts.map(host => host.close()));
+    await hookHost?.close();
+    await mcp?.close();
+  }
+}
+
+stdout.on("error", (error: unknown) => {
+  if (typeof error === "object" && error !== null && "code" in error && error.code === "EPIPE") process.exit(0);
+  else throw error;
+});
+main().catch(error => { stderr.write(`tau: ${safe(errorMessage(error))}\n`); process.exitCode = 1; });

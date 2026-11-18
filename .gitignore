@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.tau/
+.env
+artifacts/
+__pycache__/
+*.pyc
