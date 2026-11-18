@@ -155,6 +155,10 @@ const BASE: Record<string, (tag: string) => Record<string, unknown>> = {
   }),
   WebSearch: () => ({ query: "bad search" }),
   Monitor: (tag) => ({ description: "bad", command: `touch bad-${tag}.txt` }),
+  CronCreate: () => ({ cron: "* * * * *", prompt: "bad" }),
+  CronDelete: () => ({ id: "missing-cron" }),
+  CronList: () => ({}),
+  SendMessage: () => ({ to: "nobody", message: "" }),
   EnterWorktree: (tag) => ({ name: `bad-${tag}` }),
   ExitWorktree: () => ({ action: "keep" }),
   Agent: () => ({ description: "bad", prompt: "bad" }),
@@ -362,9 +366,16 @@ function assertRejected(matrix: MatrixRun, variants: readonly Variant[]) {
 const ACCEPTED_TODAY = (variant: Variant) =>
   variant.label === "__proto__ key" ||
   (variant.label === "constructor key" &&
-    ["Write", "Edit", "Bash", "Monitor", "Skill", "TaskCreate"].includes(
-      variant.tool,
-    )) ||
+    [
+      "Write",
+      "Edit",
+      "Bash",
+      "Monitor",
+      "Skill",
+      "TaskCreate",
+      "CronCreate",
+      "CronList",
+    ].includes(variant.tool)) ||
   (variant.tool === "TaskCreate" &&
     /^(activeForm|metadata) wrong type/.test(variant.label));
 
