@@ -32,7 +32,9 @@ jobs:
       - run: bun run typecheck
       - run: bun run lint
       - run: bun fmt --check
-      - run: bun audit
+      # GHSA-fc5q-39xc-vjpf (picomatch <=4.0.7 ReDoS) has no fixed release; it is
+      # waived until 2027-02-17 under the exception in docs/TEST-STRATEGY.md.
+      - run: bun audit --ignore=GHSA-fc5q-39xc-vjpf
       - name: Secrets scan (gitleaks, full history)
         env:
           GITLEAKS_VERSION: 8.30.1
