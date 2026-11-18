@@ -63,13 +63,13 @@ const text = (value: string) => [
   delta(0, { type: "text_delta", text: value }),
   close(0),
 ];
+// A broken stream stays open until the test drops it with f.drop(), once the
+// client has shown the partial text, so the retry always follows visible text.
 function send(res: ServerResponse, events: unknown[], broken = false): void {
   res.writeHead(200, { "content-type": "text/event-stream" });
   const bytes = events.map(sse).join("");
-  if (broken) {
-    res.write(bytes);
-    setTimeout(() => res.destroy(), 10);
-  } else res.end(bytes);
+  if (broken) res.write(bytes);
+  else res.end(bytes);
 }
 const testSignal = () => {
   const controller = new AbortController();
@@ -94,7 +94,9 @@ async function fixture(
 ) {
   let calls = 0;
   const bodies: RequestBody[] = [];
+  const responses: ServerResponse[] = [];
   const http = createServer(async (req, res) => {
+    responses.push(res);
     try {
       let data = "";
       for await (const chunk of req) data += chunk;
@@ -121,6 +123,7 @@ async function fixture(
     }),
     calls: () => calls,
     bodies,
+    drop: () => responses[0]?.destroy(),
   };
 }
 
@@ -186,6 +189,7 @@ test(
       request({
         onText: (value) => {
           shown += value;
+          f.drop();
         },
         onTextReset: (value) => {
           shown = value;
@@ -352,7 +356,10 @@ test(
     const resets: string[] = [];
     await assert.rejects(
       f.provider.complete(
-        request({ onTextReset: (value) => resets.push(value) }),
+        request({
+          onText: f.drop,
+          onTextReset: (value) => resets.push(value),
+        }),
       ),
       /HTTP error 503/,
     );
@@ -448,7 +455,11 @@ test(
     );
     await assert.rejects(
       f.provider.complete(
-        request({ signal: abort.signal, onTextReset: () => abort.abort() }),
+        request({
+          signal: abort.signal,
+          onText: f.drop,
+          onTextReset: () => abort.abort(),
+        }),
       ),
       { name: "AbortError" },
     );
