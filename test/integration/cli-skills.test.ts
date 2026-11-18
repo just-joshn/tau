@@ -204,7 +204,7 @@ test(
     );
     const execution = await f.cli("inspect missing source");
     assert.equal(execution.code, 0, execution.err);
-    assert.equal(hasSkillTool(f.body(0)), false);
+    assert.equal(hasSkillTool(f.body(0)), true);
     assert.equal(
       JSON.stringify(f.body(0).messages).includes("Conditional owned workflow"),
       false,

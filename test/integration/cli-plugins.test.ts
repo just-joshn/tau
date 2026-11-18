@@ -395,7 +395,7 @@ test(
       assert.equal(result(bodyAt(f.bodies, 1), 1).is_error, true);
       assert.equal(
         bodyAt(f.bodies, 0).tools.some((entry) => entry.name === "Skill"),
-        false,
+        true,
         JSON.stringify({
           settings,
           managed,
@@ -403,6 +403,10 @@ test(
           tools: bodyAt(f.bodies, 0).tools.map((entry) => entry.name),
           diagnostics: execution.err,
         }),
+      );
+      assert.equal(
+        JSON.stringify(bodyAt(f.bodies, 0).messages).includes("owned:prepare"),
+        false,
       );
       assert.equal(
         JSON.stringify(bodyAt(f.bodies, 0).messages).includes("owned:reader"),
