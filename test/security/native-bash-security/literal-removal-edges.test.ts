@@ -346,3 +346,121 @@ test("assignment tracking reads only a bounded prefix of a huge command", () => 
     ),
   ).toBe("untracked");
 });
+
+test("inline shell scripts and find actions expose the removal they run", () => {
+  const { n, run } = owner();
+  // reparsed: a guard pasted into the removal would sit inside another layer
+  // of double quotes that the outer shell parses first
+  const hits: [string, boolean][] = [
+    // the inner shell expands the escaped variable
+    ['bash -c "rm -rf \\"\\$BUILD/\\""', true],
+    // the outer shell expands $1 before the inner shell sees it
+    ['bash -c "rm -rf $1/"', true],
+    // no script arguments: $1 is empty inside the inline script
+    ["sh -c 'rm -rf \"$1/\"'", false],
+    // a redirection inside the script is not an operand
+    ["bash -c 'rm -rf 2>/dev/null \"$BUILD/\"'", false],
+    // find runs everything up to ; or + as the action
+    ['find . -exec rm -rf "$BUILD/" {} +', false],
+    ['find . -ok rm "$BUILD/" \\;', false],
+    ['find . -execdir rm -rf -- {} -name "$BUILD/" \\;', false],
+    // a positional in a top-level command is unset
+    ['rm -rf "$1/"', false],
+    // set -- in a comment binds nothing, and set -- "$x" may bind empty
+    ['rm -rf "$1/" # set -- ./x', false],
+    ['set -- "$x"; rm -rf "$1/"', false],
+  ];
+  const quiet = [
+    // $1 is bound to ./x by the script argument
+    "sh -c 'rm -rf \"$1/\"' _ ./x",
+    // set -- binds the positional to a literal
+    'set -- ./x; rm -rf "$1/"',
+    // quoted text handed to echo never runs
+    "echo 'sh -c \"rm -rf $BUILD/\"'",
+    // a redirection target inside the script is a file to open
+    "bash -c 'rm -rf . 2> \"$BUILD/\"'",
+  ];
+  const wrong = [
+    ...hits.flatMap(([command, reparsed]) => {
+      const c = run(() => n.FOe(command));
+      return c?.reparsed === reparsed ? [] : [{ command, reparsed, c }];
+    }),
+    ...quiet.flatMap((command) => {
+      const c = run(() => n.FOe(command));
+      return c === null ? [] : [{ command, c }];
+    }),
+  ];
+  expect(wrong).toEqual([]);
+});
+
+test("the eval and trap pass reads removals that run from a string", () => {
+  const { n, run } = owner();
+  const options = { mayBeUnset: () => true };
+  const wrong = [
+    'eval "rm -rf $BUILD/"',
+    'eval "sudo -u root rm -rf $BUILD/"',
+    "trap 'rm -rf \"$BUILD/\"' EXIT",
+  ].flatMap((command) => {
+    const c = run(() => n.FOe(command, options));
+    return c?.target === undefined ? [{ command, c }] : [];
+  });
+  expect(wrong).toEqual([]);
+});
+
+test("bash runs backgrounded and piped assignments in a subshell", () => {
+  const { n, run } = owner();
+  const cases: [string, Tracked][] = [
+    ['D=./a & rm -rf "$D/"', "untracked"],
+    ['D=./a | cat; rm -rf "$D/"', "untracked"],
+    ['D=./a && rm -rf "$D/"', "set"],
+    ["D='x;y'; rm -rf \"$D/\"", "set"],
+    ['D="a b"; rm -rf "$D/"', "set"],
+    ['D=a\\ b; rm -rf "$D/"', "set"],
+    ['D=${X:-./a}; rm -rf "$D/"', "set"],
+    ['for D in ${X:-/etc}; do rm -rf "$D/"; done', "rootValued"],
+  ];
+  const wrong = cases.flatMap(([text, want]) => {
+    const got = tracked(
+      run(() => n.aat(text, () => true)),
+      "D",
+    );
+    return got === want ? [] : [{ text, want, got }];
+  });
+  expect(wrong).toEqual([]);
+});
+
+test("a long derived value is shortened in the candidate", () => {
+  const { n, run } = owner();
+  const text = `D=$(dirname "$S/${"a".repeat(200)}"); rm -rf "$D/"`;
+  const c = run(() => n.FOe(text, { mayBeUnset: () => true }));
+  expect(c?.derived?.becomes).toBe(
+    "prints the current directory (as `.`) when its input is empty",
+  );
+  expect(c?.derived?.value.length).toBe(121);
+  expect(c?.derived?.value.endsWith("…")).toBe(true);
+});
+
+test("a bound positional alone needs binding, with no rewrite to suggest", () => {
+  const { n, run } = owner();
+  const d = run(() => n.LOe(candidate('"$1/"'), false));
+  expect(d.message).toContain("bind $1 (in an inline");
+  expect(d.message).not.toContain("rewrite its");
+});
+
+test("an eighth find removal action is still inspected", () => {
+  const { n, run } = owner();
+  const safe = "-exec rm -f ./a {} + ".repeat(7);
+  expect(
+    run(() => n.FOe(`find . ${safe}-exec rm -rf "$BUILD/" {} +`))?.target,
+  ).toBe('"$BUILD/"');
+});
+
+// find runs every action, but only the first eight removal actions are
+// inspected, so a ninth that removes "$BUILD/" goes unseen.
+test.failing("KNOWN-GAP a ninth find removal action is not inspected", () => {
+  const { n, run } = owner();
+  const safe = "-exec rm -f ./a {} + ".repeat(8);
+  expect(
+    run(() => n.FOe(`find . ${safe}-exec rm -rf "$BUILD/" {} +`)),
+  ).not.toBeNull();
+});
