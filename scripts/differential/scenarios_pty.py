@@ -120,13 +120,13 @@ FIRST_RUN = [
     ("terminal-setup", r"(?i)use claude code's terminal setup", "\x1b"),
     ("trust", r"(?i)quick safety check|trust this folder", "2"),  # the original preselects "No, exit"; option 2 is "Yes, I trust this folder"
 ]
-READY = {"original": r"\? for shortcuts", "tau": r"(?m)^tau> ?$"}
+READY = r"\? for shortcuts"
 DIALOG = {"original": r"(?i)do you want to make this edit", "tau": r"(?i)do you want to make this edit"}
 TYPE_WAIT = 3
 
 
 def startup():
-    steps = [Step("startup", screen=r"(?i)trust|theme|text style|api key|welcome|for shortcuts|tau> ", timeout=30, quiet=1.0)]
+    steps = [Step("startup", screen=r"(?i)trust|theme|text style|api key|welcome|for shortcuts", timeout=30, quiet=1.0)]
     # Two passes: a screen may appear later than its position in the list.
     steps += [Step(f"first-run-{name}-{attempt}", when=pattern, send=keys, quiet=1.0, timeout=5)
               for attempt in (1, 2) for name, pattern, keys in FIRST_RUN]
@@ -143,9 +143,8 @@ def dialog(name, keys):
 
 
 def command(name):
-    # The original renders slash-command dialogs; Escape closes them and is harmless at tau's prompt.
-    return prompt(name, "/" + name, {"original": None, "tau": READY["tau"]}, timeout=10) + \
-        [Step(name + "-close", send={"original": "\x1b", "tau": None}, quiet=0.8, timeout=5)]
+    # Both render slash-command dialogs; Escape closes them.
+    return prompt(name, "/" + name, None, timeout=10) + [Step(name + "-close", send="\x1b", quiet=0.8, timeout=5)]
 
 
 def exit_twice():

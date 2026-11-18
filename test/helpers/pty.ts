@@ -54,6 +54,14 @@ export interface PtySession {
   text(): string;
   /** What the terminal shows now, after cursor moves and erases. */
   screen(): string;
+  /**
+   * Resolves with the screen once it matches `pattern`, or `pattern` returns
+   * true for it. Rejects after `timeoutMs` or when tau exits first.
+   */
+  until(
+    pattern: string | RegExp | ((screen: string) => boolean),
+    timeoutMs?: number,
+  ): Promise<string>;
   exited: Promise<PtyExit>;
 }
 
@@ -167,6 +175,46 @@ export function startPty(options: PtyOptions = {}): PtySession {
     },
     text,
     screen: () => render(raw),
+    until: (pattern, timeoutMs = 10_000) =>
+      new Promise((matched, fail) => {
+        const test =
+          typeof pattern === "function"
+            ? pattern
+            : (screen: string) => locate(screen, pattern) !== undefined;
+        // A frame can arrive in several reads: a match counts once output has
+        // been quiet for a moment and the screen still matches.
+        let settle: ReturnType<typeof setTimeout> | undefined;
+        const check = () => {
+          clearTimeout(settle);
+          const screen = render(raw);
+          if (test(screen))
+            settle = setTimeout(() => {
+              const settled = render(raw);
+              if (!test(settled)) return;
+              finish();
+              matched(settled);
+            }, 50);
+          else if (done) {
+            finish();
+            fail(new Error(`tau exited before ${String(pattern)}:\n${screen}`));
+          }
+        };
+        const timer = setTimeout(() => {
+          finish();
+          fail(
+            new Error(
+              `timed out waiting for ${String(pattern)}:\n${render(raw)}`,
+            ),
+          );
+        }, timeoutMs);
+        const finish = () => {
+          clearTimeout(timer);
+          clearTimeout(settle);
+          waiters.delete(check);
+        };
+        waiters.add(check);
+        check();
+      }),
     exited,
     expect: (pattern, timeoutMs = 10_000) =>
       new Promise((matched, fail) => {
@@ -211,29 +259,38 @@ function plain(raw: string): string {
   return Bun.stripANSI(raw).replace(/\r\n/g, "\n").replace(/\r/g, "");
 }
 
+/**
+ * The visible screen: cursor moves and erases, absolute positioning, and the
+ * alternate screen (entering it starts blank; leaving restores the main one).
+ */
 function render(raw: string): string {
-  const rows: string[][] = [[]];
+  let rows: string[][] = [[]];
   let row = 0;
   let col = 0;
+  let saved: { rows: string[][]; row: number; col: number } | undefined;
   const line = () => (rows[row] ??= []);
+  const reach = () => {
+    while (rows.length <= row) rows.push([]);
+  };
   for (let i = 0; i < raw.length; i++) {
     const char = raw.charAt(i);
     if (char === "\r") col = 0;
     else if (char === "\n") {
       row++;
-      while (rows.length <= row) rows.push([]);
+      reach();
     } else if (char === "\x1b") {
       const control = /^\[([0-9;?]*)([A-Za-z])/.exec(raw.slice(i + 1));
       if (control === null) continue;
       i += control[0].length;
-      const n = Number.parseInt(control[1] || "1", 10) || 1;
+      const params = control[1] ?? "";
+      const n = Number.parseInt(params || "1", 10) || 1;
       switch (control[2]) {
         case "A":
           row = Math.max(0, row - n);
           break;
         case "B":
           row += n;
-          while (rows.length <= row) rows.push([]);
+          reach();
           break;
         case "C":
           col += n;
@@ -244,12 +301,39 @@ function render(raw: string): string {
         case "G":
           col = n - 1;
           break;
+        case "H": {
+          const [r = 1, c = 1] = params
+            .split(";")
+            .map((part) => Number(part) || 1);
+          row = r - 1;
+          col = c - 1;
+          reach();
+          break;
+        }
         case "J":
-          line().length = Math.min(line().length, col);
-          rows.length = row + 1;
+          if (params === "2") rows = rows.map(() => []);
+          else {
+            line().length = Math.min(line().length, col);
+            rows.length = row + 1;
+          }
           break;
         case "K":
-          line().length = Math.min(line().length, col);
+          if (params === "2") line().length = 0;
+          else line().length = Math.min(line().length, col);
+          break;
+        case "h":
+          if (params === "?1049") {
+            saved = { rows, row, col };
+            rows = [[]];
+            row = 0;
+            col = 0;
+          }
+          break;
+        case "l":
+          if (params === "?1049" && saved) {
+            ({ rows, row, col } = saved);
+            saved = undefined;
+          }
           break;
         default:
           break;

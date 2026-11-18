@@ -6,7 +6,9 @@ import { startPty, type PtySession } from "../helpers/pty.js";
 
 setDefaultTimeout(30_000);
 
-const PROMPT = "tau> ";
+/** An empty input box at rest: no turn running and no dialog open. */
+const IDLE = (screen: string) =>
+  /\n❯\n─+\n {2}[⏸⏵]/.test(screen) && !screen.includes("esc to interrupt");
 
 const AGENTS = {
   "agents/worker.md":
@@ -66,7 +68,7 @@ const launch = {
 };
 
 async function submit(tau: PtySession, line: string): Promise<void> {
-  await tau.expect(PROMPT);
+  await tau.until(IDLE);
   tau.write(`${line}\r`);
 }
 
@@ -96,9 +98,10 @@ describe("background agents in the REPL", () => {
       args: ["--tools", "Agent,Read,TaskStop"],
     });
     await submit(tau, "start and stop a worker");
-    await tau.expect("Stop this background task?\nAllow once? [y/N] ");
-    tau.write("y\r");
-    await tau.expect("worker stopped");
+    const dialog = await tau.until("Do you want to proceed?");
+    expect(dialog).toContain("   Stop this background task?");
+    tau.write("1");
+    await tau.until("⏺ worker stopped");
     await submit(tau, "/exit");
     expect((await tau.exited).exitCode).toBe(0);
     const stopped = provider.requests.findLast(
@@ -123,9 +126,9 @@ describe("background agents in the REPL", () => {
       args: ["--tools", "Agent,Read"],
     });
     await submit(tau, "start a worker");
-    await tau.expect("waiting on the worker");
+    await tau.until("⏺ waiting on the worker");
     tau.write("\x03");
-    await tau.expect("tau: Interrupted");
+    await tau.until("Interrupted · What should Claude do instead?");
     await submit(tau, "/exit");
     expect((await tau.exited).exitCode).toBe(0);
     expect(parent).toBe(2);
