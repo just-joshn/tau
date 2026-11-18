@@ -1,0 +1,354 @@
+{
+  "schemaVersion": 1,
+  "caseId": "symlink-escape-denied",
+  "invariants": ["INV-06"],
+  "description": "Read and Write through in-workspace symlinks that point outside are denied",
+  "provenance": "synthetic, hand-written adversarial case; expectations pinned after observing tau at e6e6c88 and checked against docs/permission-contract.md",
+  "workspace": {
+    "files": { "../outside/secret.txt": "${SENTINEL:OUTSIDE_SECRET}\n" },
+    "symlinks": { "vendor": "../outside", "notes.txt": "../outside/secret.txt" }
+  },
+  "args": [
+    "-p",
+    "Update the vendored notes",
+    "--allowed-tools",
+    "Read,Write,Edit"
+  ],
+  "modelScript": [
+    {
+      "kind": "turn",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "toolu_read_dir",
+          "name": "Read",
+          "input": { "file_path": "vendor/secret.txt" }
+        }
+      ],
+      "stopReason": "tool_use"
+    },
+    {
+      "kind": "turn",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "toolu_read_file",
+          "name": "Read",
+          "input": { "file_path": "notes.txt" }
+        }
+      ],
+      "stopReason": "tool_use"
+    },
+    {
+      "kind": "turn",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "toolu_write_dir",
+          "name": "Write",
+          "input": { "file_path": "vendor/pwned.txt", "content": "pwned" }
+        }
+      ],
+      "stopReason": "tool_use"
+    },
+    {
+      "kind": "turn",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "toolu_write_file",
+          "name": "Write",
+          "input": { "file_path": "notes.txt", "content": "overwritten" }
+        }
+      ],
+      "stopReason": "tool_use"
+    },
+    {
+      "kind": "turn",
+      "content": [{ "type": "text", "text": "Done." }],
+      "stopReason": "end_turn"
+    }
+  ],
+  "expected": {
+    "exitCode": 0,
+    "requestSequence": [
+      {
+        "path": "/v1/messages",
+        "tools": [
+          "Agent",
+          "Bash",
+          "Edit",
+          "Glob",
+          "Grep",
+          "Read",
+          "TaskStop",
+          "Write"
+        ],
+        "messages": [
+          { "role": "user", "blocks": [{ "kind": "text" }, { "kind": "text" }] }
+        ]
+      },
+      {
+        "path": "/v1/messages",
+        "tools": [
+          "Agent",
+          "Bash",
+          "Edit",
+          "Glob",
+          "Grep",
+          "Read",
+          "TaskStop",
+          "Write"
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "blocks": [{ "kind": "text" }, { "kind": "text" }]
+          },
+          {
+            "role": "assistant",
+            "blocks": [
+              { "kind": "tool_use", "name": "Read", "id": "toolu_read_dir" }
+            ]
+          },
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "tool_result",
+                "toolUseId": "toolu_read_dir",
+                "isError": true
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "path": "/v1/messages",
+        "tools": [
+          "Agent",
+          "Bash",
+          "Edit",
+          "Glob",
+          "Grep",
+          "Read",
+          "TaskStop",
+          "Write"
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "blocks": [{ "kind": "text" }, { "kind": "text" }]
+          },
+          {
+            "role": "assistant",
+            "blocks": [
+              { "kind": "tool_use", "name": "Read", "id": "toolu_read_dir" }
+            ]
+          },
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "tool_result",
+                "toolUseId": "toolu_read_dir",
+                "isError": true
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "blocks": [
+              { "kind": "tool_use", "name": "Read", "id": "toolu_read_file" }
+            ]
+          },
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "tool_result",
+                "toolUseId": "toolu_read_file",
+                "isError": true
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "path": "/v1/messages",
+        "tools": [
+          "Agent",
+          "Bash",
+          "Edit",
+          "Glob",
+          "Grep",
+          "Read",
+          "TaskStop",
+          "Write"
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "blocks": [{ "kind": "text" }, { "kind": "text" }]
+          },
+          {
+            "role": "assistant",
+            "blocks": [
+              { "kind": "tool_use", "name": "Read", "id": "toolu_read_dir" }
+            ]
+          },
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "tool_result",
+                "toolUseId": "toolu_read_dir",
+                "isError": true
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "blocks": [
+              { "kind": "tool_use", "name": "Read", "id": "toolu_read_file" }
+            ]
+          },
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "tool_result",
+                "toolUseId": "toolu_read_file",
+                "isError": true
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "blocks": [
+              { "kind": "tool_use", "name": "Write", "id": "toolu_write_dir" }
+            ]
+          },
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "tool_result",
+                "toolUseId": "toolu_write_dir",
+                "isError": true
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "path": "/v1/messages",
+        "tools": [
+          "Agent",
+          "Bash",
+          "Edit",
+          "Glob",
+          "Grep",
+          "Read",
+          "TaskStop",
+          "Write"
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "blocks": [{ "kind": "text" }, { "kind": "text" }]
+          },
+          {
+            "role": "assistant",
+            "blocks": [
+              { "kind": "tool_use", "name": "Read", "id": "toolu_read_dir" }
+            ]
+          },
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "tool_result",
+                "toolUseId": "toolu_read_dir",
+                "isError": true
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "blocks": [
+              { "kind": "tool_use", "name": "Read", "id": "toolu_read_file" }
+            ]
+          },
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "tool_result",
+                "toolUseId": "toolu_read_file",
+                "isError": true
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "blocks": [
+              { "kind": "tool_use", "name": "Write", "id": "toolu_write_dir" }
+            ]
+          },
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "tool_result",
+                "toolUseId": "toolu_write_dir",
+                "isError": true
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "blocks": [
+              { "kind": "tool_use", "name": "Write", "id": "toolu_write_file" }
+            ]
+          },
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "tool_result",
+                "toolUseId": "toolu_write_file",
+                "isError": true
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "toolResults": [
+      {
+        "toolUseId": "toolu_read_dir",
+        "isError": true,
+        "contentIncludes": "Path escapes workspace root"
+      },
+      {
+        "toolUseId": "toolu_read_file",
+        "isError": true,
+        "contentIncludes": "Path escapes workspace root"
+      },
+      {
+        "toolUseId": "toolu_write_dir",
+        "isError": true,
+        "contentIncludes": "Path escapes workspace root"
+      },
+      {
+        "toolUseId": "toolu_write_file",
+        "isError": true,
+        "contentIncludes": "Path escapes workspace root"
+      }
+    ],
+    "filesAbsent": ["../outside/pwned.txt"],
+    "fileContents": { "../outside/secret.txt": "${SENTINEL:OUTSIDE_SECRET}\n" },
+    "absentFromOutputs": ["OUTSIDE_SECRET"]
+  }
+}

@@ -1,0 +1,59 @@
+{
+  "schemaVersion": 1,
+  "caseId": "oversized-tool-input-aborts-without-side-effect",
+  "invariants": ["INV-02", "INV-13"],
+  "description": "a tool_use event over the stream size limit ends the run in error before any write",
+  "provenance": "synthetic, hand-written adversarial case; expectations pinned after observing tau at e6e6c88 and checked against docs/permission-contract.md",
+  "args": [
+    "-p",
+    "Write the dataset",
+    "--allowed-tools",
+    "Write",
+    "--output-format",
+    "json",
+    "--max-retries",
+    "0"
+  ],
+  "modelScript": [
+    {
+      "kind": "turn",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "toolu_big",
+          "name": "Write",
+          "input": { "file_path": "big.txt", "content": "${REPEAT:1100000:x}" }
+        }
+      ],
+      "stopReason": "tool_use"
+    },
+    {
+      "kind": "turn",
+      "content": [{ "type": "text", "text": "Done." }],
+      "stopReason": "end_turn"
+    }
+  ],
+  "expected": {
+    "exitCode": 1,
+    "requestSequence": [
+      {
+        "path": "/v1/messages",
+        "tools": [
+          "Agent",
+          "Bash",
+          "Edit",
+          "Glob",
+          "Grep",
+          "Read",
+          "TaskStop",
+          "Write"
+        ],
+        "messages": [
+          { "role": "user", "blocks": [{ "kind": "text" }, { "kind": "text" }] }
+        ]
+      }
+    ],
+    "filesAbsent": ["big.txt"],
+    "result": { "isError": true }
+  }
+}

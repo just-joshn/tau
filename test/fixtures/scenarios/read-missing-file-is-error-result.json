@@ -1,0 +1,91 @@
+{
+  "schemaVersion": 1,
+  "caseId": "read-missing-file-is-error-result",
+  "invariants": ["INV-13"],
+  "description": "a failed Read reaches the model as an is_error tool result",
+  "provenance": "synthetic, hand-written adversarial case; expectations pinned after observing tau at e6e6c88 and checked against docs/permission-contract.md",
+  "args": ["-p", "Read the config", "--output-format", "json"],
+  "modelScript": [
+    {
+      "kind": "turn",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "toolu_read",
+          "name": "Read",
+          "input": { "file_path": "missing.txt" }
+        }
+      ],
+      "stopReason": "tool_use"
+    },
+    {
+      "kind": "turn",
+      "content": [{ "type": "text", "text": "The file does not exist." }],
+      "stopReason": "end_turn"
+    }
+  ],
+  "expected": {
+    "exitCode": 0,
+    "requestSequence": [
+      {
+        "path": "/v1/messages",
+        "tools": [
+          "Agent",
+          "Bash",
+          "Edit",
+          "Glob",
+          "Grep",
+          "Read",
+          "TaskStop",
+          "Write"
+        ],
+        "messages": [
+          { "role": "user", "blocks": [{ "kind": "text" }, { "kind": "text" }] }
+        ]
+      },
+      {
+        "path": "/v1/messages",
+        "tools": [
+          "Agent",
+          "Bash",
+          "Edit",
+          "Glob",
+          "Grep",
+          "Read",
+          "TaskStop",
+          "Write"
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "blocks": [{ "kind": "text" }, { "kind": "text" }]
+          },
+          {
+            "role": "assistant",
+            "blocks": [
+              { "kind": "tool_use", "name": "Read", "id": "toolu_read" }
+            ]
+          },
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "tool_result",
+                "toolUseId": "toolu_read",
+                "isError": true
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "toolResults": [
+      {
+        "toolUseId": "toolu_read",
+        "isError": true,
+        "contentIncludes": "ENOENT"
+      }
+    ],
+    "result": { "isError": false, "numTurns": 2 }
+  }
+}
