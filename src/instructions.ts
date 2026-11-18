@@ -295,7 +295,10 @@ export class InstructionCatalog {
       this.user = absolute(options.userConfigDir);
     if (options.managedRoot !== undefined)
       this.managed = absolute(options.managedRoot);
-    if (options.importHome !== undefined) absolute(options.importHome);
+    const home =
+      options.importHome === undefined
+        ? undefined
+        : absolute(options.importHome);
     if (
       options.ancestorBoundary !== undefined &&
       !within(absolute(options.ancestorBoundary), this.cwd)
@@ -306,11 +309,14 @@ export class InstructionCatalog {
         options.ancestorBoundary === undefined
           ? undefined
           : absolute(options.ancestorBoundary);
+    // Project rules stop before the home directory. User rules load from
+    // userConfigDir/rules; treating home as a Project root would re-admit them.
     for (
       let directory = this.cwd;
       directory !== parse(directory).root;
       directory = dirname(directory)
     ) {
+      if (home !== undefined && directory === home) break;
       if (!options.skipDirectory?.(directory)) directories.unshift(directory);
       if (directory === boundary) break;
     }

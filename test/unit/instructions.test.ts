@@ -205,6 +205,32 @@ test("import trees dedupe cycles and stop at depth five while preserving parent-
   }
 });
 
+test("Project walk stops before importHome so home rules stay User-only", async () => {
+  const f = await fixture();
+  try {
+    const project = join(f.root, "home", "proj");
+    await mkdir(project, { recursive: true });
+    await f.write(join(f.root, "home", ".claude/rules/home.md"), "home rule");
+    await f.write(join(project, ".claude/rules/proj.md"), "proj rule");
+    const result = await createInstructionCatalog({
+      cwd: project,
+      userConfigDir: join(f.root, "user-config"),
+      importHome: join(f.root, "home"),
+      sources: { user: true, project: true, local: false },
+    }).loadInitial();
+    assert.deepEqual(
+      result.files.map((file) => file.content),
+      ["proj rule"],
+    );
+    assert.equal(
+      result.files.some((file) => file.content === "home rule"),
+      false,
+    );
+  } finally {
+    await f.close();
+  }
+});
+
 test("external imports need explicit consent while user external imports and tilde home stay separately configured", async () => {
   const f = await fixture();
   try {
