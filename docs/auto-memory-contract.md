@@ -101,3 +101,7 @@ Each summary's `checks` must be all true. The index block's wrapper differs by d
 - Plan mode: tau keeps plan mode read-only, the folder included. Whether the original's `vct` allowance applies there is inferred, not observed.
 - The working-copy key (`canonicalWcRoot`) and the retry read after a failed sync (`Fvn`).
 - `CLAUDE_CODE_IGNORE_PERSISTED_TRUST` is not tied to non-interactive runs, as `pre()` ties it.
+
+## Write stamp
+
+New `.md` Writes into the memory folder run `stampNewMemoryContent` (`src/memory-stamp.ts`): `node_type: memory`, `originSessionId`, and `modified` are added when frontmatter is present and `originSessionId` is absent. Index files without frontmatter are unchanged.
