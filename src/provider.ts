@@ -619,7 +619,7 @@ export class AnthropicProvider implements Provider {
       );
       let response: Response;
       try {
-        response = await fetch(this.endpoint, {
+        response = await fetch(`${this.endpoint}?beta=true`, {
           method: "POST",
           headers: {
             "content-type": "application/json",

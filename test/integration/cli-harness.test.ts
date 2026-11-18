@@ -25,7 +25,7 @@ test("a scripted one-turn print run returns the text after exactly one request",
   assert.equal(run.stdout.trim(), "Scripted answer.");
   assert.equal(provider.requests.length, 1);
   assert.equal(provider.unexpected, 0);
-  assert.equal(provider.requests[0]?.path, "/v1/messages");
+  assert.equal(provider.requests[0]?.path, "/v1/messages?beta=true");
   assert.ok(
     String(provider.requests[0]?.headers["x-api-key"]).startsWith(
       SENTINEL_PREFIX,

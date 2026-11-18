@@ -84,7 +84,7 @@
     "exitCode": 0,
     "requestSequence": [
       {
-        "path": "/v1/messages",
+        "path": "/v1/messages?beta=true",
         "tools": [
           "Agent",
           "Bash",
@@ -100,7 +100,7 @@
         ]
       },
       {
-        "path": "/v1/messages",
+        "path": "/v1/messages?beta=true",
         "tools": [
           "Agent",
           "Bash",
@@ -135,7 +135,7 @@
         ]
       },
       {
-        "path": "/v1/messages",
+        "path": "/v1/messages?beta=true",
         "tools": [
           "Agent",
           "Bash",
@@ -186,7 +186,7 @@
         ]
       },
       {
-        "path": "/v1/messages",
+        "path": "/v1/messages?beta=true",
         "tools": [
           "Agent",
           "Bash",
@@ -253,7 +253,7 @@
         ]
       },
       {
-        "path": "/v1/messages",
+        "path": "/v1/messages?beta=true",
         "tools": [
           "Agent",
           "Bash",
@@ -336,7 +336,7 @@
         ]
       },
       {
-        "path": "/v1/messages",
+        "path": "/v1/messages?beta=true",
         "tools": [
           "Agent",
           "Bash",

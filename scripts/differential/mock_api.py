@@ -5,6 +5,7 @@ import threading
 
 MODEL = "claude-sonnet-4-5-20250929"
 SCENARIOS = ["text", "files", "failures"]
+RECOVERY_SCENARIO = "http-404-then-json-text"
 
 def events(content, stop_reason="end_turn", model=MODEL):
     output = [{"type": "message_start", "message": {"id": "msg_disposable_mock", "type": "message", "role": "assistant", "model": model,
@@ -25,7 +26,7 @@ def events(content, stop_reason="end_turn", model=MODEL):
 
 class MockState:
     def __init__(self, scenario="text", sse_framing="named"):
-        if scenario not in [*SCENARIOS, "mcp", "settings", "eager-instructions"] or sse_framing not in ["named", "data-only"]:
+        if scenario not in [*SCENARIOS, "mcp", "settings", "eager-instructions", RECOVERY_SCENARIO] or sse_framing not in ["named", "data-only"]:
             raise ValueError("Unknown mock scenario or SSE framing")
         self.scenario = scenario
         self.sse_framing = sse_framing
@@ -57,6 +58,19 @@ class MockState:
                     self.send_response(200); self.send_header("content-type", "application/json"); self.end_headers(); self.wfile.write(b'{"input_tokens":32}'); return
                 if self.path.split("?")[0] != "/v1/messages" or generation > 12:
                     self.send_response(400); self.send_header("content-type", "application/json"); self.end_headers(); self.wfile.write(b'{"error":{"type":"invalid_request_error","message":"Unexpected mock request"}}'); return
+                if state.scenario == RECOVERY_SCENARIO:
+                    if generation == 1 and body.get("stream"):
+                        status, payload = 404, b'{"error":{"type":"not_found_error","message":"OWNED_TRANSPORT_RECOVERY_404"}}'
+                    elif generation == 2 and not body.get("stream"):
+                        status, payload = 200, json.dumps({"id": "msg_owned_transport_recovery_1", "type": "message", "role": "assistant", "model": body.get("model", MODEL), "content": [{"type": "text", "text": "OWNED_TRANSPORT_RECOVERY_FINAL"}], "stop_reason": "end_turn", "stop_sequence": None, "usage": {"input_tokens": 10, "output_tokens": 3}}).encode()
+                    else:
+                        status, payload = 400, b'{"error":{"type":"invalid_request_error","message":"Unexpected mock request"}}'
+                    with state.lock:
+                        state.requests[-1]["status"] = status
+                    self.send_response(status); self.send_header("content-type", "application/json"); self.end_headers(); self.wfile.write(payload)
+                    if generation == 1:
+                        self.close_connection = True
+                    return
                 if state.scenario == "text":
                     content = [{"type": "text", "text": "mock done"}]; stop = "end_turn"
                 elif state.scenario == "mcp":

@@ -99,7 +99,7 @@ test("POSTs the Messages API request and handles fragmented UTF-8, CRLF and mult
   let seen: unknown;
   const provider = await server(async (req, res) => {
     assert.equal(req.method, "POST");
-    assert.equal(req.url, "/v1/messages");
+    assert.equal(req.url, "/v1/messages?beta=true");
     assert.equal(req.headers["x-api-key"], "secret-key");
     assert.equal(req.headers["anthropic-version"], "2023-06-01");
     assert.equal(req.headers["content-type"], "application/json");

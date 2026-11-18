@@ -327,7 +327,7 @@ test(
       for await (const chunk of req) raw += chunk;
       const body = requestSchema.parse(JSON.parse(raw));
       generation++;
-      assert.equal(req.url, "/v1/messages");
+      assert.equal(req.url, "/v1/messages?beta=true");
       if (generation > 1)
         assert.equal(body.messages.at(-1)?.content[0]?.is_error, undefined);
       const block =
