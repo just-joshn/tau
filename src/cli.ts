@@ -1404,6 +1404,12 @@ async function main(): Promise<void> {
           ? {}
           : { managedRoot: launch.managedRoot }),
         importHome: launch.importHome,
+        ...(process.env.TAU_INSTRUCTION_ANCESTOR_BOUNDARY
+          ? {
+              ancestorBoundary:
+                process.env.TAU_INSTRUCTION_ANCESTOR_BOUNDARY,
+            }
+          : {}),
         sources: {
           user: launch.snapshot.enabledSources.includes("userSettings"),
           project: launch.snapshot.enabledSources.includes("projectSettings"),

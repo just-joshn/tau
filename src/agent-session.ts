@@ -668,6 +668,12 @@ export async function createSessionAgentHost(options: {
               ? {}
               : { managedRoot: options.launch.managedRoot }),
             importHome: options.launch.importHome,
+            ...(process.env.TAU_INSTRUCTION_ANCESTOR_BOUNDARY
+              ? {
+                  ancestorBoundary:
+                    process.env.TAU_INSTRUCTION_ANCESTOR_BOUNDARY,
+                }
+              : {}),
             sources: {
               user: options.launch.snapshot.enabledSources.includes(
                 "userSettings",
