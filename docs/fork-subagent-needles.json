@@ -6,7 +6,7 @@
   "missing-tool-use": "No tool_use blocks found in assistant message for fork directive",
   "when-to-use": "Selected explicitly via subagent_type: \"fork\" when the fork gate is on; never the default.",
   "definition": "var Tq={agentType:gT",
-  "directive-fn": "function GSt(",
+  "directive-fn": "function GSt(e,n){return`<${THt}>",
   "messages-fn": "function SNs(",
   "analytics": "tengu_fork_subagent_enabled",
   "kill-switch-name": "tengu_federated_ullman",
@@ -16,6 +16,6 @@
   "remote-message": "Fork cannot use isolation: \"remote\"",
   "recursive-code": "subagent_recursive_fork",
   "remote-code": "subagent_fork_remote_isolation",
-  "guard-fn": "function qr(",
+  "guard-fn": "function qr({isolation:n,querySource:e,messages:r",
   "effort-ignored": "Ignored for subagent_type: \"fork\": a fork runs at your own effort."
 }
