@@ -6,6 +6,11 @@ import type { HookBatchResult, HookResult, HookRunOptions } from "./hooks.js";
 import type { Message, ToolExecutor } from "./types.js";
 import type { HookRegistryLike } from "./composite-hooks.js";
 import { sanitizeHookAttachmentText } from "./hook-attachment-projection.js";
+import {
+  AsyncHookOwner,
+  renderAsyncHookResponse,
+  type AsyncHookOwnerOptions,
+} from "./async-hooks.js";
 
 /** Session lifecycle/context delivery around the validated tool-hook runtime. */
 export function createSessionHookHost(options: {
@@ -13,11 +18,21 @@ export function createSessionHookHost(options: {
   context: () => HookCommonInput;
   runOptions(): Omit<HookRunOptions, "signal" | "validateUpdatedInput">;
   onDiagnostic?: (message: string) => void;
+  /** Owner of `async`/`asyncRewake` commands; without it they stay plain background hooks. */
+  asyncHooks?: AsyncHookOwnerOptions;
 }) {
   const pending: string[] = [];
+  const asyncHooks = options.asyncHooks
+    ? new AsyncHookOwner(options.asyncHooks)
+    : undefined;
+  const runOptions = () => ({
+    ...options.runOptions(),
+    ...(asyncHooks ? { onAsyncHook: asyncHooks.admit.bind(asyncHooks) } : {}),
+  });
   let closed = false,
     pendingStop: string | undefined;
   const report = (result: HookResult) => {
+    if (result.asyncOwned) return;
     if (result.systemMessage) options.onDiagnostic?.(result.systemMessage);
     if (result.status === "error" || result.status === "blocking")
       options.onDiagnostic?.(
@@ -25,7 +40,7 @@ export function createSessionHookHost(options: {
       );
   };
   const receiveStart = (result: HookResult) => {
-    if (closed) return;
+    if (closed || result.asyncOwned) return;
     report(result);
     if (result.preventContinuation)
       pendingStop =
@@ -53,7 +68,7 @@ export function createSessionHookHost(options: {
     registry: options.registry,
     context: options.context,
     runOptions: () => ({
-      ...options.runOptions(),
+      ...runOptions(),
       onBackgroundResult: async (result) => {
         if (result.event === "SessionStart") receiveStart(result);
         else report(result);
@@ -79,7 +94,7 @@ export function createSessionHookHost(options: {
             ? {}
             : { task_description: task.description }),
         },
-        { ...options.runOptions(), signal },
+        { ...runOptions(), signal },
       );
       signal.throwIfAborted();
       onBatch(event, batch);
@@ -109,7 +124,7 @@ export function createSessionHookHost(options: {
       const batch = await options.registry.run(
         { ...options.context(), hook_event_name: "SessionStart", source },
         {
-          ...options.runOptions(),
+          ...runOptions(),
           signal,
           onBackgroundResult: async (result) => {
             receiveStart(result);
@@ -142,11 +157,23 @@ export function createSessionHookHost(options: {
                 },
               ],
             });
+          const texts = (asyncHooks?.collect() ?? []).flatMap(
+            renderAsyncHookResponse,
+          );
+          if (texts.length)
+            messages.push({
+              role: "user",
+              content: texts.map((text) => ({ type: "text", text })),
+            });
         },
       };
     },
+    /** Source `Y$s`, run after a print result. */
+    settleRewakes: (timeoutMs?: number) =>
+      asyncHooks?.settleRewakes(timeoutMs) ?? Promise.resolve(),
     async close() {
       closed = true;
+      asyncHooks?.close();
       await options.registry.close();
     },
   };

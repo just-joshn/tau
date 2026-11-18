@@ -93,6 +93,10 @@ export function validateAgentDefinitionHooks(
           Object.keys(hook).some((key) => !hookKeys.has(key))
         )
           throw new Error("Unsupported agent hook command/guard fields");
+        if (hook.asyncRewake === true)
+          throw new Error(
+            "asyncRewake agent hooks need a child wake owner, which is not implemented",
+          );
       }
     }
   }
