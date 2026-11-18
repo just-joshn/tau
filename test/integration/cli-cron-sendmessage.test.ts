@@ -169,8 +169,9 @@ test("cron and SendMessage load through ToolSearch, then schedule, list, cancel,
   });
   const miss = resultText(nth(bodies, 8), "miss");
   expect(miss?.isError).toBe(false);
-  expect(outcomeSchema.parse(jsonValue(miss?.text ?? "")).message).toContain(
-    "No agent named 'nobody' is reachable.",
+  const missMessage = outcomeSchema.parse(jsonValue(miss?.text ?? "")).message;
+  expect(missMessage).toContain("No agent named 'nobody' is reachable.");
+  expect(missMessage).toContain(
     "Use ListAgents to see everyone you can message.",
   );
   const kept = resultText(nth(bodies, 9), "keep");

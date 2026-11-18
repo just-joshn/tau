@@ -74,10 +74,10 @@ export async function runCli(options: RunCliOptions = {}): Promise<CliRun> {
     TAU_MANAGED_ROOT: dirs.managed,
     TMPDIR: dirs.tmp,
     CLAUDE_CODE_TMPDIR: dirs.tmp,
-    // Keep Project instruction walks inside this run root. A remapped HOME is
-    // a sibling of cwd, so importHome is not an ancestor when TMPDIR nests
-    // under the real home (pstack jobs).
-    TAU_INSTRUCTION_ANCESTOR_BOUNDARY: root,
+    // Bind Project walks to the resolved cwd (including --cwd). A remapped
+    // HOME is a sibling of the harness workspace, so importHome is not an
+    // ancestor when TMPDIR nests under the real home (pstack jobs).
+    TAU_INSTRUCTION_ANCESTOR_BOUNDARY: "cwd",
     CI: "true",
     ...(options.provider === undefined
       ? {}

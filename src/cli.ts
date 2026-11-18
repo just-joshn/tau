@@ -1407,7 +1407,9 @@ async function main(): Promise<void> {
         ...(process.env.TAU_INSTRUCTION_ANCESTOR_BOUNDARY
           ? {
               ancestorBoundary:
-                process.env.TAU_INSTRUCTION_ANCESTOR_BOUNDARY,
+                process.env.TAU_INSTRUCTION_ANCESTOR_BOUNDARY === "cwd"
+                  ? cwd
+                  : process.env.TAU_INSTRUCTION_ANCESTOR_BOUNDARY,
             }
           : {}),
         sources: {
