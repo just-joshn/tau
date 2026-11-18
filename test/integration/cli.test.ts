@@ -231,19 +231,19 @@ test(
     assert.deepEqual(
       bodies.map((body) => [body.model, body.max_tokens, body.thinking]),
       [
-        ["claude-opus-5-5", 128000, { type: "adaptive" }],
+        ["claude-opus-5-5", 128000, { type: "adaptive", display: "omitted" }],
         [
           "claude-sonnet-4-5-20250929",
           4000,
-          { type: "enabled", budget_tokens: 3999 },
+          { type: "enabled", budget_tokens: 3999, display: "omitted" },
         ],
         [
           "claude-sonnet-4-5-20250929",
           4000,
-          { type: "enabled", budget_tokens: 2500 },
+          { type: "enabled", budget_tokens: 2500, display: "omitted" },
         ],
         ["claude-sonnet-4-5-20250929", 32000, { type: "disabled" }],
-        ["claude-sonnet-5-5", 128000, { type: "adaptive" }],
+        ["claude-sonnet-5-5", 128000, { type: "adaptive", display: "omitted" }],
       ],
     );
   },
@@ -756,7 +756,17 @@ test(
     assert.equal(resultSchema.parse(events.at(-1)).result, "Done.");
     assert.equal(bodies.length, 3);
     assert.deepEqual(bodies[1]?.tools, bodies[0]?.tools);
-    assert.deepEqual(bodies[1]?.thinking, bodies[0]?.thinking);
+    // stream-json leaves the session display unset, so the compaction request asks for updates.
+    assert.deepEqual(bodies[0]?.thinking, {
+      type: "enabled",
+      budget_tokens: 31999,
+      display: "omitted",
+    });
+    assert.deepEqual(bodies[1]?.thinking, {
+      type: "enabled",
+      budget_tokens: 31999,
+      display: "updates",
+    });
     assert.deepEqual(bodies[1]?.system, bodies[0]?.system);
     assert.ok(
       !JSON.stringify(bodies[2]).includes("Original answer stays in history."),
@@ -954,7 +964,8 @@ test(
     assert.ok(
       !bodies[2]?.messages.some((message) => message.role === "assistant"),
     );
-    assert.equal(betas[2], undefined);
+    // Only the refused beta leaves the resend, as in the original.
+    assert.equal(betas[2], "context-management-2025-06-27");
     const resumed = await cli(
       [
         "-p",
@@ -978,7 +989,10 @@ test(
       .split("\n")
       .map((line) => streamEvent.parse(JSON.parse(line)));
     assert.equal(resultSchema.parse(events.at(-1)).result, "Again.");
-    assert.equal(betas[3], "thinking-resumption-2026-07-17");
+    assert.equal(
+      betas[3],
+      "thinking-resumption-2026-07-17,context-management-2025-06-27,thinking-display-updates-2026-08-18",
+    );
     assert.ok(
       !bodies[4]?.messages.some((message) =>
         message.content.some((block) => block.type === "thinking"),

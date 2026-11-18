@@ -130,6 +130,9 @@ test("POSTs the Messages API request and handles fragmented UTF-8, CRLF and mult
     tools: input.tools,
     max_tokens: 100,
     thinking: { type: "adaptive" },
+    context_management: {
+      edits: [{ type: "clear_thinking_20251015", keep: "all" }],
+    },
     stream: true,
   });
   assert.deepEqual(result, {

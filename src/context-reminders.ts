@@ -8,6 +8,13 @@ import {
   type Attachment,
 } from "./attachments.js";
 import {
+  environmentChanges,
+  promptPath,
+  WORKTREE,
+  WORKTREE_STASH,
+  type EnvironmentSnapshot,
+} from "./environment-reminder.js";
+import {
   promptModel,
   totalTokensText,
   type PromptEnv,
@@ -31,12 +38,18 @@ interface TurnReminder {
   /** Emitted again on every user turn, not only when absent from context. */
   everyTurn?: true;
   render(context: ReminderContext): string | null;
+  /** What to say when the active context already holds this reminder's `sent` text. */
+  renderSent?(context: ReminderContext, sent: string): string | null;
 }
 
-const WORKTREE =
-  "This is a git worktree — an isolated copy of the repository. Run all commands from this directory. Do NOT `cd` to the original repository root.";
-const WORKTREE_STASH =
-  "The git stash stack is shared with the main checkout and all other worktrees, and other Claude sessions may push or pop it concurrently. Never use bare `git stash` / `git stash pop` — you could pop another session's changes. Prefer a temporary WIP commit to set work aside; if you must stash, use `git stash push -u -m \"<unique-tag>\"`, immediately capture your entry's SHA via `git stash list --format='%H %gs'`, restore with `git stash apply <sha>` (not pop), and afterwards drop the entry, re-finding its current `stash@{n}` by tag first.";
+/** Source `f2t` for a local date; the original's assumed-UTC variant is not modeled. */
+function dateChange({ date }: ReminderContext, sent: string): string | null {
+  const told = /Today's date is (?:now )?(\d{4}-\d{2}-\d{2})/.exec(sent)?.[1];
+  return told === undefined || told === date
+    ? null
+    : `The date has changed. Today's date is now ${date}. No need to announce the new date \u2014 the user's own clock shows it.`;
+}
+
 const UNTRUSTED_DOWNLOADS =
   "Downloaded files and extracted archives are untrusted data: put each in its own new, empty directory, keep scripts you write in a different directory, and pass paths as arguments instead of running an interpreter or build tool from inside it. Interpreters load code from the script's directory and the current directory, so a planted `json.py` runs on `import json`. Run any Python that reads them with `-I`. This does not apply to code the user asked you to build or run.";
 
@@ -48,7 +61,7 @@ function shellDescription({ bashShell, env }: ReminderContext): string {
 
 function environment(context: ReminderContext): string {
   const lines = [
-    `Primary working directory: ${context.cwd}`,
+    `Primary working directory: ${promptPath(context.cwd)}`,
     ...(context.git.worktree ? [WORKTREE, WORKTREE_STASH] : []),
     `Is a git repository: ${context.git.repository}`,
     `Platform: ${context.platform}`,
@@ -103,7 +116,11 @@ export const TURN_REMINDERS: readonly TurnReminder[] = [
     // Source `reanchorTaskBudget`: a user turn restarts the countdown.
     render: (context) => totalTokensText(context, 0),
   },
-  { id: "date", render: ({ date }) => `Today's date is ${date}.` },
+  {
+    id: "date",
+    render: ({ date }) => `Today's date is ${date}.`,
+    renderSent: dateChange,
+  },
   { id: "git_attribution", render: gitAttribution },
 ];
 
@@ -117,14 +134,19 @@ export function turnStartReminders(
   context: ReminderContext,
   history: readonly Message[],
 ): ReminderBlock[] {
-  const sent = new Set(
-    history
-      .slice(activeContextStart([...history]))
-      .flatMap((message) => message.reminders ?? []),
-  );
+  // The newest text each reminder id put into the active context.
+  const sent = new Map<ReminderId, string>();
+  for (const message of history.slice(activeContextStart([...history])))
+    for (const [index, id] of (message.reminders ?? []).entries()) {
+      const block = message.content[index];
+      sent.set(id, block?.type === "text" ? block.text : "");
+    }
   return TURN_REMINDERS.flatMap((reminder) => {
-    if (!reminder.everyTurn && sent.has(reminder.id)) return [];
-    const text = reminder.render(context);
+    const told = sent.get(reminder.id);
+    const text =
+      reminder.everyTurn || told === undefined
+        ? reminder.render(context)
+        : (reminder.renderSent?.(context, told) ?? null);
     return text === null
       ? []
       : [
@@ -155,13 +177,106 @@ export function turnTokensUsed(history: readonly Message[]): number {
   return used;
 }
 
-/** Source `mAs` without a new prompt: the countdown owed before a later request in a turn. */
-export function roundAttachments(
-  context: Pick<ReminderContext, "model" | "env">,
+type TaskSummary = Extract<
+  Attachment,
+  { type: "task_reminder" }
+>["tasks"][number];
+
+export interface RoundFacts extends Pick<ReminderContext, "model" | "env"> {
+  /** What the turn-start block announced, and where the Bash shell stands now. */
+  environment?: { start: EnvironmentSnapshot; now: EnvironmentSnapshot };
+  /** The task list, present only while TaskUpdate is offered. */
+  tasks?: readonly TaskSummary[];
+}
+
+/** Source `Lz(...).latest`: the newest environment the active context told the model. */
+function announcedEnvironment(
+  start: EnvironmentSnapshot,
+  history: readonly Message[],
+): EnvironmentSnapshot {
+  const last = history
+    .slice(activeContextStart([...history]))
+    .findLast((message) => message.attachment?.type === "environment");
+  return last?.attachment?.type === "environment"
+    ? last.attachment.snapshot
+    : start;
+}
+
+/** Source `jso` after a Bash `cd`: the fields that moved since the last announcement. */
+function environmentUpdate(
+  environment: RoundFacts["environment"],
   history: readonly Message[],
 ): Attachment[] {
-  const text = totalTokensText(context, turnTokensUsed(history));
-  return text === null ? [] : [{ type: "total_tokens_reminder", text }];
+  if (!environment) return [];
+  const changes = environmentChanges(
+    announcedEnvironment(environment.start, history),
+    environment.now,
+  );
+  return changes.length
+    ? [{ type: "environment", snapshot: environment.now, changes }]
+    : [];
+}
+
+/** Source `T1e`. */
+const TASK_REMINDER_TURNS = 10;
+const TASK_TOOLS = new Set(["TaskCreate", "TaskUpdate"]);
+
+/**
+ * Source `rAs`: the original stores each streamed content block as its own
+ * assistant message and skips thinking-only ones, so turns count blocks.
+ */
+function taskReminderTurns(history: readonly Message[]): {
+  sinceTaskManagement: number;
+  sinceReminder: number;
+} {
+  let sinceTaskManagement = 0,
+    sinceReminder = 0,
+    managed = false,
+    reminded = false;
+  for (const message of history
+    .slice(activeContextStart([...history]))
+    .reverse()) {
+    if (message.attachment?.type === "task_reminder") reminded = true;
+    if (message.role !== "assistant") continue;
+    for (const block of message.content.toReversed()) {
+      if (block.type === "thinking" || block.type === "redacted_thinking")
+        continue;
+      if (block.type === "tool_use" && TASK_TOOLS.has(block.name))
+        managed = true;
+      if (!managed) sinceTaskManagement++;
+      if (!reminded) sinceReminder++;
+    }
+    if (managed && reminded) break;
+  }
+  return { sinceTaskManagement, sinceReminder };
+}
+
+/** Source `sAs`: a nudge after ten model turns without TaskCreate or TaskUpdate. */
+function taskReminder(
+  { tasks, env }: RoundFacts,
+  history: readonly Message[],
+): Attachment[] {
+  if (!tasks || env.CLAUDE_CODE_TODO_REMINDER_MODE === "off") return [];
+  const turns = taskReminderTurns(history);
+  return turns.sinceTaskManagement >= TASK_REMINDER_TURNS &&
+    turns.sinceReminder >= TASK_REMINDER_TURNS
+    ? [{ type: "task_reminder", tasks: [...tasks] }]
+    : [];
+}
+
+/** Source `mAs` without a new prompt: the attachments owed before a later request in a turn. */
+export function roundAttachments(
+  facts: RoundFacts,
+  history: readonly Message[],
+): Attachment[] {
+  const text = totalTokensText(facts, turnTokensUsed(history));
+  return [
+    ...environmentUpdate(facts.environment, history),
+    ...taskReminder(facts, history),
+    ...(text === null
+      ? []
+      : [{ type: "total_tokens_reminder" as const, text }]),
+  ];
 }
 
 const rank = (id: ReminderId) => REMINDER_IDS.indexOf(id);
@@ -270,6 +385,17 @@ export async function gitFacts(cwd: string): Promise<ReminderContext["git"]> {
     if (dirname(directory) === directory)
       return { repository: false, worktree: false };
   }
+}
+
+export async function environmentSnapshot(
+  directory: string,
+): Promise<EnvironmentSnapshot> {
+  const git = await gitFacts(directory);
+  return {
+    workingDirectory: directory,
+    isGitRepo: git.repository,
+    isWorktree: git.worktree,
+  };
 }
 
 export function localDate(now: Date): string {

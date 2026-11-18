@@ -31,6 +31,7 @@ import {
 } from "./system-prompt.js";
 import {
   attributionTexts,
+  environmentSnapshot,
   firstPromptText,
   gitFacts,
   localDate,
@@ -48,6 +49,7 @@ import { createTools } from "./tools.js";
 import { describedShell } from "./bash-shell.js";
 import { ReadState } from "./read-state.js";
 import { defaultOutputTokens, resolveModelFacts } from "./reasoning.js";
+import { sessionThinkingDisplay } from "./request-features.js";
 import { compactContext, freshCompactionState } from "./compaction.js";
 import { ApiAttemptBudget } from "./attempt-ledger.js";
 import { McpManager } from "./mcp.js";
@@ -239,6 +241,8 @@ async function main(): Promise<void> {
       ...(selected === undefined ? {} : { sessionEffort: selected }),
     };
   };
+  const showThinkingSummaries =
+    launch.snapshot.effective.showThinkingSummaries === true;
   const provider = new AnthropicProvider({
     apiKey,
     maxRetries: options.maxRetries,
@@ -248,6 +252,15 @@ async function main(): Promise<void> {
     queryEffortPolicy: {
       capabilities: (model) => effortFacts(model)?.capabilities,
       selection: (request) => effortSelection(request.model),
+    },
+    thinkingDisplay: {
+      session: sessionThinkingDisplay({
+        interactive,
+        format: options.format,
+        verbose: options.verbose,
+        showThinkingSummaries,
+      }),
+      showThinkingSummaries,
     },
     thinking: {
       ...(options.thinking ? { mode: options.thinking } : {}),
@@ -1748,8 +1761,34 @@ async function main(): Promise<void> {
           signal: turnSignal,
           onEvent,
           streamEvents: sdk !== undefined,
-          roundAttachments: (messages) =>
-            roundAttachments({ model, env: process.env }, messages),
+          roundAttachments: async (messages) => {
+            const offered = new Set([
+              ...tools.definitions.map((tool) => tool.name),
+              ...(tools.deferredToolNames?.() ?? []),
+            ]);
+            const [start, now, tasks] = await Promise.all([
+              environmentSnapshot(cwd),
+              environmentSnapshot(shellHost.cwd),
+              offered.has("TaskUpdate") && taskHost
+                ? taskHost.store.list().catch(() => [])
+                : undefined,
+            ]);
+            return roundAttachments(
+              {
+                model,
+                env: process.env,
+                environment: { start, now },
+                ...(tasks && {
+                  tasks: tasks.map(({ id, status, subject }) => ({
+                    id,
+                    status,
+                    subject,
+                  })),
+                }),
+              },
+              messages,
+            );
+          },
           stopHook: (context) => {
             const { runtime } = activeHooks();
             if (!runtime.stop)
