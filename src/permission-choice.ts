@@ -47,12 +47,16 @@ export async function choosePermission(
   let outcome: Outcome;
   try {
     outcome = await new Promise<Outcome>((resolve, reject) => {
-      const onAbort = () => reject(signal?.reason);
-      if (signal?.aborted) return onAbort();
-      signal?.addEventListener("abort", onAbort, { once: true });
-      const done = (value: Outcome) => {
+      const settle = () => {
         input.removeListener("keypress", onKey);
         signal?.removeEventListener("abort", onAbort);
+      };
+      const onAbort = () => {
+        settle();
+        reject(signal?.reason);
+      };
+      const done = (value: Outcome) => {
+        settle();
         resolve(value);
       };
       const onKey = (text: string | undefined, key: Key = {}) => {
@@ -81,6 +85,8 @@ export async function choosePermission(
         output.write(replaceProvisional(shown, next, output.columns || 80));
         shown = next;
       };
+      if (signal?.aborted) return onAbort();
+      signal?.addEventListener("abort", onAbort, { once: true });
       input.on("keypress", onKey);
     });
   } finally {
