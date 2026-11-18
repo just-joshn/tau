@@ -282,6 +282,24 @@ export class AnthropicProvider implements Provider {
     );
   }
 
+  /** A side query whose body the caller owns, such as a server-tool request; no retries or recovery. */
+  postMessages(
+    body: Record<string, unknown>,
+    signal: AbortSignal,
+  ): Promise<Response> {
+    return fetch(`${this.endpoint}?beta=true`, {
+      method: "POST",
+      body: JSON.stringify(body),
+      signal,
+      redirect: "manual",
+      headers: {
+        "content-type": "application/json",
+        "anthropic-version": "2023-06-01",
+        "x-api-key": this.apiKey,
+      },
+    });
+  }
+
   /** Auxiliary direct-provider count request; independent of completion admission/recovery. */
   async countFileTokens(request: {
     model: string;
