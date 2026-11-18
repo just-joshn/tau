@@ -57,6 +57,8 @@ const commandSchema = z.object({
   once: z.boolean().optional(),
   async: z.boolean().optional(),
   asyncRewake: z.boolean().optional(),
+  rewakeMessage: z.string().min(1).optional(),
+  rewakeSummary: z.string().min(1).optional(),
   if: z.string().optional(),
   statusMessage: z.string().optional(),
 });
@@ -115,7 +117,7 @@ const subagentStopOutput = z.object({
   hookEventName: z.literal("SubagentStop"),
   additionalContext: z.string().optional(),
 });
-const outputSchema = z.object({
+export const hookOutputSchema = z.object({
   continue: z.boolean().optional(),
   suppressOutput: z.boolean().optional(),
   stopReason: z.string().optional(),
@@ -165,6 +167,21 @@ export interface HookResult {
   sessionTitle?: string;
   watchPaths?: string[];
   reloadSkills?: boolean;
+  /** Set when an `onAsyncHook` owner took this config-async result; batch observers do not deliver it. */
+  asyncOwned?: true;
+}
+/** A config-async (`async`/`asyncRewake`) command handed to its owner at spawn (source `lY` -> `fxt`). */
+export interface AsyncHookLaunch {
+  event: HookEvent;
+  /** Source `Pt`: `${event}:${matchQuery}` or the bare event. */
+  hookName: string;
+  /** Source `LI`: the command joined with its args. */
+  command: string;
+  hook: Readonly<CommandHook>;
+  origin: Readonly<HookOrigin>;
+  projectDir: string;
+  toolName?: string;
+  completion: Promise<HookResult>;
 }
 export interface BackgroundHook {
   id: string;
@@ -235,6 +252,10 @@ export interface HookRunOptions {
     context: { input: HookInput; origin: HookOrigin },
   ) => unknown;
   forceSyncExecution?: boolean;
+  /** Source `zs` (interactive or streaming input): only then does `asyncRewake` alone background. */
+  asyncRewakeBackgrounds?: boolean;
+  /** Owner of config-async commands; without one they stay plain background hooks. */
+  onAsyncHook?: (launch: AsyncHookLaunch) => void;
   /** Observe each actual command settlement, before phase reduction; batch result order remains unchanged. */
   onResult?: (
     result: HookResult,
@@ -352,10 +373,6 @@ export class HookRegistry {
             if (hook.if && !options.matchesCondition)
               throw new Error(
                 `Hook condition requires a source-aware matchesCondition callback: ${hook.if}`,
-              );
-            if (hook.asyncRewake)
-              throw new Error(
-                "asyncRewake hooks require a wake/continuation scheduler and are not implemented",
               );
             this.hooks.push({
               id: `hook-${next++}`,
@@ -616,12 +633,18 @@ export class HookRegistry {
           )
             this.used.add(candidate.id);
         }
-      const background =
+      const configAsync =
         !options.forceSyncExecution &&
         (entry.hook.async === true ||
-          (input.hook_event_name === "SessionStart" &&
-            entry.origin.source === "projectSettings" &&
-            (input.source === "startup" || input.source === "resume")));
+          (entry.hook.asyncRewake === true &&
+            options.asyncRewakeBackgrounds === true));
+      const owner = configAsync ? options.onAsyncHook : undefined;
+      const background =
+        configAsync ||
+        (!options.forceSyncExecution &&
+          input.hook_event_name === "SessionStart" &&
+          entry.origin.source === "projectSettings" &&
+          (input.source === "startup" || input.source === "resume"));
       const controller = new AbortController();
       const signal = AbortSignal.any([
         options.signal,
@@ -634,7 +657,24 @@ export class HookRegistry {
         serialized,
         { ...options, signal },
         background,
+      ).then((result) =>
+        owner ? { ...result, asyncOwned: true as const } : result,
       );
+      if (owner) {
+        const query = matcherValue(input);
+        owner({
+          event: entry.event,
+          hookName: query ? `${entry.event}:${query}` : entry.event,
+          command: [entry.hook.command, ...(entry.hook.args ?? [])].join(" "),
+          hook: entry.hook,
+          origin: entry.origin,
+          projectDir: options.projectDir,
+          ...(input.tool_name === undefined
+            ? {}
+            : { toolName: input.tool_name }),
+          completion: executed,
+        });
+      }
       const promise = options.onResult
         ? executed.then(async (result) => {
             // Calling the observer starts synchronously at settlement. Creation
@@ -863,10 +903,12 @@ export class HookRegistry {
     }
     const trimmed = captured.stdout.trim();
     if (!trimmed.startsWith("{")) return result;
-    let output: z.infer<typeof outputSchema>;
+    let output: z.infer<typeof hookOutputSchema>;
     try {
       // Malformed or multi-document captures never grant permission or rewrite input.
-      output = outputSchema.parse(JSON.parse(trimmed.replace(/^\uFEFF/, "")));
+      output = hookOutputSchema.parse(
+        JSON.parse(trimmed.replace(/^\uFEFF/, "")),
+      );
       const specific = output.hookSpecificOutput;
       if (specific && specific.hookEventName !== entry.event) {
         if (output.decision === "block") {
