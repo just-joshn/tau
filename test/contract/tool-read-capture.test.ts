@@ -1,3 +1,4 @@
+import { hookTexts } from "../helpers/hook-attachments.js";
 import assert from "node:assert/strict";
 import { test, onTestFinished } from "bun:test";
 import { mkdtemp, writeFile, realpath, rm } from "node:fs/promises";
@@ -144,8 +145,8 @@ test("snapshots precede Post mutation; the owner callback sees immutable core/fi
         hookAttachments: [
           {
             phase: "post",
-            event: "PostToolUse",
-            toolName: "Read",
+            type: "hook_additional_context",
+            hookName: "PostToolUse:Read",
             content: ["POST CONTEXT"],
           },
         ],
@@ -164,7 +165,7 @@ test("snapshots precede Post mutation; the owner callback sees immutable core/fi
       events.push("capture");
       f.records.push(row);
       assert.equal(row.coreResult.hookAttachments, undefined);
-      assert.deepEqual(row.finalResult.hookAttachments?.[0]?.content, [
+      assert.deepEqual(hookTexts(row.finalResult.hookAttachments), [
         "POST CONTEXT",
       ]);
       assert.ok(Object.isFrozen(row.rawResult.file));

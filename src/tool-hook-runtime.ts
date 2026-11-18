@@ -4,12 +4,7 @@ import type {
   HookPermission,
   HookRunOptions,
 } from "./hooks.js";
-import type {
-  HookAttachmentMetadata,
-  Message,
-  ToolResult,
-  ToolUse,
-} from "./types.js";
+import type { HookAttachment, Message, ToolResult, ToolUse } from "./types.js";
 import type { HookRegistryLike } from "./composite-hooks.js";
 import { captureNativePersistenceJson } from "./native-persistence-events.js";
 import {
@@ -34,8 +29,7 @@ export interface AgentStopHookResult {
   reason?: string;
 }
 export interface ToolFailureHookResult {
-  additionalContext: string[];
-  attachments?: HookAttachmentMetadata[];
+  attachments: HookAttachment[];
 }
 export interface ToolFailureHookContext {
   durationMs?: number;
@@ -76,28 +70,55 @@ export interface ToolHookRuntime {
   }): Promise<AgentStopHookResult>;
 }
 
-/** Queue hook attachments for the host to commit outside the tool payload. */
-export function appendHookContext(
+/** Queue hook attachments, in hook order, for projection around the result. */
+export function appendHookAttachments(
   result: ToolResult,
-  context: readonly string[],
+  attachments: readonly HookAttachment[],
   stopReason?: string,
-  tag?: Omit<HookAttachmentMetadata, "content">,
 ): ToolResult {
-  const additions = context.filter(Boolean);
   return {
     ...result,
-    ...(additions.length
-      ? tag
-        ? {
-            hookAttachments: [
-              ...(result.hookAttachments ?? []),
-              { ...tag, content: additions },
-            ],
-          }
-        : { hookContext: [...(result.hookContext ?? []), ...additions] }
+    ...(attachments.length
+      ? {
+          hookAttachments: [...(result.hookAttachments ?? []), ...attachments],
+        }
       : {}),
     ...(stopReason === undefined ? {} : { hookStop: { reason: stopReason } }),
   };
+}
+/** Source `hook_additional_context`, named `${event}:${toolName}`. */
+export function additionalContextAttachments(
+  phase: HookAttachment["phase"],
+  hookName: string,
+  content: readonly string[],
+): HookAttachment[] {
+  const kept = content.filter(Boolean);
+  return kept.length
+    ? [{ phase, type: "hook_additional_context", hookName, content: kept }]
+    : [];
+}
+/** Source `GGn`/`Sfn`: each blocking hook's error, then the batch's additional context. */
+function batchAttachments(
+  phase: HookAttachment["phase"],
+  hookName: string,
+  batch: HookBatchResult,
+): HookAttachment[] {
+  const blocking: HookAttachment[] = batch.results.flatMap((result) =>
+    result.status === "blocking" && result.blockingError
+      ? [
+          {
+            phase,
+            type: "hook_blocking_error",
+            hookName,
+            ...result.blockingError,
+          },
+        ]
+      : [],
+  );
+  return [
+    ...blocking,
+    ...additionalContextAttachments(phase, hookName, batch.additionalContext),
+  ];
 }
 export function appendPreHookContext(
   result: ToolResult,
@@ -105,26 +126,21 @@ export function appendPreHookContext(
   call: ToolUse,
   stopReason?: string,
 ): ToolResult {
-  return appendHookContext(result, pre?.additionalContext ?? [], stopReason, {
-    phase: "pre",
-    event: "PreToolUse",
-    toolName: call.name,
-  });
+  return appendHookAttachments(
+    result,
+    additionalContextAttachments(
+      "pre",
+      `PreToolUse:${call.name}`,
+      pre?.additionalContext ?? [],
+    ),
+    stopReason,
+  );
 }
 export function appendFailureHookContext(
   result: ToolResult,
   failure: ToolFailureHookResult | void,
 ): ToolResult {
-  const annotated = failure?.attachments?.length
-    ? {
-        ...result,
-        hookAttachments: [
-          ...(result.hookAttachments ?? []),
-          ...failure.attachments,
-        ],
-      }
-    : result;
-  return appendHookContext(annotated, failure?.additionalContext ?? []);
+  return appendHookAttachments(result, failure?.attachments ?? []);
 }
 
 /** Adapts the explicit command registry to validated tool and agent seams. */
@@ -303,15 +319,13 @@ export function createToolHookRuntime(options: {
           }
       }
       // Post-hook blocks become feedback after an already completed side effect.
-      const annotated = appendHookContext(
+      return appendHookAttachments(
         result,
-        batch.additionalContext,
+        batchAttachments("post", `PostToolUse:${call.name}`, batch),
         batch.preventContinuation
           ? (batch.stopReason ?? "Continuation stopped by hook")
           : undefined,
-        { phase: "post", event: "PostToolUse", toolName: call.name },
       );
-      return appendHookContext(annotated, batch.blockingErrors);
     },
     async failure(call, error, signal, context) {
       const batch = await run(
@@ -335,19 +349,11 @@ export function createToolHookRuntime(options: {
       // Sfn consumes failure blocks/context as attachments after the failed result.
       // It does not apply output rewrites, permission verdicts or continuation flags.
       return {
-        additionalContext: [...batch.blockingErrors],
-        ...(batch.additionalContext.length
-          ? {
-              attachments: [
-                {
-                  phase: "failure",
-                  event: "PostToolUseFailure",
-                  toolName: call.name,
-                  content: [...batch.additionalContext],
-                },
-              ],
-            }
-          : {}),
+        attachments: batchAttachments(
+          "failure",
+          `PostToolUseFailure:${call.name}`,
+          batch,
+        ),
       };
     },
     async stop({ messages, signal, stopHookActive }) {

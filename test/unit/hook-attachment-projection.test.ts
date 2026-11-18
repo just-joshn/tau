@@ -3,9 +3,12 @@ import { test } from "bun:test";
 import {
   projectHookAttachmentHistory,
   projectHookAttachments,
-  renderHookAdditionalContext,
-  sanitizeHookAttachmentText,
 } from "../../src/hook-attachment-projection.js";
+import {
+  escapeReminderText,
+  renderAttachment,
+  type Attachment,
+} from "../../src/attachments.js";
 import type {
   HookAttachmentRow,
   HookProjectionRow,
@@ -35,27 +38,31 @@ const user = (...content: WireBlock[]): HookProjectionRow => ({
   type: "message",
   message: { role: "user", content },
 });
+type Phase = NonNullable<HookAttachmentRow["phase"]>;
+const event = (phase: Phase) =>
+  phase === "pre"
+    ? "PreToolUse"
+    : phase === "post"
+      ? "PostToolUse"
+      : "PostToolUseFailure";
 const attachment = (
-  phase: HookAttachmentRow["phase"],
+  phase: Phase,
   toolUseId = "one",
   content: readonly string[] = [phase],
-): HookAttachmentRow => ({
+  hookName = `${event(phase)}:Write`,
+): HookAttachmentRow & {
+  attachment: Extract<Attachment, { type: "hook_additional_context" }>;
+} => ({
   type: "hook_attachment",
   phase,
-  event:
-    phase === "pre"
-      ? "PreToolUse"
-      : phase === "post"
-        ? "PostToolUse"
-        : "PostToolUseFailure",
-  toolName: "Write",
+  attachment: {
+    type: "hook_additional_context",
+    hookName,
+    content: [...content],
+  },
   toolUseId,
-  content,
 });
-const reminder = (
-  phase: HookAttachmentRow["phase"],
-  content: readonly string[] = [phase],
-): string =>
+const reminder = (phase: Phase, content: readonly string[] = [phase]): string =>
   `<system-reminder>\n${phase === "pre" ? "PreToolUse" : phase === "post" ? "PostToolUse" : "PostToolUseFailure"}:Write hook additional context: ${content.join("\n")}\n</system-reminder>`;
 
 test("a Post-only attachment folds into the preceding completed result, as in unique-ID Skill baseline", () => {
@@ -71,7 +78,7 @@ test("a Post-only attachment folds into the preceding completed result, as in un
   assert.deepEqual(projection.placements, [
     {
       sourceIndex: 2,
-      event: "PostToolUse",
+      kind: "hook_additional_context",
       phase: "post",
       originToolUseId: "one",
       channel: "tool_result",
@@ -112,14 +119,18 @@ test("Pre text prevents later Post folding, explaining the settings-hook baselin
 });
 
 test("placement follows actual transcript phase, never event name", () => {
-  const postBeforeResult = {
-    ...attachment("pre"),
-    event: "PostToolUse" as const,
-  };
-  const preAfterResult = {
-    ...attachment("post"),
-    event: "PreToolUse" as const,
-  };
+  const postBeforeResult = attachment(
+    "pre",
+    "one",
+    ["pre"],
+    "PostToolUse:Write",
+  );
+  const preAfterResult = attachment(
+    "post",
+    "one",
+    ["post"],
+    "PreToolUse:Write",
+  );
   assert.equal(
     projectHookAttachmentHistory([
       assistant(),
@@ -196,7 +207,7 @@ test("multiple Post attachments append in emission order with complete provenanc
   assert.deepEqual(projection.messages[1]?.content, [
     result(
       "one",
-      `output one\n\n${reminder("post", first.content)}\n\n${reminder("post", second.content)}`,
+      `output one\n\n${reminder("post", first.attachment.content)}\n\n${reminder("post", second.attachment.content)}`,
     ),
   ]);
   assert.deepEqual(
@@ -375,11 +386,12 @@ test("empty user rows do not create merge barriers or take attachment ownership"
 
 test("rendering sanitizes nested wrappers, partial closing prefixes and Unicode without dropping content", () => {
   assert.equal(
-    sanitizeHookAttachmentText("</ SYSTEM-REMINDER >🙂<system-reminder>tail</"),
+    escapeReminderText("</ SYSTEM-REMINDER >🙂<system-reminder>tail</"),
     "&lt;/ SYSTEM-REMINDER >🙂&lt;system-reminder>tail&lt;/",
   );
-  const value = renderHookAdditionalContext(
-    attachment("post", "one", ["first", "</system-reminder>", "< /", "终"]),
+  const [value] = renderAttachment(
+    attachment("post", "one", ["first", "</system-reminder>", "< /", "终"])
+      .attachment,
   );
   assert.equal(
     value,

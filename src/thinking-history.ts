@@ -1,10 +1,11 @@
 import type {
   Completion,
-  HookAttachmentMetadata,
+  HookAttachment,
   Message,
   WireBlock,
   WireMessage,
 } from "./types.js";
+import { wrapTaskNotification, type Attachment } from "./attachments.js";
 import { resolveModelFacts } from "./reasoning.js";
 import { activeContextStart, contextTokens } from "./context-usage.js";
 import { foldRoundReminders } from "./context-reminders.js";
@@ -76,6 +77,19 @@ export function markThinkingStripped(
     return { ...message, thinkingStripFrom: from };
   });
   return changed ? result : messages;
+}
+
+/** Source `RPi` task-notification turn: its texts joined under one notification wrapper. */
+function notificationContent(content: Block[]): WireBlock[] {
+  const texts = content.flatMap((block) =>
+    block.type === "text" ? [block.text] : [],
+  );
+  return [
+    { type: "text", text: wrapTaskNotification(texts.join("\n")) },
+    ...content.flatMap((block): WireBlock[] =>
+      block.type === "text" || block.type === "tool_result" ? [] : [block],
+    ),
+  ];
 }
 
 /** Independent projection of local metadata and orphan/trailing reasoning onto API messages. */
@@ -162,40 +176,48 @@ export function projectMessages(
     )
       next = index;
   }
-  const attachments = new Map<WireBlock, HookAttachmentMetadata[]>();
+  const attachments = new Map<WireBlock, HookAttachment[]>();
+  const attachmentRows = new Map<HistoryProjectionMessage, Attachment>();
   const result: HistoryProjectionMessage[] = rows
     .filter(
       (row, index) =>
         keep[index] && (row.role !== "assistant" || row.content.length > 0),
     )
-    .map(({ role, content, responseId }) => ({
-      role,
-      ...(responseId === undefined ? {} : { responseId }),
-      content: content.map((block) => {
-        if (block.type !== "tool_result") return block;
-        const {
-          readContentOmitted: _omitted,
-          apiContent,
-          mcpResult: _raw,
-          permissionDenied: _permission,
-          permissionDecideLocation: _location,
-          inputRejected: _input,
-          instructionFiles: _instructions,
-          hookStop: _hookStop,
-          effectiveToolInput: _effectiveInput,
-          hookResponse: _hookResponse,
-          hookRewrittenOutput: _hookOutput,
-          hookContext: _hookContext,
-          hookAttachments: orderedAttachments,
-          ...wire
-        } = block;
-        const projected: WireBlock =
-          apiContent === undefined ? wire : { ...wire, content: apiContent };
-        if (orderedAttachments?.length)
-          attachments.set(projected, orderedAttachments);
-        return projected;
-      }),
-    }));
+    .map(({ role, content, responseId, attachment, origin }) => {
+      const projected: HistoryProjectionMessage = {
+        role,
+        ...(responseId === undefined ? {} : { responseId }),
+        content:
+          origin === "task-notification"
+            ? notificationContent(content)
+            : content.map(wireBlock),
+      };
+      if (attachment) attachmentRows.set(projected, attachment);
+      return projected;
+    });
+  function wireBlock(block: Block): WireBlock {
+    if (block.type !== "tool_result") return block;
+    const {
+      readContentOmitted: _omitted,
+      apiContent,
+      mcpResult: _raw,
+      permissionDenied: _permission,
+      permissionDecideLocation: _location,
+      inputRejected: _input,
+      instructionFiles: _instructions,
+      hookStop: _hookStop,
+      effectiveToolInput: _effectiveInput,
+      hookResponse: _hookResponse,
+      hookRewrittenOutput: _hookOutput,
+      hookAttachments: orderedAttachments,
+      ...wire
+    } = block;
+    const projected: WireBlock =
+      apiContent === undefined ? wire : { ...wire, content: apiContent };
+    if (orderedAttachments?.length)
+      attachments.set(projected, orderedAttachments);
+    return projected;
+  }
   for (;;) {
     const last = result.at(-1);
     if (last?.role !== "assistant") break;
@@ -225,9 +247,15 @@ export function projectMessages(
     if (content.length === last.content.length) break;
     last.content = content;
   }
-  if (!attachments.size) return normalizeHistoryMessages(result);
+  if (!attachments.size && !attachmentRows.size)
+    return normalizeHistoryMessages(result);
   const ordered: HookProjectionRow[] = [];
   for (const row of result) {
+    const attachment = attachmentRows.get(row);
+    if (attachment) {
+      ordered.push({ type: "hook_attachment", attachment });
+      continue;
+    }
     let pending: WireBlock[] = [];
     const flush = () => {
       if (pending.length)
@@ -244,19 +272,19 @@ export function projectMessages(
         continue;
       }
       flush();
-      for (const attachment of tagged.filter((item) => item.phase === "pre"))
-        ordered.push({
-          type: "hook_attachment",
-          ...attachment,
-          toolUseId: block.tool_use_id,
-        });
+      const hookRow = ({ phase, ...attachment }: HookAttachment) => ({
+        type: "hook_attachment" as const,
+        phase,
+        attachment,
+        toolUseId: block.tool_use_id,
+      });
+      ordered.push(
+        ...tagged.filter((item) => item.phase === "pre").map(hookRow),
+      );
       ordered.push({ type: "message", message: { ...row, content: [block] } });
-      for (const attachment of tagged.filter((item) => item.phase !== "pre"))
-        ordered.push({
-          type: "hook_attachment",
-          ...attachment,
-          toolUseId: block.tool_use_id,
-        });
+      ordered.push(
+        ...tagged.filter((item) => item.phase !== "pre").map(hookRow),
+      );
     }
     flush();
   }

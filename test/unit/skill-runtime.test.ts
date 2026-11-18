@@ -387,8 +387,8 @@ test("hook allow cannot bypass host refusal; invalid replacements cannot grant e
   assert.deepEqual(denied.hookAttachments, [
     {
       phase: "pre",
-      event: "PreToolUse",
-      toolName: "Skill",
+      type: "hook_additional_context",
+      hookName: "PreToolUse:Skill",
       content: ["owned permission context"],
     },
   ]);
@@ -520,8 +520,8 @@ test("hook stop is local, user context flush follows committed result, and reset
   assert.deepEqual(result.hookAttachments, [
     {
       phase: "pre",
-      event: "PreToolUse",
-      toolName: "Skill",
+      type: "hook_additional_context",
+      hookName: "PreToolUse:Skill",
       content: ["stop feedback"],
     },
   ]);

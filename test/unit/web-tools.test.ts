@@ -20,6 +20,7 @@ import {
   webToolPermission,
 } from "../../src/web-tools.js";
 import { UNPARSED_TOOL_INPUT } from "../../src/tool-input.js";
+import { failureFeedback } from "../helpers/hook-attachments.js";
 
 const fetchInput = { url: "https://example.com/a", prompt: "p" };
 const base: ToolExecutor = {
@@ -93,7 +94,7 @@ const hook = (
   },
   failure: async () => {
     events.push("failure");
-    return { additionalContext: ["failure context"] };
+    return failureFeedback("failure context");
   },
 });
 

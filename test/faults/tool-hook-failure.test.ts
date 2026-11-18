@@ -86,6 +86,8 @@ async function fixture(output: unknown, extras: Record<string, unknown> = {}) {
   return {
     registry,
     runtime,
+    /** The hook's command line as blocking feedback names it. */
+    command: [process.execPath, file, log].join(" "),
     failure,
     events,
     log,
@@ -106,12 +108,11 @@ test("failure runtime supplies effective call, error text, interrupt and executi
     isInterrupt: true,
   });
   assert.deepEqual(result, {
-    additionalContext: [],
     attachments: [
       {
         phase: "failure",
-        event: "PostToolUseFailure",
-        toolName: "Read",
+        type: "hook_additional_context",
+        hookName: "PostToolUseFailure:Read",
         content: ["check another file"],
       },
     ],
@@ -147,12 +148,18 @@ test("failure blocks add feedback but cannot stop continuation or rewrite the fa
     new AbortController().signal,
   );
   assert.deepEqual(result, {
-    additionalContext: ["retry differently"],
     attachments: [
       {
         phase: "failure",
-        event: "PostToolUseFailure",
-        toolName: "Read",
+        type: "hook_blocking_error",
+        hookName: "PostToolUseFailure:Read",
+        command: f.command,
+        blockingError: "retry differently",
+      },
+      {
+        phase: "failure",
+        type: "hook_additional_context",
+        hookName: "PostToolUseFailure:Read",
         content: ["failure context"],
       },
     ],
@@ -181,7 +188,7 @@ test("ordinary failure-hook errors are diagnostic while onFailure block supplies
   );
   assert.deepEqual(
     await ordinary.failure(call, "original", new AbortController().signal),
-    { additionalContext: [] },
+    { attachments: [] },
   );
   assert.equal(ordinary.events[0]?.batch.results[0]?.status, "error");
   const blocking = await fixture(
@@ -190,7 +197,17 @@ test("ordinary failure-hook errors are diagnostic while onFailure block supplies
   );
   assert.deepEqual(
     await blocking.failure(call, "original", new AbortController().signal),
-    { additionalContext: ["Hook exited 7"] },
+    {
+      attachments: [
+        {
+          phase: "failure",
+          type: "hook_blocking_error",
+          hookName: "PostToolUseFailure:Read",
+          command: blocking.command,
+          blockingError: "Hook exited 7",
+        },
+      ],
+    },
   );
   assert.equal(blocking.events[0]?.batch.results[0]?.status, "blocking");
 });

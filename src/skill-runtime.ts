@@ -8,7 +8,8 @@ import type {
   SkillSource,
 } from "./skills.js";
 import {
-  appendHookContext,
+  additionalContextAttachments,
+  appendHookAttachments,
   appendPreHookContext,
   type ToolHookRuntime,
 } from "./tool-hook-runtime.js";
@@ -30,7 +31,6 @@ export type SkillToolInput = z.infer<typeof skillToolInputSchema>;
 const skillFailureSchema = z.object({
   permissionDenied: z.boolean().optional(),
   hookStop: z.string().optional(),
-  hookContext: z.array(z.string()).optional(),
   hookAttachments: z.array(hookAttachmentSchema).optional(),
 });
 
@@ -384,18 +384,11 @@ export class SkillRuntime {
           : "Skill execution blocked by a hook");
       throw Object.assign(new Error(message), {
         permissionDenied: true,
-        ...(pre.additionalContext.length
-          ? {
-              hookAttachments: [
-                {
-                  phase: "pre",
-                  event: "PreToolUse",
-                  toolName: call.name,
-                  content: [...pre.additionalContext],
-                },
-              ],
-            }
-          : {}),
+        hookAttachments: additionalContextAttachments(
+          "pre",
+          `PreToolUse:${call.name}`,
+          pre.additionalContext,
+        ),
         ...(pre.preventContinuation
           ? { hookStop: pre.stopReason ?? message }
           : {}),
@@ -423,18 +416,11 @@ export class SkillRuntime {
         ),
         {
           permissionDenied: true,
-          ...(pre?.additionalContext.length
-            ? {
-                hookAttachments: [
-                  {
-                    phase: "pre",
-                    event: "PreToolUse",
-                    toolName: call.name,
-                    content: [...pre.additionalContext],
-                  },
-                ],
-              }
-            : {}),
+          hookAttachments: additionalContextAttachments(
+            "pre",
+            `PreToolUse:${call.name}`,
+            pre?.additionalContext ?? [],
+          ),
         },
       );
     }
@@ -473,29 +459,18 @@ export class SkillRuntime {
           error,
           signal,
         );
-        if (
-          feedback?.additionalContext.length ||
-          feedback?.attachments?.length ||
-          pre?.additionalContext.length
-        ) {
+        const hookAttachments = [
+          ...additionalContextAttachments(
+            "pre",
+            `PreToolUse:${call.name}`,
+            pre?.additionalContext ?? [],
+          ),
+          ...(feedback?.attachments ?? []),
+        ];
+        if (hookAttachments.length) {
           const retained =
             error instanceof Error ? error : new Error(String(error));
-          Object.assign(retained, {
-            hookContext: feedback?.additionalContext ?? [],
-            hookAttachments: [
-              ...(pre?.additionalContext.length
-                ? [
-                    {
-                      phase: "pre" as const,
-                      event: "PreToolUse" as const,
-                      toolName: call.name,
-                      content: [...pre.additionalContext],
-                    },
-                  ]
-                : []),
-              ...(feedback?.attachments ?? []),
-            ],
-          });
+          Object.assign(retained, { hookAttachments });
           throw retained;
         }
       }
@@ -680,13 +655,10 @@ export class SkillRuntime {
                 ? error.message
                 : "Skill invocation failed",
             ...(failure.permissionDenied ? { permissionDenied: true } : {}),
-            ...(failure.hookAttachments?.length
-              ? { hookAttachments: failure.hookAttachments }
-              : {}),
           };
-          return appendHookContext(
+          return appendHookAttachments(
             result,
-            failure.hookContext ?? [],
+            failure.hookAttachments ?? [],
             failure.hookStop,
           );
         }

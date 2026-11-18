@@ -5,12 +5,8 @@ import {
 import type { HookBatchResult, HookResult, HookRunOptions } from "./hooks.js";
 import type { Message, ToolExecutor } from "./types.js";
 import type { HookRegistryLike } from "./composite-hooks.js";
-import { sanitizeHookAttachmentText } from "./hook-attachment-projection.js";
-import {
-  AsyncHookOwner,
-  renderAsyncHookResponse,
-  type AsyncHookOwnerOptions,
-} from "./async-hooks.js";
+import { attachmentMessage, escapeReminderText } from "./attachments.js";
+import { AsyncHookOwner, type AsyncHookOwnerOptions } from "./async-hooks.js";
 
 /** Session lifecycle/context delivery around the validated tool-hook runtime. */
 export function createSessionHookHost(options: {
@@ -109,7 +105,7 @@ export function createSessionHookHost(options: {
             .list(event)
             .find((entry) => entry.id === result.id)?.hook;
           const label = [result.command, ...(command?.args ?? [])].join(" ");
-          return `${event} hook feedback:\n${sanitizeHookAttachmentText(`[${label}]: ${result.reason ?? result.error ?? (result.stderr.trim() || "Blocked by hook")}`)}`;
+          return `${event} hook feedback:\n${escapeReminderText(`[${label}]: ${result.reason ?? result.error ?? (result.stderr.trim() || "Blocked by hook")}`)}`;
         });
     },
     get hasToolHooks() {
@@ -157,14 +153,11 @@ export function createSessionHookHost(options: {
                 },
               ],
             });
-          const texts = (asyncHooks?.collect() ?? []).flatMap(
-            renderAsyncHookResponse,
-          );
-          if (texts.length)
-            messages.push({
-              role: "user",
-              content: texts.map((text) => ({ type: "text", text })),
-            });
+          // A transcript-only answer (no systemMessage or context) adds no row.
+          for (const attachment of asyncHooks?.collect() ?? []) {
+            const row = attachmentMessage(attachment);
+            if (row.content.length) messages.push(row);
+          }
         },
       };
     },

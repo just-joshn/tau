@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { attachmentSchema } from "./attachments.js";
 import type { ApiAttemptBudget } from "./attempt-ledger.js";
 import type { StreamFailureCause } from "./recovery.js";
 import type { ThinkingOptions } from "./reasoning.js";
@@ -69,13 +70,29 @@ export const toolUseSchema = z.object({
   name: z.string().min(1),
   input: z.unknown(),
 });
-export const hookAttachmentSchema = z.object({
+const hookPhaseSchema = z.object({
+  /** Transcript side of the tool result the attachment belongs to. */
   phase: z.enum(["pre", "post", "failure"]),
-  event: z.enum(["PreToolUse", "PostToolUse", "PostToolUseFailure"]),
-  toolName: z.string(),
-  content: z.array(z.string()),
 });
-export type HookAttachmentMetadata = z.infer<typeof hookAttachmentSchema>;
+/** Sessions saved before typed attachments kept only additional context. */
+const legacyHookAttachmentSchema = z
+  .object({
+    phase: z.enum(["pre", "post", "failure"]),
+    event: z.enum(["PreToolUse", "PostToolUse", "PostToolUseFailure"]),
+    toolName: z.string(),
+    content: z.array(z.string()),
+  })
+  .transform(({ phase, event, toolName, content }) => ({
+    phase,
+    type: "hook_additional_context" as const,
+    hookName: `${event}:${toolName}`,
+    content,
+  }));
+export const hookAttachmentSchema = z.union([
+  z.intersection(hookPhaseSchema, attachmentSchema),
+  legacyHookAttachmentSchema,
+]);
+export type HookAttachment = z.infer<typeof hookAttachmentSchema>;
 export const toolResultSchema = z.object({
   type: z.literal("tool_result"),
   tool_use_id: z.string(),
@@ -95,9 +112,7 @@ export const toolResultSchema = z.object({
   effectiveToolInput: z.unknown().optional(),
   hookResponse: z.unknown().optional(),
   hookRewrittenOutput: z.unknown().optional(),
-  /** Hook attachments are committed as sibling user text, outside tool results. */
-  hookContext: z.array(z.string()).optional(),
-  /** Ordered hook attachments are projected around the actual result, never inferred from text. */
+  /** Hook output in hook order; projection renders it around the result, never inferred from text. */
   hookAttachments: z.array(hookAttachmentSchema).optional(),
   instructionFiles: z.array(instructionRecordSchema).optional(),
 });
@@ -170,6 +185,10 @@ export const messageSchema = z.object({
   catalogAttachments: z.array(catalogAttachmentSchema).optional(),
   /** Retained lifecycle order differs from RPi's model-visible user-round placement. */
   contextPlacement: z.literal("subagent-start").optional(),
+  /** This row is an attachment; content holds its rendering for local readers, projection folds it. */
+  attachment: attachmentSchema.optional(),
+  /** A task-notification turn; projection wraps it as a system notification (source `A3s`). */
+  origin: z.literal("task-notification").optional(),
   /** Ids of this row's leading reminder blocks; projection folds them ahead of the user round. */
   reminders: z.array(z.enum(REMINDER_IDS)).optional(),
   partial: z.object({ cause: z.string() }).optional(),

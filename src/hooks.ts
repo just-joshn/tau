@@ -169,6 +169,8 @@ export interface HookResult {
   reloadSkills?: boolean;
   /** Set when an `onAsyncHook` owner took this config-async result; batch observers do not deliver it. */
   asyncOwned?: true;
+  /** Source per-hook `blockingError`: the feedback a blocking result attaches, and its command (`LI`). */
+  blockingError?: { command: string; blockingError: string };
 }
 /** A config-async (`async`/`asyncRewake`) command handed to its owner at spawn (source `lY` -> `fxt`). */
 export interface AsyncHookLaunch {
@@ -776,7 +778,8 @@ export class HookRegistry {
     background: boolean,
   ): Promise<HookResult> {
     const started = Date.now(),
-      { hook, origin } = entry;
+      { hook, origin } = entry,
+      displayCommand = [hook.command, ...(hook.args ?? [])].join(" ");
     const base = {
       id: entry.id,
       event: entry.event,
@@ -883,7 +886,13 @@ export class HookRegistry {
           : captured.outputExceeded
             ? "Hook output exceeded its configured bound"
             : `Hook exited ${captured.exitCode}`);
-      if (result.status === "blocking") result.reason = result.error;
+      if (result.status === "blocking") {
+        result.reason = result.error;
+        result.blockingError = {
+          command: displayCommand,
+          blockingError: result.error,
+        };
+      }
       return result;
     }
     if (captured.exitCode === 2) {
@@ -898,6 +907,10 @@ export class HookRegistry {
       }
       result.status = "blocking";
       result.reason = captured.stderr.trim() || "Blocked by hook";
+      result.blockingError = {
+        command: displayCommand,
+        blockingError: `[${displayCommand}]: ${captured.stderr.trim() || "No stderr output"}`,
+      };
       if (entry.event === "PreToolUse") result.permission = "deny";
       return result;
     }
@@ -937,6 +950,10 @@ export class HookRegistry {
     if (output.decision === "block") {
       result.status = "blocking";
       result.reason = output.reason ?? "Blocked by hook";
+      result.blockingError = {
+        command: displayCommand,
+        blockingError: result.reason,
+      };
       if (entry.event === "PreToolUse") result.permission = "deny";
     } else if (output.decision === "approve" && entry.event === "PreToolUse")
       result.permission = "allow";

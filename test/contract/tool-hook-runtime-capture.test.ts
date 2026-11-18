@@ -1,3 +1,4 @@
+import { hookTexts } from "../helpers/hook-attachments.js";
 import assert from "node:assert/strict";
 import { onTestFinished, test } from "bun:test";
 import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
@@ -282,11 +283,13 @@ test("captured post context folds into its owning physical Read result and canon
     { type: "message", message: { role: "user", content: [raw] } },
     {
       type: "hook_attachment",
-      event: "PostToolUse",
       phase: "post",
-      toolName: "Read",
+      attachment: {
+        type: "hook_additional_context",
+        hookName: "PostToolUse:Read",
+        content: capture.attachment.content,
+      },
       toolUseId: capture.attachment.toolUseID,
-      content: capture.attachment.content,
     },
   ];
   const projection = projectHookAttachmentHistory(rows);
@@ -418,7 +421,7 @@ test("capture snapshots precede existing observers and batch display mutations w
   const capture = f.records[0];
   assert.ok(capture?.facts.source === "tool-hook");
   assert.equal(capture.facts.outcome.additionalContext, "RAW BEFORE CALLBACK");
-  assert.equal(result.hookAttachments?.[0]?.content[0], "CHANGED DISPLAY");
+  assert.deepEqual(hookTexts(result.hookAttachments), ["CHANGED DISPLAY"]);
   assert.ok(Object.isFrozen(capture.facts.outcome));
   assert.ok(Object.isFrozen(capture.facts.toolInput));
 });
@@ -496,6 +499,6 @@ test("a custom registry without creation observations yields explicit unsupporte
   );
   assert.deepEqual(record.facts.aggregateAdditionalContext, ["UNOBSERVED"]);
   assert.equal(record.facts.unobservedResults.length, 1);
-  assert.deepEqual(result.hookAttachments?.[0]?.content, ["UNOBSERVED"]);
+  assert.deepEqual(hookTexts(result.hookAttachments), ["UNOBSERVED"]);
   assert.equal(f.stamps(), 0);
 });

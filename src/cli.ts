@@ -26,6 +26,7 @@ import {
   gitFacts,
   localDate,
   prependReminders,
+  roundAttachments,
   turnStartReminders,
 } from "./context-reminders.js";
 import { release, type as osType } from "node:os";
@@ -327,7 +328,6 @@ async function main(): Promise<void> {
         osVersion: `${osType()} ${release()}`,
         model: currentModel(),
         date: localDate(new Date()),
-        usedTokens: session.usage.input_tokens + session.usage.output_tokens,
         attribution: attributionTexts(
           currentModel(),
           launch.snapshot.effective,
@@ -732,10 +732,11 @@ async function main(): Promise<void> {
     const ready = notifications
       .splice(0)
       .filter((entry) => entry.sessionId === session.id);
-    if (ready.length)
+    for (const entry of ready)
       session.messages.push({
         role: "user",
-        content: ready.map((entry) => ({ type: "text", text: entry.text })),
+        origin: "task-notification",
+        content: [{ type: "text", text: entry.text }],
       });
     return ready.length;
   };
@@ -1701,6 +1702,8 @@ async function main(): Promise<void> {
           signal: turnSignal,
           onEvent,
           streamEvents: sdk !== undefined,
+          roundAttachments: (messages) =>
+            roundAttachments({ model, env: process.env }, messages),
           stopHook: (context) => {
             const { runtime } = activeHooks();
             if (!runtime.stop)

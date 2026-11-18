@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { sanitizeHookAttachmentText } from "./hook-attachment-projection.js";
+import { escapeReminderText } from "./attachments.js";
 import {
   validateNativeHookProgressRow,
   validateNativeStopHookSummaryRow,
@@ -432,17 +432,17 @@ export function renderNativePersistenceAttachment(
         !attachment.content
       )
         return [];
-      output = sanitizeHookAttachmentText(
+      output = escapeReminderText(
         `${attachment.hookName} hook success: ${attachment.content}`,
       );
       break;
     case "hook_blocking_error":
-      output = sanitizeHookAttachmentText(
+      output = escapeReminderText(
         `${attachment.hookName} hook blocking error from command: "${attachment.blockingError.command}": ${attachment.blockingError.blockingError}`,
       );
       break;
     case "hook_stopped_continuation":
-      output = sanitizeHookAttachmentText(
+      output = escapeReminderText(
         `${attachment.hookName} hook stopped continuation: ${attachment.message}`,
       );
       break;
@@ -551,7 +551,7 @@ export function renderNativePersistenceAttachment(
           "SessionStart context requires its native SessionStart identity",
         );
       if (!attachment.content.length) return [];
-      output = sanitizeHookAttachmentText(
+      output = escapeReminderText(
         `${attachment.hookName} hook additional context: ${attachment.content.join("\n")}`,
       );
       break;
