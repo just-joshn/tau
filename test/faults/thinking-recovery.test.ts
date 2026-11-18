@@ -674,7 +674,8 @@ test("HTTP agent resumes two signed thinking blocks without nudges and preserves
   assert.ok(
     f.headers.every(
       (headers) =>
-        headers["anthropic-beta"] === "thinking-resumption-2026-07-17",
+        headers["anthropic-beta"] ===
+        "thinking-resumption-2026-07-17,context-management-2025-06-27",
     ),
   );
   assert.ok(
@@ -965,7 +966,10 @@ test("rejected resumption beta retries an ordinary request once and remains disa
   );
   await f.provider.complete(request());
   assert.equal(f.bodies.length, 2);
-  assert.equal(f.headers[1]?.["anthropic-beta"], undefined);
+  assert.equal(
+    f.headers[1]?.["anthropic-beta"],
+    "context-management-2025-06-27",
+  );
   const another = new AnthropicProvider({
     apiKey: "dummy",
     thinkingResumption: true,

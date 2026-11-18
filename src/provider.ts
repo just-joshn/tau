@@ -69,6 +69,12 @@ import {
 import { clearedInputTokens } from "./context-usage.js";
 import { OutputLimitRepair } from "./output-limit.js";
 import { contextRejection } from "./context-error.js";
+import {
+  RequestFeatures,
+  resetRequestFeatureLatches,
+  type DisplayOptions,
+  type DisplayProbe,
+} from "./request-features.js";
 import { systemPromptText } from "./system-prompt.js";
 import {
   queryEffortOutputConfig,
@@ -204,6 +210,7 @@ export function resetProviderProcessLatches(): void {
   resumptionHeaderRefused = false;
   contextRefusedModels.clear();
   effortRefusedModels.clear();
+  resetRequestFeatureLatches();
 }
 type ContextRetry = {
   suppress: boolean;
@@ -248,6 +255,7 @@ export class AnthropicProvider implements Provider {
   private readonly learnedOutputLimits = new Map<string, number>();
   private readonly modelAvailable: ((model: string) => boolean) | undefined;
   private readonly queryEffortPolicy: ProviderQueryEffortPolicy | undefined;
+  private readonly features: RequestFeatures;
   private contextFacts(model: string) {
     return contextWindow(model, {
       ...this.contextPolicy,
@@ -421,6 +429,8 @@ export class AnthropicProvider implements Provider {
     fallbackModel?: string;
     thinking?: ThinkingOptions;
     thinkingResumption?: boolean;
+    /** The session's thinking display; absent, requests carry no `thinking.display`. */
+    thinkingDisplay?: DisplayOptions;
     contextPolicy?: ContextPolicy;
     modelAvailable?: (model: string) => boolean;
     queryEffortPolicy?: ProviderQueryEffortPolicy;
@@ -430,6 +440,7 @@ export class AnthropicProvider implements Provider {
     this.contextPolicy = options.contextPolicy ?? {};
     this.modelAvailable = options.modelAvailable;
     this.queryEffortPolicy = options.queryEffortPolicy;
+    this.features = new RequestFeatures(options.thinkingDisplay);
     this.enableThinkingResumption =
       options.thinkingResumption ??
       triBoolean(process.env.TAU_THINKING_RESUMPTION) === true;
@@ -494,6 +505,7 @@ export class AnthropicProvider implements Provider {
     prefixRepairs: { count: number },
     contextRetry: ContextRetry,
     outputRepair: OutputLimitRepair,
+    display: { probe: DisplayProbe },
   ): Promise<{
     response: Response;
     streaming: boolean;
@@ -559,6 +571,8 @@ export class AnthropicProvider implements Provider {
           })
         : { outputConfig: { ...existingOutputConfig }, needsEffortBeta: false };
     let projectedEffort = projection();
+    let plan = this.features.plan(request.model, thinking, display.probe);
+    const firstPartyHost = new URL(this.endpoint).host === "api.anthropic.com";
     let messages = request.messages;
     let wire = projectMessages(messages, request.resumeIncompleteThinking);
     let nativePrompt: NativePromptRequestPlan | undefined;
@@ -580,7 +594,10 @@ export class AnthropicProvider implements Provider {
           ? (nativePrompt?.tools ?? request.tools).map(withoutCacheControl)
           : (nativePrompt?.tools ?? request.tools),
         max_tokens: maxTokens,
-        thinking,
+        thinking: plan.thinking,
+        ...(plan.contextManagement
+          ? { context_management: plan.contextManagement }
+          : {}),
         ...(request.temperature === undefined
           ? {}
           : { temperature: request.temperature }),
@@ -599,6 +616,7 @@ export class AnthropicProvider implements Provider {
         ...request.thinking,
       });
       projectedEffort = projection();
+      plan = this.features.plan(request.model, thinking, display.probe);
       nativePrompt =
         request.nativePromptPreparation === undefined
           ? undefined
@@ -622,6 +640,7 @@ export class AnthropicProvider implements Provider {
       const betas = [
         resumptionBeta ? RESUMPTION_BETA : "",
         contextBeta ? LONG_CONTEXT_BETA : "",
+        ...plan.betas,
         projectedEffort.needsEffortBeta ? QUERY_EFFORT_BETA : "",
       ].filter(Boolean);
       if (request.resumeIncompleteThinking && !resumptionBeta)
@@ -690,6 +709,7 @@ export class AnthropicProvider implements Provider {
           startedAt,
           noteBegun: () => {
             outputRepair.onReplyBegun();
+            this.features.settle(display.probe);
             if (
               contextRetry.mode === "retrying" ||
               contextRetry.mode === "guessing"
@@ -742,6 +762,12 @@ export class AnthropicProvider implements Provider {
           effortRefusedModels.add(effortModel);
           continue;
         }
+        if (
+          !terminal &&
+          response.status === 400 &&
+          this.features.refusedBeta(request.model, info.message, plan)
+        )
+          continue;
         if (!terminal && response.status === 400) {
           const explicit =
             info.message.includes(LONG_CONTEXT_BETA) ||
@@ -799,6 +825,20 @@ export class AnthropicProvider implements Provider {
         }
         if (!terminal && outputRepair.onError(response.status, info, maxTokens))
           continue;
+        if (
+          !terminal &&
+          (response.status === 400 || response.status === 422) &&
+          info.type !== "billing_error" &&
+          !contextRejection(response.status, info.message)
+        ) {
+          const resend = display.probe === "idle";
+          display.probe = this.features.probeAfterRefusal(
+            display.probe,
+            plan,
+            firstPartyHost,
+          );
+          if (resend && display.probe === "withoutField") continue;
+        }
         const httpError = new ProviderHttpError(
           response.status,
           info.code,
@@ -880,6 +920,7 @@ export class AnthropicProvider implements Provider {
       changedModel = false;
     let prefixRepairs = { count: 0 };
     let contextRetry: ContextRetry = { suppress: false, mode: "idle" };
+    const display: { probe: DisplayProbe } = { probe: "idle" };
     const outputRepairFor = (name: string) =>
       new OutputLimitRepair(
         name,
@@ -932,6 +973,7 @@ export class AnthropicProvider implements Provider {
           prefixRepairs,
           contextRetry,
           outputRepair,
+          display,
         );
       } catch (error) {
         if (!(error instanceof ModelFallback)) throw error;

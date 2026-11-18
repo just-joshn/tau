@@ -14,6 +14,10 @@ import {
   largerCompactionModel,
 } from "../../src/compaction.js";
 import { contextRejection } from "../../src/context-error.js";
+import {
+  CONTEXT_MANAGEMENT_BETA,
+  THINKING_DISPLAY_UPDATES_BETA,
+} from "../../src/request-features.js";
 import { ProviderHttpError } from "../../src/http-error.js";
 import { contextWindow, LONG_CONTEXT_BETA } from "../../src/context-window.js";
 import {
@@ -1822,7 +1826,8 @@ test("a failed no-beta resend does not prove rejection or suppress the next quer
   );
   await f.provider.complete(request({ model: tagged }));
   assert.ok(f.betas[0]?.includes(LONG_CONTEXT_BETA));
-  assert.equal(f.betas[1], undefined);
+  // Only the long-context beta leaves the resend, as in the original.
+  assert.equal(f.betas[1], CONTEXT_MANAGEMENT_BETA);
   assert.ok(f.betas[2]?.includes(LONG_CONTEXT_BETA));
   assert.equal(f.provider.contextWindowTokens(tagged), 1000000);
   assert.equal(at(f.bodies, 0).model, model);
@@ -1845,5 +1850,67 @@ test("successful message-start after no-beta resend latches the model and shrink
   const next = new AnthropicProvider({ apiKey: "not-used" });
   assert.equal(next.contextWindowTokens(tagged), 200000);
   await f.provider.complete(request({ model: tagged }));
-  assert.equal(f.betas[2], undefined);
+  assert.equal(f.betas[2], CONTEXT_MANAGEMENT_BETA);
+});
+
+const refuse = (res: ServerResponse, message: string) => {
+  res.writeHead(400, { "content-type": "application/json" });
+  res.end(
+    JSON.stringify({ error: { type: "invalid_request_error", message } }),
+  );
+};
+
+test("context management rides with thinking and its beta, and a named refusal drops only it", async () => {
+  const f = await fixture((_body, res, count) =>
+    count === 1
+      ? refuse(res, "context_management: Extra inputs are not permitted")
+      : send(res),
+  );
+  await f.provider.complete(request());
+  await f.provider.complete(request());
+  assert.deepEqual(at(f.bodies, 0).context_management, {
+    edits: [{ type: "clear_thinking_20251015", keep: "all" }],
+  });
+  assert.equal(f.betas[0], CONTEXT_MANAGEMENT_BETA);
+  assert.equal(at(f.bodies, 1).context_management, undefined);
+  assert.equal(f.betas[1], undefined);
+  assert.equal(at(f.bodies, 2).context_management, undefined);
+});
+
+test("stream-json asks for display updates; an unexplained 400 resends once without the field, then stops sending it", async () => {
+  const f = await fixture(
+    (_body, res, count) => (count === 1 ? refuse(res, "nope") : send(res)),
+    { thinkingDisplay: { session: undefined } },
+  );
+  await f.provider.complete(request());
+  await f.provider.complete(request());
+  assert.deepEqual(at(f.bodies, 0).thinking, {
+    type: "enabled",
+    budget_tokens: 31999,
+    display: "updates",
+  });
+  assert.equal(
+    f.betas[0],
+    `${CONTEXT_MANAGEMENT_BETA},${THINKING_DISPLAY_UPDATES_BETA}`,
+  );
+  for (const index of [1, 2]) {
+    assert.deepEqual(at(f.bodies, index).thinking, {
+      type: "enabled",
+      budget_tokens: 31999,
+    });
+    assert.equal(f.betas[index], CONTEXT_MANAGEMENT_BETA);
+  }
+});
+
+test("print-mode json sends the omitted display without the updates beta", async () => {
+  const f = await fixture((_body, res) => send(res), {
+    thinkingDisplay: { session: "omitted" },
+  });
+  await f.provider.complete(request());
+  assert.deepEqual(at(f.bodies, 0).thinking, {
+    type: "enabled",
+    budget_tokens: 31999,
+    display: "omitted",
+  });
+  assert.equal(f.betas[0], CONTEXT_MANAGEMENT_BETA);
 });
