@@ -19,6 +19,7 @@ import {
   type BashSessionKind,
 } from "./bash-description.js";
 import { describedShell, selectShell } from "./bash-shell.js";
+import { shellQuote, usableSnapshot } from "./shell-snapshot.js";
 import {
   createBackgroundShells,
   type BackgroundShells,
@@ -362,13 +363,16 @@ const signalCode = (signal: NodeJS.Signals | null) =>
 const quote = (text: string) => `'${text.replaceAll("'", `'"'"'`)}'`;
 const HEREDOC = /<<-?\s*['"]?[A-Za-z_]/;
 const INPUT_REDIRECT = /(?:^|[\s;&|])<(?![<(])\s*\S+/;
-/** buildExecCommand(): shell options, the quoted command, then record `pwd -P`. */
+/** buildExecCommand(): the snapshot, shell options, the quoted command, then record `pwd -P`. */
 function commandString(
   shell: string,
   command: string,
   cwdFile: string,
+  snapshot: string | undefined,
 ): string {
   const steps: string[] = [];
+  if (snapshot !== undefined)
+    steps.push(`source ${shellQuote(snapshot)} 2>/dev/null || true`);
   if (shell.includes("bash"))
     steps.push("\\builtin shopt -u extglob 2>/dev/null || true");
   else if (shell.includes("zsh"))
@@ -391,16 +395,23 @@ function spawnShell(request: {
   cwdFile: string;
   outputFile: string;
   env: NodeJS.ProcessEnv;
+  snapshot: string | undefined;
 }): RunningShell & { pid: number | undefined } {
   const fd = openSync(request.outputFile, "w");
   let child;
   try {
+    // getSpawnArgs(): a sourced snapshot replaces the login shell.
     child = spawn(
       request.shell,
       [
         "-c",
-        "-l",
-        commandString(request.shell, request.command, request.cwdFile),
+        ...(request.snapshot === undefined ? ["-l"] : []),
+        commandString(
+          request.shell,
+          request.command,
+          request.cwdFile,
+          request.snapshot,
+        ),
       ],
       {
         cwd: request.cwd,
@@ -616,8 +627,9 @@ export function createShellHost(options: ShellHostOptions) {
     );
     const directory = await liveCwd();
     if (typeof directory !== "string") return directory;
-    context.signal.throwIfAborted();
     const shell = selectShell(env);
+    const snapshot = await usableSnapshot(shell, env);
+    context.signal.throwIfAborted();
     const id = `b${[...randomBytes(8)].map((byte) => "0123456789abcdefghijklmnopqrstuvwxyz"[byte % 36]).join("")}`;
     const outputFile = path.join(tasksDirectory(), `${id}.output`);
     const cwdFile = path.join(
@@ -631,6 +643,7 @@ export function createShellHost(options: ShellHostOptions) {
       cwdFile,
       outputFile,
       env: childEnv(shell),
+      snapshot,
     });
     const description = input.description || input.command;
     const deadline = (explicit: number | undefined) =>
