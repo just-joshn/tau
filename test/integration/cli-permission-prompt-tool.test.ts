@@ -123,6 +123,9 @@ function parsed(run: CliRun) {
   return resultSchema.parse(JSON.parse(run.stdout));
 }
 
+// ExitPlanMode is a deferred tool; these cases call it without a ToolSearch round.
+const EAGER_PLAN_TOOLS = { ENABLE_TOOL_SEARCH: "false" };
+
 describe("plan approval through --permission-prompt-tool", () => {
   const exitPlan = call("ExitPlanMode", { plan: "# Plan\n" }, "exit-1");
 
@@ -137,6 +140,7 @@ describe("plan approval through --permission-prompt-tool", () => {
     });
     const run = await runCli({
       provider,
+      env: EAGER_PLAN_TOOLS,
       args: [
         "-p",
         "plan",
@@ -163,6 +167,7 @@ describe("plan approval through --permission-prompt-tool", () => {
     const provider = await startMockProvider([exitPlan, said("done")]);
     const run = await runCli({
       provider,
+      env: EAGER_PLAN_TOOLS,
       args: ["-p", "plan", "--permission-mode", "plan", ...BRIDGE],
     });
     expect(run.exitCode).toBe(0);
@@ -177,6 +182,7 @@ describe("plan approval through --permission-prompt-tool", () => {
     const bridge = gate({ behavior: "deny", message: "halt", interrupt: true });
     const run = await runCli({
       provider,
+      env: EAGER_PLAN_TOOLS,
       args: [
         "-p",
         "plan",
