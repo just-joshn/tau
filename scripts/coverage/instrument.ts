@@ -18,7 +18,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 declare global {
   var __coverage__: CoverageMapData | undefined;
@@ -86,19 +86,26 @@ function installLoader() {
   });
 }
 
-// Options are part of the version so changing them invalidates the cache.
+// Options and the versions of istanbul and the babel it parses and prints
+// with are part of the key, so upgrading any of them invalidates the cache.
 function instrumenterVersion(): string {
-  const manifest: unknown = JSON.parse(
-    readFileSync(
-      Bun.resolveSync("istanbul-lib-instrument/package.json", root),
-      "utf8",
-    ),
+  const istanbul = Bun.resolveSync(
+    "istanbul-lib-instrument/package.json",
+    root,
   );
-  const installed =
-    typeof manifest === "object" && manifest !== null && "version" in manifest
-      ? String(manifest.version)
-      : "unknown";
-  return `${installed} ${JSON.stringify(INSTRUMENTER_OPTIONS)}`;
+  const babel = Bun.resolveSync("@babel/core/package.json", dirname(istanbul));
+  const parser = Bun.resolveSync("@babel/parser/package.json", dirname(babel));
+  const versions = [istanbul, babel, parser].map(packageVersion).join(" ");
+  return `${versions} ${JSON.stringify(INSTRUMENTER_OPTIONS)}`;
+}
+
+function packageVersion(manifestPath: string): string {
+  const manifest: unknown = JSON.parse(readFileSync(manifestPath, "utf8"));
+  return typeof manifest === "object" &&
+    manifest !== null &&
+    "version" in manifest
+    ? String(manifest.version)
+    : "unknown";
 }
 
 async function installFlush(rawDir: string) {
