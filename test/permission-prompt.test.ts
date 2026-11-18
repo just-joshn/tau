@@ -1,4 +1,5 @@
-import test from "node:test";
+import { test, onTestFinished } from "bun:test";
+import { z } from "zod";
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -19,6 +20,13 @@ import {
 } from "../src/plan-runtime.js";
 import { wrapPlanRuntime } from "../src/plan-session.js";
 
+function at<T>(items: readonly T[], index: number): T {
+  const item = items.at(index);
+  if (item === undefined) assert.fail(`no item at index ${String(index)}`);
+  return item;
+}
+
+const planInput = z.object({ input: z.object({ plan: z.string() }) });
 const toolName = "mcp__owned__permit";
 const call = (
   name = "Write",
@@ -245,7 +253,8 @@ test("an MCP target interaction requirement rejects allow without rejecting a na
               requiresUserInteraction: true,
             }
           : f.registry.lookup(name),
-      callTool: f.registry.callTool,
+      callTool: (name, input, signal) =>
+        f.registry.callTool(name, input, signal),
     };
   let applied = 0;
   const prompt = createMcpPermissionPrompt({
@@ -338,7 +347,7 @@ test("valid permission updates are preserved without application and explicit ho
     mode: "default",
     destination: "session",
   });
-  assert.match(diagnostics[0]!, /has not applied/);
+  assert.match(at(diagnostics, 0), /has not applied/);
   let applied = 0;
   const applying = createMcpPermissionPrompt({
     toolName,
@@ -446,7 +455,7 @@ test("RPC/application errors never grant and aborted in-flight replies cannot ap
     applied = 0;
   const pendingRegistry: ExternalToolRegistry = {
     definitions: [],
-    lookup: f.registry.lookup,
+    lookup: (name) => f.registry.lookup(name),
     callTool: async () =>
       new Promise((resolve) => {
         finish = resolve;
@@ -491,7 +500,7 @@ test("abort before dispatch and synchronous transport cancellation produce no st
   const active = new AbortController(),
     registry: ExternalToolRegistry = {
       definitions: [],
-      lookup: f.registry.lookup,
+      lookup: (name) => f.registry.lookup(name),
       async callTool() {
         active.abort(new Error("cancelled while starting"));
         throw new Error("transport cancelled");
@@ -506,9 +515,9 @@ test("abort before dispatch and synchronous transport cancellation produce no st
   );
 });
 
-test("empty MCP approval replacement makes the plan call read fresh user edits instead of overwriting a snapshot", async (t) => {
+test("empty MCP approval replacement makes the plan call read fresh user edits instead of overwriting a snapshot", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "tau-permission-fresh-plan-"));
-  t.after(() => rm(cwd, { recursive: true, force: true }));
+  onTestFinished(() => rm(cwd, { recursive: true, force: true }));
   const directory = join(cwd, "plans");
   await mkdir(directory);
   const files = new PlanFileManager({
@@ -522,12 +531,9 @@ test("empty MCP approval replacement makes the plan call read fresh user edits i
   const f = fixture(),
     registry: ExternalToolRegistry = {
       definitions: [],
-      lookup: f.registry.lookup,
+      lookup: (name) => f.registry.lookup(name),
       async callTool(_name, input) {
-        assert.equal(
-          (input as { input: { plan: string } }).input.plan,
-          "old snapshot",
-        );
+        assert.equal(planInput.parse(input).input.plan, "old snapshot");
         await writeFile(path, "fresh user edit");
         return {
           raw: text({ behavior: "allow", updatedInput: {} }),
@@ -580,9 +586,9 @@ test("empty MCP approval replacement makes the plan call read fresh user edits i
   assert.equal(await readFile(path, "utf8"), "fresh user edit");
 });
 
-test("permission prompt runs against an owned MCP stdio peer with exact request/response casing", async (t) => {
+test("permission prompt runs against an owned MCP stdio peer with exact request/response casing", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "tau-permission-prompt-"));
-  t.after(() => rm(cwd, { recursive: true, force: true }));
+  onTestFinished(() => rm(cwd, { recursive: true, force: true }));
   const file = join(cwd, "server.mjs"),
     log = join(cwd, "calls.jsonl");
   await writeFile(
@@ -593,7 +599,7 @@ test("permission prompt runs against an owned MCP stdio peer with exact request/
     { owned: { command: process.execPath, args: [file, log] } },
     { cwd, env: {}, negotiation: "legacy" },
   );
-  t.after(() => manager.close());
+  onTestFinished(() => manager.close());
   const prompt = createMcpPermissionPrompt({ toolName, registry: manager }),
     owned = call("ExitPlanMode", {
       plan: "OWNED_PLAN_FINAL\n",
@@ -614,7 +620,7 @@ test("permission prompt runs against an owned MCP stdio peer with exact request/
   const recorded = (await readFile(log, "utf8"))
     .trim()
     .split("\n")
-    .map((line) => JSON.parse(line));
+    .map((line): unknown => JSON.parse(line));
   assert.deepEqual(
     recorded,
     [0, 1].map(() => ({

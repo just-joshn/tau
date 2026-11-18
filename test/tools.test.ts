@@ -13,15 +13,15 @@ import {
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import test, { type TestContext } from "node:test";
+import { test, onTestFinished } from "bun:test";
 import { createTools } from "../src/tools.js";
 import { ReadState } from "../src/read-state.js";
 import type { ToolPolicy } from "../src/tool-policy.js";
 import type { PermissionMode } from "../src/types.js";
 
-async function fixture(t: TestContext) {
+async function fixture() {
   const base = await mkdtemp(path.join(os.tmpdir(), "tau-tools-"));
-  t.after(() => rm(base, { recursive: true, force: true }));
+  onTestFinished(() => rm(base, { recursive: true, force: true }));
   const cwd = path.join(base, "root");
   await mkdir(cwd);
   const approvals: string[] = [];
@@ -50,8 +50,8 @@ async function fixture(t: TestContext) {
   return { base, cwd, tools, run, approvals };
 }
 
-test("filesystem bounds include symlinks and missing parents in bypass mode", async (t) => {
-  const { base, cwd, tools, run } = await fixture(t);
+test("filesystem bounds include symlinks and missing parents in bypass mode", async () => {
+  const { base, cwd, tools, run } = await fixture();
   await writeFile(path.join(base, "secret"), "secret");
   await symlink(base, path.join(cwd, "escape"));
   for (const file_path of [
@@ -75,8 +75,8 @@ test("filesystem bounds include symlinks and missing parents in bypass mode", as
   );
 });
 
-test("permission modes gate edits and unsandboxed Bash", async (t) => {
-  const { tools, run, approvals } = await fixture(t);
+test("permission modes gate edits and unsandboxed Bash", async () => {
+  const { tools, run, approvals } = await fixture();
   assert.equal(
     (
       await run(tools("default", false), "Write", {
@@ -120,8 +120,8 @@ test("permission modes gate edits and unsandboxed Bash", async (t) => {
   );
 });
 
-test("policy availability and denial override every permission mode", async (t) => {
-  const { tools, run, approvals } = await fixture(t);
+test("policy availability and denial override every permission mode", async () => {
+  const { tools, run, approvals } = await fixture();
   for (const mode of [
     "default",
     "acceptEdits",
@@ -156,8 +156,8 @@ test("policy availability and denial override every permission mode", async (t) 
   assert.deepEqual(approvals, []);
 });
 
-test("explicit allow preapproves existing tools but cannot bypass plan or availability", async (t) => {
-  const { tools, run, approvals, cwd } = await fixture(t);
+test("explicit allow preapproves existing tools but cannot bypass plan or availability", async () => {
+  const { tools, run, approvals, cwd } = await fixture();
   const policy: ToolPolicy = {
     allowedTools: ["Write", "Edit", "Bash"],
     disallowedTools: [],
@@ -204,8 +204,8 @@ test("explicit allow preapproves existing tools but cannot bypass plan or availa
   assert.deepEqual(approvals, []);
 });
 
-test("Edit requires a unique nonempty exact match", async (t) => {
-  const { cwd, tools, run } = await fixture(t);
+test("Edit requires a unique nonempty exact match", async () => {
+  const { cwd, tools, run } = await fixture();
   await writeFile(path.join(cwd, "a"), "one one");
   await run(tools(), "Read", { file_path: "a" });
   for (const old_string of ["", "one", "absent"])
@@ -232,8 +232,8 @@ test("Edit requires a unique nonempty exact match", async (t) => {
   assert.equal(await readFile(path.join(cwd, "a"), "utf8"), "two");
 });
 
-test("searches skip excluded trees and symlinks and bound reads", async (t) => {
-  const { cwd, base, tools, run } = await fixture(t);
+test("searches skip excluded trees and symlinks and bound reads", async () => {
+  const { cwd, base, tools, run } = await fixture();
   await mkdir(path.join(cwd, "nested"));
   await writeFile(path.join(cwd, "nested/a.ts"), "needle\nother");
   for (const dir of [".git", "node_modules", ".tau"]) {
@@ -258,8 +258,8 @@ test("searches skip excluded trees and symlinks and bound reads", async (t) => {
   );
 });
 
-test("approval descriptions show bounded proposed Write and Edit content", async (t) => {
-  const { tools, run, approvals, cwd } = await fixture(t);
+test("approval descriptions show bounded proposed Write and Edit content", async () => {
+  const { tools, run, approvals, cwd } = await fixture();
   await run(tools("default", false), "Write", {
     file_path: "a",
     content: "proposed text",
@@ -282,8 +282,8 @@ test("approval descriptions show bounded proposed Write and Edit content", async
   assert.ok((approvals.at(-1) ?? "").length < 66000);
 });
 
-test("Glob rejects NUL inputs, unsupported fields and non-directory search roots", async (t) => {
-  const { cwd, tools, run } = await fixture(t);
+test("Glob rejects NUL inputs, unsupported fields and non-directory search roots", async () => {
+  const { cwd, tools, run } = await fixture();
   await writeFile(path.join(cwd, "a.txt"), "fixture");
   for (const input of [
     { pattern: "x\0x" },
@@ -298,8 +298,8 @@ test("Glob rejects NUL inputs, unsupported fields and non-directory search roots
   );
 });
 
-test("Bash drains large bounded output and preserves nonzero status", async (t) => {
-  const { tools, run } = await fixture(t);
+test("Bash drains large bounded output and preserves nonzero status", async () => {
+  const { tools, run } = await fixture();
   for (let attempt = 0; attempt < 20; attempt++) {
     const length = 40000 + Math.floor(Math.random() * 20000);
     const expected = "x".repeat(length);
@@ -316,8 +316,8 @@ test("Bash drains large bounded output and preserves nonzero status", async (t) 
   assert.equal(failed.is_error, true);
 });
 
-test("Bash timeouts and aborts return promptly even with inherited pipes", async (t) => {
-  const { tools, run } = await fixture(t);
+test("Bash timeouts and aborts return promptly even with inherited pipes", async () => {
+  const { tools, run } = await fixture();
   const start = Date.now();
   assert.match(
     (await run(tools(), "Bash", { command: "sleep 30", timeout: 50 })).content,
@@ -353,8 +353,8 @@ test("Bash timeouts and aborts return promptly even with inherited pipes", async
   );
 });
 
-test("bounded UTF-8 output truncates without replacement chars across tools", async (t) => {
-  const { cwd, tools, run, approvals } = await fixture(t);
+test("bounded UTF-8 output truncates without replacement chars across tools", async () => {
+  const { cwd, tools, run, approvals } = await fixture();
   const euro = "€";
   const maxOut = 65536 + Buffer.byteLength("\n[output truncated]");
   const assertBounded = (text: string, label: string) => {
@@ -440,8 +440,8 @@ test("bounded UTF-8 output truncates without replacement chars across tools", as
 const leftovers = async (dir: string) =>
   (await readdir(dir)).filter((name) => name.includes(".tmp."));
 
-test("Edit supports replace_all and publishes it as an optional input", async (t) => {
-  const { cwd, tools, run } = await fixture(t);
+test("Edit supports replace_all and publishes it as an optional input", async () => {
+  const { cwd, tools, run } = await fixture();
   await writeFile(path.join(cwd, "a"), "x x x");
   await run(tools(), "Read", { file_path: "a" });
   const edit = (replace_all?: boolean) =>
@@ -487,8 +487,8 @@ test("Edit supports replace_all and publishes it as an optional input", async (t
   );
 });
 
-test("Edit errors leave content intact and no temp files", async (t) => {
-  const { cwd, tools, run } = await fixture(t);
+test("Edit errors leave content intact and no temp files", async () => {
+  const { cwd, tools, run } = await fixture();
   await writeFile(path.join(cwd, "a"), "one two");
   await run(tools(), "Read", { file_path: "a" });
   for (const [old_string, new_string] of [
@@ -518,8 +518,8 @@ test("Edit errors leave content intact and no temp files", async (t) => {
   assert.deepEqual(await leftovers(cwd), []);
 });
 
-test("Edit keeps CRLF line endings and a BOM on disk", async (t) => {
-  const { cwd, tools, run } = await fixture(t);
+test("Edit keeps CRLF line endings and a BOM on disk", async () => {
+  const { cwd, tools, run } = await fixture();
   await writeFile(path.join(cwd, "a"), "\uFEFFone\r\ntwo\r\nthree\r\n");
   await run(tools(), "Read", { file_path: "a" });
   const result = await run(tools(), "Edit", {
@@ -534,8 +534,8 @@ test("Edit keeps CRLF line endings and a BOM on disk", async (t) => {
   );
 });
 
-test("Edit with empty new_string removes the trailing newline and treats $ literally", async (t) => {
-  const { cwd, tools, run } = await fixture(t);
+test("Edit with empty new_string removes the trailing newline and treats $ literally", async () => {
+  const { cwd, tools, run } = await fixture();
   await writeFile(path.join(cwd, "a"), "a\nb\nc\n");
   await run(tools(), "Read", { file_path: "a" });
   await run(tools(), "Edit", {
@@ -552,8 +552,8 @@ test("Edit with empty new_string removes the trailing newline and treats $ liter
   assert.equal(await readFile(path.join(cwd, "a"), "utf8"), "a\n$&-$1\n");
 });
 
-test("Write and Edit preserve file mode and leave no temp files", async (t) => {
-  const { cwd, tools, run } = await fixture(t);
+test("Write and Edit preserve file mode and leave no temp files", async () => {
+  const { cwd, tools, run } = await fixture();
   const file = path.join(cwd, "a");
   await writeFile(file, "one");
   await chmod(file, 0o640);
@@ -579,8 +579,8 @@ test("Write and Edit preserve file mode and leave no temp files", async (t) => {
   assert.deepEqual(await leftovers(cwd), []);
 });
 
-test("Write and Edit refuse symlink targets without touching the link target", async (t) => {
-  const { cwd, tools, run } = await fixture(t);
+test("Write and Edit refuse symlink targets without touching the link target", async () => {
+  const { cwd, tools, run } = await fixture();
   await writeFile(path.join(cwd, "real"), "real content");
   await symlink("real", path.join(cwd, "link"));
   assert.equal(
@@ -603,10 +603,10 @@ test("Write and Edit refuse symlink targets without touching the link target", a
   assert.deepEqual(await leftovers(cwd), []);
 });
 
-test("settings ask on Read/Glob/Grep precedes bypass and explicit allow without removing advertisement", async (t) => {
+test("settings ask on Read/Glob/Grep precedes bypass and explicit allow without removing advertisement", async () => {
   const { combineToolPolicy, parseToolPolicy } =
     await import("../src/tool-policy.js");
-  const { tools, run, approvals, cwd } = await fixture(t);
+  const { tools, run, approvals, cwd } = await fixture();
   await writeFile(path.join(cwd, "data.txt"), "needle");
   for (const mode of [
     "default",
@@ -651,10 +651,10 @@ test("settings ask on Read/Glob/Grep precedes bypass and explicit allow without 
   assert.equal(approvals.length, 13);
 });
 
-test("settings allow/deny/ask reaches mutation dispatch for every source and deny always wins", async (t) => {
+test("settings allow/deny/ask reaches mutation dispatch for every source and deny always wins", async () => {
   const { combineToolPolicy, parseToolPolicy } =
     await import("../src/tool-policy.js");
-  const { tools, run, approvals, cwd } = await fixture(t);
+  const { tools, run, approvals, cwd } = await fixture();
   const sources = [
     "userSettings",
     "projectSettings",
@@ -705,10 +705,10 @@ test("settings allow/deny/ask reaches mutation dispatch for every source and den
   }
 });
 
-test("settings Read deny protects new Write and existing Edit, while CLI Read narrowing does not inherit", async (t) => {
+test("settings Read deny protects new Write and existing Edit, while CLI Read narrowing does not inherit", async () => {
   const { combineToolPolicy, parseToolPolicy } =
     await import("../src/tool-policy.js");
-  const { tools, run, cwd, approvals } = await fixture(t);
+  const { tools, run, cwd, approvals } = await fixture();
   const cli = parseToolPolicy({
     allowedTools: ["Write,Edit"],
     disallowedTools: ["Read"],
@@ -752,8 +752,8 @@ test("settings Read deny protects new Write and existing Edit, while CLI Read na
   assert.deepEqual(approvals, []);
 });
 
-test("dispatch metadata distinguishes permission/input rejection from an ordinary missing-file Read", async (t) => {
-  const { tools, run } = await fixture(t);
+test("dispatch metadata distinguishes permission/input rejection from an ordinary missing-file Read", async () => {
+  const { tools, run } = await fixture();
   const asked = tools("bypassPermissions", false, {
     allowedTools: [],
     disallowedTools: [],
@@ -774,8 +774,8 @@ test("dispatch metadata distinguishes permission/input rejection from an ordinar
   assert.equal(escape.permissionDenied, true);
 });
 
-test("sensitive .claude writes/edits ask before whole allow or acceptEdits, while bypass waives the ordinary hold", async (t) => {
-  const { tools, run, cwd, approvals } = await fixture(t);
+test("sensitive .claude writes/edits ask before whole allow or acceptEdits, while bypass waives the ordinary hold", async () => {
+  const { tools, run, cwd, approvals } = await fixture();
   await mkdir(path.join(cwd, "nested/.claude"), { recursive: true });
   const file = "nested/.claude/CLAUDE.md";
   await writeFile(path.join(cwd, file), "instructions");
@@ -830,8 +830,8 @@ test("sensitive .claude writes/edits ask before whole allow or acceptEdits, whil
   assert.equal(approvals.length, 5);
 });
 
-test("sensitive holds preserve plain CLAUDE and launch/worktree exceptions and can be accepted once", async (t) => {
-  const { tools, run, cwd, approvals } = await fixture(t);
+test("sensitive holds preserve plain CLAUDE and launch/worktree exceptions and can be accepted once", async () => {
+  const { tools, run, cwd, approvals } = await fixture();
   const policy: ToolPolicy = { allowedTools: ["Write"], disallowedTools: [] };
   for (const file of [
     "CLAUDE.md",

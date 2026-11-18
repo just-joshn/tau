@@ -1,6 +1,6 @@
-import test, { type TestContext } from "node:test";
+import { test, onTestFinished } from "bun:test";
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { createServer } from "node:http";
 import {
   mkdir,
@@ -71,7 +71,7 @@ function result(body: Body, id: string) {
     }
   throw new Error(`Owned result missing: ${id}`);
 }
-async function fixture(t: TestContext) {
+async function fixture() {
   const root = await realpath(
       await mkdtemp(join(tmpdir(), "tau-child-capabilities-")),
     ),
@@ -86,51 +86,79 @@ async function fixture(t: TestContext) {
     join(root, "managed"),
   ])
     await mkdir(path, { recursive: true });
-  t.after(() => rm(root, { recursive: true, force: true }));
   const bodies: Body[] = [];
   let responder: (body: Body, index: number) => Action = () => ({
     type: "text",
     text: "done",
   });
-  const server = createServer(async (request, response) => {
-    let raw = "";
-    for await (const chunk of request) raw += String(chunk);
-    const body = bodySchema.parse(JSON.parse(raw)),
-      index = bodies.push(body),
-      block = responder(body, index);
-    response.writeHead(200, { "content-type": "text/event-stream" });
-    response.end(
-      fixtureSse([
-        {
-          type: "message_start",
-          message: {
-            role: "assistant",
-            id: `capability-${index}`,
-            content: [],
-            usage: { input_tokens: 10, output_tokens: 0 },
+  const children = new Set<ChildProcess>();
+  let handlerError: unknown;
+  const server = createServer((request, response) => {
+    void (async () => {
+      let raw = "";
+      for await (const chunk of request) raw += String(chunk);
+      const body = bodySchema.parse(JSON.parse(raw)),
+        index = bodies.push(body);
+      let block: Action;
+      try {
+        block =
+          handlerError === undefined
+            ? responder(body, index)
+            : { type: "text", text: "OWNED_FIXTURE_FAILED" };
+      } catch (error) {
+        handlerError = error;
+        block = { type: "text", text: "OWNED_FIXTURE_FAILED" };
+      }
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.end(
+        fixtureSse([
+          {
+            type: "message_start",
+            message: {
+              role: "assistant",
+              id: `capability-${index}`,
+              content: [],
+              usage: { input_tokens: 10, output_tokens: 0 },
+            },
           },
-        },
-        { type: "content_block_start", index: 0, content_block: block },
-        { type: "content_block_stop", index: 0 },
-        {
-          type: "message_delta",
-          delta: {
-            stop_reason: block.type === "tool_use" ? "tool_use" : "end_turn",
+          { type: "content_block_start", index: 0, content_block: block },
+          { type: "content_block_stop", index: 0 },
+          {
+            type: "message_delta",
+            delta: {
+              stop_reason: block.type === "tool_use" ? "tool_use" : "end_turn",
+            },
+            usage: { output_tokens: 3 },
           },
-          usage: { output_tokens: 3 },
-        },
-        { type: "message_stop" },
-      ]),
-    );
+          { type: "message_stop" },
+        ]),
+      );
+    })().catch((error) => {
+      handlerError = error;
+      response.destroy();
+    });
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  t.after(
-    () =>
-      new Promise<void>((resolve) => {
-        server.closeAllConnections();
-        server.close(() => resolve());
-      }),
-  );
+  onTestFinished(async () => {
+    await Promise.all(
+      [...children].map(
+        (child) =>
+          new Promise<void>((resolve) => {
+            if (child.exitCode !== null || child.signalCode !== null) {
+              resolve();
+              return;
+            }
+            child.once("close", () => resolve());
+            child.kill("SIGTERM");
+          }),
+      ),
+    );
+    await new Promise<void>((resolve) => {
+      server.closeAllConnections();
+      server.close(() => resolve());
+    });
+    await rm(root, { recursive: true, force: true });
+  });
   const address = server.address();
   if (!address || typeof address === "string")
     throw new Error("Owned API address missing");
@@ -140,7 +168,7 @@ async function fixture(t: TestContext) {
         const child = spawn(
           process.execPath,
           [
-            fileURLToPath(new URL("../src/cli.js", import.meta.url)),
+            fileURLToPath(new URL("../src/cli.ts", import.meta.url)),
             "--cwd",
             cwd,
             "-p",
@@ -165,12 +193,15 @@ async function fixture(t: TestContext) {
               CLAUDE_CODE_ENABLE_TASKS: "1",
               CLAUDE_CODE_ENABLE_TODO_TOOLS: "1",
               CLAUDE_CODE_TASK_LIST_ID: "",
+              CLAUDE_CODE_EFFORT_LEVEL: "",
+              CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS: "",
               ANTHROPIC_API_KEY: "owned-dummy",
               ANTHROPIC_BASE_URL: `http://127.0.0.1:${address.port}`,
             },
             stdio: ["ignore", "pipe", "pipe"],
           },
         );
+        children.add(child);
         let stdout = "",
           stderr = "";
         child.stdout.on("data", (chunk: Buffer) => {
@@ -180,7 +211,11 @@ async function fixture(t: TestContext) {
           stderr += chunk.toString();
         });
         child.on("error", reject);
-        child.on("close", (code) => resolve({ code, stdout, stderr }));
+        child.on("close", (code) => {
+          children.delete(child);
+          if (handlerError !== undefined) reject(handlerError);
+          else resolve({ code, stdout, stderr });
+        });
       },
     );
   const skill = async (
@@ -211,9 +246,8 @@ async function fixture(t: TestContext) {
 
 test(
   "compiled omitted Agent type runs built-in general-purpose with fresh child history",
-  { timeout: 15000 },
-  async (t) => {
-    const f = await fixture(t);
+  async () => {
+    const f = await fixture();
     await writeFile(join(f.cwd, "input.txt"), "OWNED_DEFAULT_BYTES");
     f.respond((_body, index) =>
       index === 1
@@ -247,13 +281,73 @@ test(
       /DEFAULT_CHILD_REPORT/,
     );
   },
+  { timeout: 15000 },
+);
+
+test(
+  "built-in Explore omits all initial instruction context and still discovers nested instructions after Read",
+  async () => {
+    const f = await fixture();
+    await mkdir(join(f.cwd, "nested"));
+    await writeFile(join(f.cwd, "CLAUDE.md"), "INITIAL_PROJECT_PRIVATE");
+    await writeFile(join(f.config, "CLAUDE.md"), "INITIAL_USER_PRIVATE");
+    await writeFile(
+      join(f.root, "managed", "CLAUDE.md"),
+      "INITIAL_MANAGED_PRIVATE",
+    );
+    await writeFile(join(f.cwd, "nested", "CLAUDE.md"), "NESTED_READ_GUIDANCE");
+    await writeFile(join(f.cwd, "nested", "input.txt"), "NESTED_BYTES");
+    f.respond((body, index) => {
+      if (index === 1) {
+        assert.match(userText(body), /INITIAL_PROJECT_PRIVATE/);
+        assert.match(userText(body), /INITIAL_USER_PRIVATE/);
+        assert.match(userText(body), /INITIAL_MANAGED_PRIVATE/);
+        return use(
+          "Agent",
+          {
+            description: "Explore owned tree",
+            prompt: "EXPLORE_CHILD_TASK",
+            subagent_type: "Explore",
+            run_in_background: false,
+          },
+          "explore",
+        );
+      }
+      if (index === 2) {
+        assert.equal(userText(body).includes("INITIAL_"), false);
+        assert.equal(
+          body.tools.some((tool) =>
+            ["Write", "Edit", "Agent"].includes(tool.name),
+          ),
+          false,
+        );
+        return use("Read", { file_path: "nested/input.txt" }, "nested-read");
+      }
+      if (index === 3) {
+        assert.match(
+          JSON.stringify(result(body, "nested-read")),
+          /NESTED_READ_GUIDANCE/,
+        );
+        assert.equal(
+          JSON.stringify(body.messages).includes("INITIAL_MANAGED_PRIVATE"),
+          false,
+        );
+        return { type: "text", text: "EXPLORE_REPORT" };
+      }
+      assert.match(JSON.stringify(result(body, "explore")), /EXPLORE_REPORT/);
+      return { type: "text", text: "PARENT_EXPLORED" };
+    });
+    const execution = await f.cli("Agent,Read,Write,Edit");
+    assert.equal(execution.code, 0, execution.stderr);
+    assert.equal(f.bodies.length, 4);
+  },
+  { timeout: 15000 },
 );
 
 test(
   "compiled foreground child preloads passively, applies inline Skill locally and shares parent Task CRUD",
-  { timeout: 15000 },
-  async (t) => {
-    const f = await fixture(t);
+  async () => {
+    const f = await fixture();
     await f.skill(
       "passive-a",
       {
@@ -293,6 +387,7 @@ test(
     await writeFile(
       join(f.config, "settings.json"),
       JSON.stringify({
+        permissions: { allow: ["Skill(inline)"] },
         hooks: {
           SubagentStart: [
             {
@@ -336,6 +431,11 @@ test(
           assert.equal(result(body, "before").is_error, true);
           return use("Skill", { skill: "inline" }, "skill");
         }
+        assert.equal(
+          result(body, "skill").is_error,
+          undefined,
+          JSON.stringify(result(body, "skill")),
+        );
         assert.equal(body.model, "claude-sonnet-4-6");
         assert.equal(body.output_config?.effort, "low");
         if (step === 3) {
@@ -419,4 +519,5 @@ test(
     assert.equal(stored.status, "completed");
     assert.equal(stored.owner, undefined);
   },
+  { timeout: 15000 },
 );

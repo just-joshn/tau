@@ -1,10 +1,21 @@
+import { streamEventSchema } from "../src/message-stream.js";
+
+type StreamEvent = ReturnType<typeof streamEventSchema.parse>;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
 /** Convenience fixture blocks are encoded as genuine empty-start + delta API events. */
-export function fixtureEvents(events: readonly any[]): any[] {
+function expandEvents(events: readonly unknown[]): unknown[] {
   return events.flatMap((event) => {
     const block =
-      event.type === "content_block_start" ? event.content_block : undefined;
+      isRecord(event) && event.type === "content_block_start"
+        ? event.content_block
+        : undefined;
+    if (!isRecord(event) || !isRecord(block)) return [event];
     if (
-      block?.type === "text" &&
+      block.type === "text" &&
       typeof block.text === "string" &&
       block.text !== ""
     )
@@ -17,9 +28,8 @@ export function fixtureEvents(events: readonly any[]): any[] {
         },
       ];
     if (
-      block?.type === "tool_use" &&
-      block.input &&
-      typeof block.input === "object" &&
+      block.type === "tool_use" &&
+      isRecord(block.input) &&
       Object.keys(block.input).length
     )
       return [
@@ -36,11 +46,14 @@ export function fixtureEvents(events: readonly any[]): any[] {
     return [event];
   });
 }
-export function fixtureSse(events: readonly any[], newline = "\n"): string {
-  return fixtureEvents(events)
+export function fixtureEvents(events: readonly unknown[]): StreamEvent[] {
+  return expandEvents(events).map((event) => streamEventSchema.parse(event));
+}
+export function fixtureSse(events: readonly unknown[], newline = "\n"): string {
+  return expandEvents(events)
     .map(
       (event) =>
-        `event: ${event.type}${newline}data: ${JSON.stringify(event)}${newline}${newline}`,
+        `event: ${String(isRecord(event) ? event.type : undefined)}${newline}data: ${JSON.stringify(event)}${newline}${newline}`,
     )
     .join("");
 }

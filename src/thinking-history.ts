@@ -89,7 +89,7 @@ export function projectMessages(
         ? message.content
         : strippedContent(message.content, message.thinkingStripFrom),
   }));
-  const keep = new Array<boolean>(rows.length).fill(true);
+  const keep = Array.from({ length: rows.length }, () => true);
   let final = rows.length - 1;
   while (final >= 0) {
     const row = rows[final];

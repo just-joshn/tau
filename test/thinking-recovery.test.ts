@@ -1,7 +1,8 @@
+import { z } from "zod";
 import { fixtureSse } from "./sse-fixture.js";
 import assert from "node:assert/strict";
 import { createServer, type ServerResponse } from "node:http";
-import { test, type TestContext } from "node:test";
+import { test, onTestFinished } from "bun:test";
 import { runAgent } from "../src/agent.js";
 import { ApiAttemptBudget } from "../src/attempt-ledger.js";
 import {
@@ -28,6 +29,26 @@ import type {
 } from "../src/types.js";
 
 const model = "claude-sonnet-4-5-20250929";
+const requestBlock = z.looseObject({
+  type: z.string().optional(),
+  signature: z.string().optional(),
+  tool_use_id: z.string().optional(),
+  is_error: z.boolean().optional(),
+  content: z.unknown().optional(),
+  input: z.unknown().optional(),
+});
+const requestMessage = z.looseObject({
+  role: z.string(),
+  partial: z.unknown().optional(),
+  content: z.array(requestBlock),
+});
+const requestBody = z.looseObject({
+  stream: z.boolean().optional(),
+  model: z.string(),
+  messages: z.array(requestMessage),
+});
+type RequestBody = z.infer<typeof requestBody>;
+
 const think = (signature = "sig") => ({
   type: "thinking" as const,
   thinking: "reason",
@@ -112,8 +133,12 @@ function reject(
     }),
   );
 }
+const testSignal = () => {
+  const controller = new AbortController();
+  onTestFinished(() => controller.abort());
+  return controller.signal;
+};
 const request = (
-  t: TestContext,
   extra: Partial<CompletionRequest> = {},
 ): CompletionRequest => ({
   model,
@@ -121,32 +146,31 @@ const request = (
   messages: [user()],
   tools: [],
   maxTokens: 4000,
-  signal: t.signal,
+  signal: testSignal(),
   onText: () => {},
   ...extra,
 });
 async function fixture(
-  t: TestContext,
   handler: (
-    body: any,
+    body: RequestBody,
     res: ServerResponse,
     count: number,
     headers: Record<string, unknown>,
   ) => void,
   options: Partial<ConstructorParameters<typeof AnthropicProvider>[0]> = {},
 ) {
-  const bodies: any[] = [],
+  const bodies: RequestBody[] = [],
     headers: Record<string, unknown>[] = [];
   const server = createServer(async (req, res) => {
     let raw = "";
     for await (const chunk of req) raw += chunk;
-    const body = JSON.parse(raw);
+    const body = requestBody.parse(JSON.parse(raw));
     bodies.push(body);
     headers.push(req.headers);
     handler(body, res, bodies.length, req.headers);
   });
   await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
-  t.after(async () => {
+  onTestFinished(async () => {
     server.closeAllConnections();
     await new Promise<void>((done) => server.close(() => done()));
   });
@@ -346,11 +370,7 @@ test("resumption requires one signed block, explicit signal, matching model and 
     { content: [think(), text("answer")] },
   ])
     assert.equal(
-      canResumeThinking(
-        { ...complete, ...change } as Completion,
-        model,
-        200000,
-      ),
+      canResumeThinking(Object.assign({}, complete, change), model, 200000),
       false,
     );
 });
@@ -414,9 +434,8 @@ test("message deltas alone set resumable, with boolean delta precedence and posi
   assert.equal(initial.completion().resumable, undefined);
 });
 
-test("early output filter retries streaming once without JSON or fallback-model routing", async (t) => {
+test("early output filter retries streaming once without JSON or fallback-model routing", async () => {
   const f = await fixture(
-    t,
     (_body, res, count) =>
       send(
         res,
@@ -427,7 +446,7 @@ test("early output filter retries streaming once without JSON or fallback-model 
     { maxRetries: 1, fallbackModel: "other" },
   );
   const complete = await f.provider.complete(
-    request(t, { attemptBudget: new ApiAttemptBudget(2) }),
+    request({ attemptBudget: new ApiAttemptBudget(2) }),
   );
   assert.equal(complete.stop_reason, "refusal");
   assert.equal(f.bodies.length, 2);
@@ -436,30 +455,27 @@ test("early output filter retries streaming once without JSON or fallback-model 
   );
 });
 
-test("output filter after visible, closed thinking or terminal stop does not retry or keep partial", async (t) => {
+test("output filter after visible, closed thinking or terminal stop does not retry or keep partial", async () => {
   for (const before of [
     [begin, ...textEvents()],
     [begin, ...thinkingEvents()],
     [begin, finish()],
   ]) {
-    const f = await fixture(
-      t,
-      (_body, res) => send(res, [...before, filtered]),
-      { maxRetries: 2 },
-    );
-    await assert.rejects(f.provider.complete(request(t)), /streaming error/);
+    const f = await fixture((_body, res) => send(res, [...before, filtered]), {
+      maxRetries: 2,
+    });
+    await assert.rejects(f.provider.complete(request()), /streaming error/);
     assert.equal(f.bodies.length, 1);
   }
 });
 
-test("repeated early output filters exhaust one special retry; DLP denial takes precedence", async (t) => {
-  const f = await fixture(t, (_body, res) => send(res, [begin, filtered]), {
+test("repeated early output filters exhaust one special retry; DLP denial takes precedence", async () => {
+  const f = await fixture((_body, res) => send(res, [begin, filtered]), {
     maxRetries: 2,
   });
-  await assert.rejects(f.provider.complete(request(t)), /streaming error/);
+  await assert.rejects(f.provider.complete(request()), /streaming error/);
   assert.equal(f.bodies.length, 2);
   const denied = await fixture(
-    t,
     (_body, res) =>
       send(res, [
         begin,
@@ -473,18 +489,18 @@ test("repeated early output filters exhaust one special retry; DLP denial takes 
       ]),
     { maxRetries: 2 },
   );
-  await assert.rejects(denied.provider.complete(request(t)), /streaming error/);
+  await assert.rejects(denied.provider.complete(request()), /streaming error/);
   assert.equal(denied.bodies.length, 1);
 });
 
-test("real HTTP prefix repair performs two targeted strips then all, without ordinary retries", async (t) => {
+test("real HTTP prefix repair performs two targeted strips then all, without ordinary retries", async () => {
   const rows = [
     user(),
     assistant([think("a"), text("answer"), think("b"), think("c")]),
     user(),
   ];
   const strips: ThinkingStrip[] = [];
-  const f = await fixture(t, (_body, res, count) =>
+  const f = await fixture((_body, res, count) =>
     count < 4
       ? reject(
           res,
@@ -496,7 +512,7 @@ test("real HTTP prefix repair performs two targeted strips then all, without ord
   );
   const budget = new ApiAttemptBudget(4);
   await f.provider.complete(
-    request(t, {
+    request({
       messages: rows,
       attemptBudget: budget,
       onThinkingStrip: (strip) => strips.push(strip),
@@ -509,9 +525,9 @@ test("real HTTP prefix repair performs two targeted strips then all, without ord
   ]);
   assert.deepEqual(
     f.bodies.map((body) =>
-      body.messages[1].content
-        .filter((block: any) => block.type === "thinking")
-        .map((block: any) => block.signature),
+      body.messages[1]?.content
+        .filter((block) => block.type === "thinking")
+        .map((block) => block.signature),
     ),
     [["a", "b", "c"], ["a", "b"], ["a"], []],
   );
@@ -519,19 +535,19 @@ test("real HTTP prefix repair performs two targeted strips then all, without ord
   assert.equal(budget.remaining, 0);
 });
 
-test("prefix repair stops when nothing can be stripped and respects caller abort and admission", async (t) => {
+test("prefix repair stops when nothing can be stripped and respects caller abort and admission", async () => {
   const rows = [user(), assistant([think(), text("answer")]), user()];
-  const f = await fixture(t, (_body, res) => reject(res));
+  const f = await fixture((_body, res) => reject(res));
   await assert.rejects(
-    f.provider.complete(request(t, { messages: rows })),
+    f.provider.complete(request({ messages: rows })),
     /HTTP error 400/,
   );
   assert.equal(f.bodies.length, 2);
   const controller = new AbortController();
-  const aborted = await fixture(t, (_body, res) => reject(res));
+  const aborted = await fixture((_body, res) => reject(res));
   await assert.rejects(
     aborted.provider.complete(
-      request(t, {
+      request({
         messages: rows,
         signal: controller.signal,
         onThinkingStrip: () => controller.abort(),
@@ -540,34 +556,34 @@ test("prefix repair stops when nothing can be stripped and respects caller abort
     { name: "AbortError" },
   );
   assert.equal(aborted.bodies.length, 1);
-  const bounded = await fixture(t, (_body, res) => reject(res));
+  const bounded = await fixture((_body, res) => reject(res));
   await assert.rejects(
     bounded.provider.complete(
-      request(t, { messages: rows, attemptBudget: new ApiAttemptBudget(1) }),
+      request({ messages: rows, attemptBudget: new ApiAttemptBudget(1) }),
     ),
     /attempt budget/,
   );
   assert.equal(bounded.bodies.length, 1);
 });
 
-test("denied prefix-looking400 and non400 messages cannot heal", async (t) => {
+test("denied prefix-looking400 and non400 messages cannot heal", async () => {
   const rows = [user(), assistant([think(), text("answer")]), user()];
   for (const [status, code] of [
     [400, "dlp_request_denied"],
     [500, undefined],
   ] as const) {
-    const f = await fixture(t, (_body, res) =>
+    const f = await fixture((_body, res) =>
       reject(res, status, undefined, undefined, code),
     );
     await assert.rejects(
-      f.provider.complete(request(t, { messages: rows })),
+      f.provider.complete(request({ messages: rows })),
       /HTTP error/,
     );
     assert.equal(f.bodies.length, 1);
   }
 });
 
-test("agent continues max_tokens three times and retains each committed response", async (t) => {
+test("agent continues max_tokens three times and retains each committed response", async () => {
   let count = 0;
   const provider: Provider = {
     async complete() {
@@ -594,7 +610,7 @@ test("agent continues max_tokens three times and retains each committed response
       system: "",
       maxTokens: 100,
       maxTurns: 10,
-      signal: t.signal,
+      signal: testSignal(),
       onEvent: () => {},
     }),
     /three continuation/,
@@ -607,9 +623,8 @@ test("agent continues max_tokens three times and retains each committed response
   assert.equal(messages.filter((message) => message.role === "user").length, 4);
 });
 
-test("HTTP agent resumes two signed thinking blocks without nudges and preserves the chain next prompt", async (t) => {
+test("HTTP agent resumes two signed thinking blocks without nudges and preserves the chain next prompt", async () => {
   const f = await fixture(
-    t,
     (_body, res, count) =>
       send(
         res,
@@ -639,23 +654,23 @@ test("HTTP agent resumes two signed thinking blocks without nudges and preserves
     system: "",
     maxTokens: 100,
     maxTurns: 5,
-    signal: t.signal,
+    signal: testSignal(),
     onEvent: (event: AgentEvent) => events.push(event),
   };
   await runAgent(options);
   assert.equal(f.bodies.length, 3);
-  assert.equal(f.bodies[1].messages.at(-1).role, "assistant");
+  assert.equal(f.bodies[1]?.messages.at(-1)?.role, "assistant");
   assert.deepEqual(
-    f.bodies[2].messages
-      .filter((message: any) => message.role === "assistant")
-      .map((message: any) => message.content[0].signature),
+    f.bodies[2]?.messages
+      .filter((message) => message.role === "assistant")
+      .map((message) => message.content[0]?.signature),
     ["sig-1", "sig-2"],
   );
   assert.equal(messages[2]?.resumedFromIncompleteThinking, true);
   assert.equal(messages[3]?.resumedFromIncompleteThinking, true);
   messages.push(user());
   await runAgent(options);
-  assert.equal(f.bodies[3].messages.length, 5);
+  assert.equal(f.bodies[3]?.messages.length, 5);
   assert.ok(
     f.headers.every(
       (headers) =>
@@ -664,14 +679,13 @@ test("HTTP agent resumes two signed thinking blocks without nudges and preserves
   );
   assert.ok(
     f.bodies.every((body) =>
-      body.messages.every((message: any) => Object.keys(message).length === 2),
+      body.messages.every((message) => Object.keys(message).length === 2),
     ),
   );
 });
 
-test("refused thinking prefill surfaces immediately then agent adds one nudge and drops orphan thinking", async (t) => {
+test("refused thinking prefill surfaces immediately then agent adds one nudge and drops orphan thinking", async () => {
   const f = await fixture(
-    t,
     (_body, res, count) =>
       count === 1
         ? send(res, [
@@ -700,14 +714,15 @@ test("refused thinking prefill surfaces immediately then agent adds one nudge an
     maxTokens: 100,
     maxTurns: 5,
     maxApiAttempts: 3,
-    signal: t.signal,
+    signal: testSignal(),
     onEvent: () => {},
   });
   assert.equal(f.bodies.length, 3);
   assert.ok(f.bodies.every((body) => body.stream));
-  assert.equal(f.bodies[2].messages.at(-1).role, "user");
-  assert.ok(
-    !f.bodies[2].messages.some((message: any) => message.role === "assistant"),
+  assert.equal(f.bodies[2]?.messages.at(-1)?.role, "user");
+  assert.equal(
+    f.bodies[2]?.messages.some((message) => message.role === "assistant"),
+    false,
   );
   assert.equal(messages.length, 4);
 });
@@ -725,16 +740,15 @@ test("prefill client refusal excludes auth/transient451 and explicit denial/vers
     assert.equal(resumePrefillRefused(new ProviderHttpError(400, code)), false);
 });
 
-test("resume-prefill prefix rejection never strips the signed prefill or falls back to JSON", async (t) => {
+test("resume-prefill prefix rejection never strips the signed prefill or falls back to JSON", async () => {
   const strips: ThinkingStrip[] = [];
   const f = await fixture(
-    t,
     (_body, res) => reject(res, 400, undefined, "block=messages.1.content.0"),
     { thinkingResumption: true, maxRetries: 2 },
   );
   await assert.rejects(
     f.provider.complete(
-      request(t, {
+      request({
         messages: [user(), assistant([think()])],
         resumeIncompleteThinking: true,
         onThinkingStrip: (strip) => strips.push(strip),
@@ -744,10 +758,10 @@ test("resume-prefill prefix rejection never strips the signed prefill or falls b
   );
   assert.equal(f.bodies.length, 1);
   assert.deepEqual(strips, []);
-  assert.equal(f.bodies[0].messages[1].content[0].signature, "sig");
+  assert.equal(f.bodies[0]?.messages[1]?.content[0]?.signature, "sig");
 });
 
-test("source tool-cut errors retain closed calls once and discard open arguments and provisional text", async (t) => {
+test("source tool-cut errors retain closed calls once and discard open arguments and provisional text", async () => {
   const cut = {
     type: "error",
     error: {
@@ -793,7 +807,7 @@ test("source tool-cut errors retain closed calls once and discard open arguments
     },
     cut,
   ];
-  const f = await fixture(t, (_body, res, count) =>
+  const f = await fixture((_body, res, count) =>
     send(res, count === 1 ? events : [begin, ...textEvents(), finish(), stop]),
   );
   const calls: string[] = [],
@@ -814,7 +828,7 @@ test("source tool-cut errors retain closed calls once and discard open arguments
     maxTokens: 100,
     maxTurns: 5,
     maxApiAttempts: 2,
-    signal: t.signal,
+    signal: testSignal(),
     onEvent: (event) => emitted.push(event),
   });
   assert.deepEqual(calls, ["read"]);
@@ -826,10 +840,10 @@ test("source tool-cut errors retain closed calls once and discard open arguments
   );
   assert.ok(!JSON.stringify(messages).includes("discard"));
   assert.ok(!JSON.stringify(messages).includes('"id":"write"'));
-  assert.equal(f.bodies[1].messages.at(-1).content[0].tool_use_id, "read");
+  assert.equal(f.bodies[1]?.messages.at(-1)?.content[0]?.tool_use_id, "read");
 });
 
-test("thinking returned by a fallback model uses a nudge when the next query starts primary", async (t) => {
+test("thinking returned by a fallback model uses a nudge when the next query starts primary", async () => {
   const requests: CompletionRequest[] = [];
   const provider: Provider = {
     thinkingResumption: true,
@@ -864,14 +878,14 @@ test("thinking returned by a fallback model uses a nudge when the next query sta
     system: "",
     maxTokens: 100,
     maxTurns: 3,
-    signal: t.signal,
+    signal: testSignal(),
     onEvent: () => {},
   });
   assert.equal(requests[1]?.resumeIncompleteThinking, undefined);
   assert.equal(requests[1]?.messages.at(-1)?.role, "user");
 });
 
-test("prefix repair's two-target limit survives an intervening accepted-stream retry", async (t) => {
+test("prefix repair's two-target limit survives an intervening accepted-stream retry", async () => {
   const rows = [
     user(),
     assistant([think("a"), text("answer"), think("b"), think("c"), think("d")]),
@@ -879,7 +893,6 @@ test("prefix repair's two-target limit survives an intervening accepted-stream r
   ];
   const strips: ThinkingStrip[] = [];
   const f = await fixture(
-    t,
     (_body, res, count) => {
       if (count === 2)
         send(res, [
@@ -898,7 +911,7 @@ test("prefix repair's two-target limit survives an intervening accepted-stream r
     { maxRetries: 1, allowNonStreamingFallback: false },
   );
   await f.provider.complete(
-    request(t, {
+    request({
       messages: rows,
       onThinkingStrip: (strip) => strips.push(strip),
       attemptBudget: new ApiAttemptBudget(5),
@@ -906,7 +919,7 @@ test("prefix repair's two-target limit survives an intervening accepted-stream r
   );
   assert.equal(f.bodies.length, 5);
   assert.deepEqual(strips.at(-1), { scope: "all" });
-  assert.deepEqual(f.bodies[4].messages[1].content, [text("answer")]);
+  assert.deepEqual(f.bodies[4]?.messages[1]?.content, [text("answer")]);
 });
 
 test("beta refusal recognizes qualified headers and bounded capability markers", () => {
@@ -926,22 +939,20 @@ test("beta refusal recognizes qualified headers and bounded capability markers",
   );
 });
 
-test("mentioning a beta name without a rejection qualifier does not disable or retry it", async (t) => {
+test("mentioning a beta name without a rejection qualifier does not disable or retry it", async () => {
   const f = await fixture(
-    t,
     (_body, res) =>
       reject(res, 400, "Unsupported beta: thinking-resumption-2026-07-17"),
     { thinkingResumption: true },
   );
-  await assert.rejects(f.provider.complete(request(t)), /HTTP error 400/);
+  await assert.rejects(f.provider.complete(request()), /HTTP error 400/);
   assert.equal(f.bodies.length, 1);
   assert.equal(f.provider.thinkingResumption, true);
 });
 
 // Last: this intentionally verifies the source's process-lifetime refusal latch.
-test("rejected resumption beta retries an ordinary request once and remains disabled in the process", async (t) => {
+test("rejected resumption beta retries an ordinary request once and remains disabled in the process", async () => {
   const f = await fixture(
-    t,
     (_body, res, count) =>
       count === 1
         ? reject(
@@ -952,7 +963,7 @@ test("rejected resumption beta retries an ordinary request once and remains disa
         : send(res, [begin, ...textEvents(), finish(), stop]),
     { thinkingResumption: true },
   );
-  await f.provider.complete(request(t));
+  await f.provider.complete(request());
   assert.equal(f.bodies.length, 2);
   assert.equal(f.headers[1]?.["anthropic-beta"], undefined);
   const another = new AnthropicProvider({

@@ -2,7 +2,6 @@ import type {
   HookBatchResult,
   HookInput,
   HookPermission,
-  HookRegistry,
   HookRunOptions,
 } from "./hooks.js";
 import type {

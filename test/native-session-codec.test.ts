@@ -1,4 +1,4 @@
-import test from "node:test";
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   appendNativeSessionRows,
@@ -6,6 +6,8 @@ import {
   encodeNativeSessionRows,
   foldSupportedNativeMetadata,
   indexNativeSession,
+  isNativeArray,
+  isNativeObject,
   serializeNativeSession,
   traceNativeParentChain,
   type NativeJson,
@@ -20,6 +22,18 @@ const row = (
   type = "assistant",
   extra = {},
 ) => ({ type, uuid, parentUuid, ...extra });
+// Method-shorthand types are bivariant, so deliberately invalid inputs can reach the runtime checks.
+const looseDecode: {
+  decode(input: Uint8Array, options: { parser: string }): unknown;
+} = { decode: decodeNativeSession };
+const looseEncode: { encode(rows: readonly unknown[]): Uint8Array } = {
+  encode: encodeNativeSessionRows,
+};
+const at = <T>(items: readonly T[], index: number): T => present(items[index]);
+const present = <T>(value: T | undefined): T => {
+  assert.ok(value !== undefined);
+  return value;
+};
 const authored = (rows: NativeJson[]) => decode(encodeNativeSessionRows(rows));
 
 test("lossless bytes survive BOM, CRLF, malformed middle and tail, unknown metadata and invalid UTF8", () => {
@@ -34,12 +48,12 @@ test("lossless bytes survive BOM, CRLF, malformed middle and tail, unknown metad
     doc.lines.map((line) => line.kind),
     ["record", "blank", "invalid", "record", "invalid"],
   );
-  assert.equal(doc.lines[0]!.start, 0);
+  assert.equal(at(doc.lines, 0).start, 0);
   assert.equal(
-    doc.lines[0]!.end,
+    at(doc.lines, 0).end,
     Buffer.byteLength('\ufeff{"type":"future","payload":"é"}\r\n'),
   );
-  assert.equal(doc.lines.at(-1)!.end, input.length);
+  assert.equal(doc.lines.at(-1)?.end, input.length);
   assert.equal(doc.tailTerminated, false);
   assert.deepEqual(
     doc.diagnostics.map((item) => item.code),
@@ -52,17 +66,19 @@ test("raw byte copies and decoded values cannot mutate serialized history", () =
   );
   const doc = decode(input);
   input.fill(0);
-  doc.lines[0]!.rawBytes().fill(0);
+  at(doc.lines, 0).rawBytes().fill(0);
   const output = serializeNativeSession(doc);
   output.fill(0);
   assert.match(
     Buffer.from(serializeNativeSession(doc)).toString(),
     /opaque-signature/,
   );
+  const value = at(doc.lines, 0).value;
+  assert.ok(isNativeObject(value) && isNativeObject(value.message));
+  const content = value.message.content;
+  assert.ok(isNativeArray(content));
   assert.throws(() => {
-    (
-      doc.lines[0]!.value as { message: { content: unknown[] } }
-    ).message.content.push("mutation");
+    Array.prototype.push.call(content, "mutation");
   }, TypeError);
 });
 test("fallback interprets primitives, whitespace and valid unterminated JSON but not leading NUL", () => {
@@ -71,8 +87,8 @@ test("fallback interprets primitives, whitespace and valid unterminated JSON but
     doc.lines.map((line) => line.kind),
     ["record", "record", "invalid", "record"],
   );
-  assert.equal(doc.lines[0]!.value, null);
-  assert.deepEqual(doc.lines[3]!.value, { valid: true });
+  assert.equal(at(doc.lines, 0).value, null);
+  assert.deepEqual(at(doc.lines, 3).value, { valid: true });
   assert.equal(doc.tailTerminated, false);
 });
 test("append seals the original tail with LF and never repairs or discards its bytes", () => {
@@ -118,10 +134,7 @@ test("resource bounds reject whole decode rather than publishing partial graph",
     RangeError,
   );
   assert.throws(
-    () =>
-      decodeNativeSession(Buffer.from(""), {
-        parser: "bun" as "source-line-fallback",
-      }),
+    () => looseDecode.decode(Buffer.from(""), { parser: "bun" }),
     TypeError,
   );
 });
@@ -138,9 +151,9 @@ test("index has UUID last-wins, ambiguous branches and separate sidechain leaves
   const index = indexNativeSession(doc);
   assert.deepEqual(index.rawLeafUuids, ["a", "child", "b"]);
   assert.deepEqual(index.rawMainLeafUuids, ["a", "b"]);
-  assert.equal(index.nodes.get("a")!.row.replacement, true);
+  assert.equal(present(index.nodes.get("a")).row.replacement, true);
   assert.equal(index.nodes.has("progress"), false);
-  assert.equal(index.diagnostics[0]!.code, "duplicate-uuid-last-wins");
+  assert.equal(at(index.diagnostics, 0).code, "duplicate-uuid-last-wins");
   assert.deepEqual(
     traceNativeParentChain(index, "b").nodes.map((node) => node.uuid),
     ["u", "b"],
@@ -163,13 +176,13 @@ test("explicit chain reports missing parents and cycles without timestamp repair
     missing.nodes.map((node) => node.uuid),
     ["missing"],
   );
-  assert.equal(missing.diagnostics[0]!.code, "missing-parent");
+  assert.equal(at(missing.diagnostics, 0).code, "missing-parent");
   assert.equal(
-    traceNativeParentChain(index, "x").diagnostics[0]!.code,
+    at(traceNativeParentChain(index, "x").diagnostics, 0).code,
     "parent-cycle",
   );
   assert.equal(
-    traceNativeParentChain(index, "unknown").diagnostics[0]!.code,
+    at(traceNativeParentChain(index, "unknown").diagnostics, 0).code,
     "missing-leaf",
   );
 });
@@ -233,22 +246,22 @@ test("supported metadata fold is ordered, session-scoped, and preserves unsuppor
   ]);
   const metadata = foldSupportedNativeMetadata(doc);
   assert.equal(
-    metadata.valuesByTypeAndSession.get("custom-title")!.get("s"),
+    present(metadata.valuesByTypeAndSession.get("custom-title")).get("s"),
     "two",
   );
   assert.equal(
-    metadata.valuesByTypeAndSession.get("custom-title")!.get("t"),
+    present(metadata.valuesByTypeAndSession.get("custom-title")).get("t"),
     "other",
   );
   assert.equal(metadata.summariesByLeaf.get("leaf"), "summary");
-  assert.equal(metadata.fileSnapshotsByMessage.get("m")!.version, 2);
+  assert.equal(present(metadata.fileSnapshotsByMessage.get("m")).version, 2);
   assert.deepEqual(
-    metadata.fileDeltasByMessage.get("m")!.map((row) => row.n),
+    present(metadata.fileDeltasByMessage.get("m")).map((row) => row.n),
     [1, 2],
   );
-  assert.equal(metadata.attributionSnapshot!.messageId, "last");
+  assert.equal(present(metadata.attributionSnapshot).messageId, "last");
   assert.equal(metadata.historySuppressedSessions.has("s"), true);
-  assert.equal(metadata.checkpoints[0]!.leafUuid, null);
+  assert.equal(at(metadata.checkpoints, 0).leafUuid, null);
   assert.equal(metadata.records.length, 13);
   // An explicit empty checkpoint is deliberately NOT applied by the raw graph view.
   assert.deepEqual(indexNativeSession(doc).rawLeafUuids, ["leaf"]);
@@ -274,19 +287,18 @@ test("fresh encoding is compact LF JSON and rejects unsafe values before calling
   };
   const cycle: Record<string, unknown> = {};
   cycle.self = cycle;
+  const sparse: unknown[] = [];
+  sparse.length = 2;
   for (const value of [
     getter,
     method,
     cycle,
     NaN,
     undefined,
-    [, ,],
+    sparse,
     Object.create({ inherited: 1 }),
   ]) {
-    assert.throws(
-      () => encodeNativeSessionRows([value as NativeJson]),
-      TypeError,
-    );
+    assert.throws(() => looseEncode.encode([value]), TypeError);
   }
   assert.equal(invoked, false);
 });

@@ -12,7 +12,8 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import test, { type TestContext } from "node:test";
+import { test, onTestFinished } from "bun:test";
+import { z } from "zod";
 import { createTools } from "../src/tools.js";
 import { ReadState } from "../src/read-state.js";
 import {
@@ -24,14 +25,43 @@ import {
 } from "../src/file-read.js";
 import { fixtureSse } from "./sse-fixture.js";
 
+function at<T>(items: readonly T[], index: number): T {
+  const item = items.at(index);
+  if (item === undefined) assert.fail(`no item at index ${String(index)}`);
+  return item;
+}
+
+const toolResultRequest = z.looseObject({
+  messages: z.array(
+    z.looseObject({
+      content: z.array(z.looseObject({ content: z.unknown().optional() })),
+    }),
+  ),
+});
+const cliResult = z.looseObject({ result: z.string() });
+
+function lastToolResultContent(body: unknown): string {
+  const content = at(
+    at(toolResultRequest.parse(body).messages, -1).content,
+    0,
+  ).content;
+  assert.ok(typeof content === "string");
+  return content;
+}
+
+function testSignal() {
+  const controller = new AbortController();
+  onTestFinished(() => controller.abort());
+  return controller.signal;
+}
+
 async function fixture(
-  t: TestContext,
   options: Partial<Parameters<typeof createTools>[0]> = {},
 ) {
   const cwd = await realpath(
     await mkdtemp(path.join(tmpdir(), "tau-read-budget-")),
   );
-  t.after(() => rm(cwd, { recursive: true, force: true }));
+  onTestFinished(() => rm(cwd, { recursive: true, force: true }));
   const state = new ReadState(),
     file = path.join(cwd, "a");
   const tools = createTools({
@@ -44,9 +74,9 @@ async function fixture(
   const run = (
     name: string,
     input: Record<string, unknown>,
-    signal = t.signal,
+    signal = testSignal(),
   ) => tools.execute({ type: "tool_use", name, input, id: "tool" }, signal);
-  const read = (input: Record<string, unknown> = {}, signal = t.signal) =>
+  const read = (input: Record<string, unknown> = {}, signal = testSignal()) =>
     run("Read", { file_path: "a", ...input }, signal);
   return { cwd, file, tools, state, run, read };
 }
@@ -65,45 +95,52 @@ test("file Read token setting uses the recovered positive integer grammar", () =
     );
 });
 
-test("counting starts above one quarter and failures fall back to the estimate", async (t) => {
+test("counting starts above one quarter and failures fall back to the estimate", async () => {
   let calls = 0;
   const count = async () => {
     calls++;
     return 5;
   };
   assert.equal(
-    await checkFileTokens("x".repeat(8), "a", 10, true, t.signal, count),
+    await checkFileTokens("x".repeat(8), "a", 10, true, testSignal(), count),
     2,
   );
   assert.equal(calls, 0);
   assert.equal(
-    await checkFileTokens("x".repeat(12), "a", 10, true, t.signal, count),
+    await checkFileTokens("x".repeat(12), "a", 10, true, testSignal(), count),
     5,
   );
   assert.equal(calls, 1);
   assert.equal(
-    await checkFileTokens("x".repeat(5), "a.json", 10, true, t.signal, count),
+    await checkFileTokens(
+      "x".repeat(5),
+      "a.json",
+      10,
+      true,
+      testSignal(),
+      count,
+    ),
     5,
   );
   assert.equal(calls, 2);
   await assert.rejects(
-    checkFileTokens("x".repeat(48), "a", 10, true, t.signal, async () => {
+    checkFileTokens("x".repeat(48), "a", 10, true, testSignal(), async () => {
       throw new Error("offline");
     }),
     /12.*10/,
   );
 });
 
-test("whole text can exceed old input/output caps without being truncated", async (t) => {
-  const f = await fixture(t);
+test("whole text can exceed old input/output caps without being truncated", async () => {
+  const f = await fixture();
   const text = "x".repeat(80000);
   await writeFile(f.file, text);
   assert.equal((await f.read()).content, "1\t" + text);
   f.state.assertCurrent(f.file, Buffer.from(text));
 });
 
-test("whole-file token overflow selects a line page with an actionable next offset", async (t) => {
-  const f = await fixture(t, { fileReadMaxTokens: 50 });
+test("whole-file token overflow selects a line page with an actionable next offset", async () => {
+  const f = await fixture({ fileReadMaxTokens: 50 });
   const lines = Array.from({ length: 100 }, (_, i) => `line ${i}`);
   await writeFile(f.file, lines.join("\n"));
   const result = await f.read();
@@ -112,25 +149,25 @@ test("whole-file token overflow selects a line page with an actionable next offs
     result.content,
     /^\[Read truncated by token limit: lines 1-\d+ of 100\./,
   );
-  const match = /offset=(\d+) limit=(\d+)/.exec(result.content)!;
+  const match = /offset=(\d+) limit=(\d+)/.exec(result.content);
   assert.ok(match);
-  assert.equal(+match[1]!, +match[2]! + 1);
+  assert.equal(+at(match, 1), +at(match, 2) + 1);
   assert.throws(
     () => f.state.assertCurrent(f.file, Buffer.from(lines.join("\n"))),
     /Read the entire/,
   );
-  const page = await f.read({ offset: +match[1]!, limit: 1 });
-  assert.equal(page.content, `${match[1]}\tline ${+match[1]! - 1}`);
+  const page = await f.read({ offset: +at(match, 1), limit: 1 });
+  assert.equal(page.content, `${match[1]}\tline ${+at(match, 1) - 1}`);
 });
 
-test("long-line and whitespace pages use a character prefix without broken surrogates", async (t) => {
-  const f = await fixture(t, { fileReadMaxTokens: 5 });
+test("long-line and whitespace pages use a character prefix without broken surrogates", async () => {
+  const f = await fixture({ fileReadMaxTokens: 5 });
   await writeFile(f.file, "🌍".repeat(100));
   const result = await f.read({ offset: 0 });
   assert.equal(result.is_error, undefined);
   assert.match(result.content, /first \d+ of 200 characters/);
   assert.match(result.content, /\n1\t/);
-  const shown = result.content.split("\t")[1]!;
+  const shown = at(result.content.split("\t"), 1);
   assert.equal(Buffer.from(shown).toString(), shown);
   assert.doesNotMatch(shown, /\ufffd/);
   const white = tokenPage("\n".repeat(100), 25, 5);
@@ -138,8 +175,8 @@ test("long-line and whitespace pages use a character prefix without broken surro
   assert.ok(white.text.length < 100);
 });
 
-test("explicit limit or later offset errors on token overflow instead of paging", async (t) => {
-  const f = await fixture(t, { fileReadMaxTokens: 10 });
+test("explicit limit or later offset errors on token overflow instead of paging", async () => {
+  const f = await fixture({ fileReadMaxTokens: 10 });
   await writeFile(f.file, "head\n" + "x".repeat(100));
   for (const input of [{ offset: 2 }, { offset: 2, limit: 1 }, { limit: 2 }]) {
     const result = await f.read(input);
@@ -149,9 +186,9 @@ test("explicit limit or later offset errors on token overflow instead of paging"
   }
 });
 
-test("a selected-byte overflow fails before counting, while a whole read can count the same text", async (t) => {
+test("a selected-byte overflow fails before counting, while a whole read can count the same text", async () => {
   let counts = 0;
-  const f = await fixture(t, {
+  const f = await fixture({
     fileReadMaxTokens: 10,
     readTokenCounter: async () => {
       counts++;
@@ -165,8 +202,8 @@ test("a selected-byte overflow fails before counting, while a whole read can cou
   assert.equal(counts, 1);
 });
 
-test("a large regular file can be scanned for a later explicit range without loading its prefix", async (t) => {
-  const f = await fixture(t);
+test("a large regular file can be scanned for a later explicit range without loading its prefix", async () => {
+  const f = await fixture();
   await writeFile(f.file, "skip".repeat(3 * 1024 * 1024) + "\nselected\nlast");
   const result = await f.read({ offset: 2, limit: 1 });
   assert.equal(result.content, "2\tselected");
@@ -175,8 +212,8 @@ test("a large regular file can be scanned for a later explicit range without loa
   assert.match(whole.content, /262144/);
 });
 
-test("UTF8 and UTF16 decoders handle characters split across actual read chunks", async (t) => {
-  const f = await fixture(t);
+test("UTF8 and UTF16 decoders handle characters split across actual read chunks", async () => {
+  const f = await fixture();
   await writeFile(f.file, Buffer.from("x".repeat(524282) + "\nhi😀\nend"));
   assert.equal((await f.read({ offset: 2, limit: 1 })).content, "2\thi😀");
   await writeFile(
@@ -186,8 +223,8 @@ test("UTF8 and UTF16 decoders handle characters split across actual read chunks"
   assert.equal((await f.read({ offset: 2, limit: 1 })).content, "2\t😀");
 });
 
-test("streamed ranges preserve CRLF and EOF line counts across a chunk boundary", async (t) => {
-  const f = await fixture(t);
+test("streamed ranges preserve CRLF and EOF line counts across a chunk boundary", async () => {
+  const f = await fixture();
   await writeFile(f.file, "x".repeat(524287) + "\r\nα\r\n");
   assert.equal((await f.read({ offset: 2, limit: 2 })).content, "2\tα\n3\t");
   const handle = await open(f.file, "r");
@@ -195,7 +232,7 @@ test("streamed ranges preserve CRLF and EOF line counts across a chunk boundary"
     const result = await selectTextFile(
       handle,
       { offset: 4, limit: 1 },
-      t.signal,
+      testSignal(),
       25000,
     );
     assert.equal(result.totalLines, 3);
@@ -205,8 +242,8 @@ test("streamed ranges preserve CRLF and EOF line counts across a chunk boundary"
   }
 });
 
-test("malformed text outside the selected range still fails the complete scan", async (t) => {
-  const f = await fixture(t);
+test("malformed text outside the selected range still fails the complete scan", async () => {
+  const f = await fixture();
   await writeFile(
     f.file,
     Buffer.concat([
@@ -217,8 +254,8 @@ test("malformed text outside the selected range still fails the complete scan", 
   assert.equal((await f.read({ limit: 1 })).is_error, true);
 });
 
-test("a failed range does not erase the preceding valid Read cache entry", async (t) => {
-  const f = await fixture(t, { fileReadMaxTokens: 10 });
+test("a failed range does not erase the preceding valid Read cache entry", async () => {
+  const f = await fixture({ fileReadMaxTokens: 10 });
   await writeFile(f.file, "old");
   await f.read();
   await writeFile(f.file, "new".repeat(100));
@@ -236,8 +273,8 @@ test("a failed range does not erase the preceding valid Read cache entry", async
   );
 });
 
-test("partial token pages cannot collectively grant a full-file edit baseline", async (t) => {
-  const f = await fixture(t, { fileReadMaxTokens: 10 });
+test("partial token pages cannot collectively grant a full-file edit baseline", async () => {
+  const f = await fixture({ fileReadMaxTokens: 10 });
   const text = "line\n".repeat(20);
   await writeFile(f.file, text);
   await f.read();
@@ -249,9 +286,9 @@ test("partial token pages cannot collectively grant a full-file edit baseline", 
   );
 });
 
-test("aborting auxiliary counting never commits a new Read baseline", async (t) => {
+test("aborting auxiliary counting never commits a new Read baseline", async () => {
   const controller = new AbortController();
-  const f = await fixture(t, {
+  const f = await fixture({
     fileReadMaxTokens: 10,
     readTokenCounter: async () => {
       controller.abort();
@@ -267,8 +304,8 @@ test("aborting auxiliary counting never commits a new Read baseline", async (t) 
   );
 });
 
-test("repeated local regular-text Reads return the actual contents rather than a guessed unchanged notice", async (t) => {
-  const f = await fixture(t);
+test("repeated local regular-text Reads return the actual contents rather than a guessed unchanged notice", async () => {
+  const f = await fixture();
   await writeFile(f.file, "same");
   assert.equal((await f.read()).content, "1\tsame");
   assert.equal((await f.read()).content, "1\tsame");
@@ -276,24 +313,25 @@ test("repeated local regular-text Reads return the actual contents rather than a
 
 test(
   "compiled CLI counts whole and later range Reads separately from three generation attempts",
-  { timeout: 15000 },
-  async (t) => {
-    const f = await fixture(t),
+  async () => {
+    const f = await fixture(),
       text = Array.from(
         { length: 400 },
         (_, i) => `line${i} ` + "x".repeat(294),
       ).join("\n");
     await writeFile(f.file, text);
-    const requests: Array<{ url: string; body: any }> = [];
+    const requests: Array<{ url: string; body: unknown }> = [];
     let generation = 0,
       counts = 0,
       nextOffset = 0;
     const server = createServer(async (req, res) => {
       let raw = "";
       for await (const chunk of req) raw += chunk;
-      const body = JSON.parse(raw);
-      requests.push({ url: req.url!, body });
-      if (req.url!.includes("count_tokens")) {
+      const body: unknown = JSON.parse(raw);
+      const url = req.url;
+      assert.ok(url);
+      requests.push({ url, body });
+      if (url.includes("count_tokens")) {
         counts++;
         res.writeHead(200, { "content-type": "application/json" });
         res.end(JSON.stringify({ input_tokens: counts === 1 ? 28000 : 8000 }));
@@ -301,14 +339,14 @@ test(
       }
       generation++;
       if (generation === 2) {
-        const content = body.messages.at(-1).content[0].content as string;
+        const content = lastToolResultContent(body);
         assert.ok(Buffer.byteLength(content) > 65536);
-        const match = /offset=(\d+) limit=/.exec(content)!;
+        const match = /offset=(\d+) limit=/.exec(content);
         assert.ok(match);
-        nextOffset = +match[1]!;
+        nextOffset = +at(match, 1);
       }
       if (generation === 3) {
-        const content = body.messages.at(-1).content[0].content as string;
+        const content = lastToolResultContent(body);
         assert.match(
           content,
           new RegExp(`^${nextOffset}\\tline${nextOffset - 1} `),
@@ -354,7 +392,7 @@ test(
       );
     });
     await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
-    t.after(async () => {
+    onTestFinished(async () => {
       server.closeAllConnections();
       await new Promise<void>((done) => server.close(() => done()));
     });
@@ -363,7 +401,7 @@ test(
     const pending = promisify(execFile)(
       process.execPath,
       [
-        path.resolve("dist/src/cli.js"),
+        path.resolve("src/cli.ts"),
         "--cwd",
         f.cwd,
         "--print",
@@ -385,38 +423,44 @@ test(
           TAU_HOME: path.join(f.cwd, "state"),
         },
         maxBuffer: 1024 * 1024,
-        signal: t.signal,
+        signal: testSignal(),
       },
     );
     pending.child.stdin?.end();
     const result = await pending;
-    assert.equal(JSON.parse(result.stdout).result, "Done");
+    assert.equal(cliResult.parse(JSON.parse(result.stdout)).result, "Done");
     assert.equal(generation, 3);
     assert.equal(counts, 2);
     assert.equal(requests.length, 5);
     assert.equal(FILE_READ_BYTES, 262144);
     assert.equal(await readFile(f.file, "utf8"), text);
   },
+  { timeout: 15000 },
 );
 
-test("short OS reads can split the encoding marker and a UTF16 surrogate", async (t) => {
-  const f = await fixture(t);
+test("short OS reads can split the encoding marker and a UTF16 surrogate", async () => {
+  const f = await fixture();
   await writeFile(f.file, Buffer.from("\ufeffα😀\r\nβ", "utf16le"));
   const handle = await open(f.file, "r");
   try {
-    const fragmented = {
-      stat: handle.stat.bind(handle),
-      read: (
-        buffer: Buffer,
-        offset: number,
-        length: number,
-        position: number,
-      ) => handle.read(buffer, offset, Math.min(1, length), position),
-    } as unknown as typeof handle;
+    const fragmented = new Proxy(handle, {
+      get(target, property) {
+        if (property === "stat") return target.stat.bind(target);
+        if (property === "read")
+          return (
+            buffer: Buffer,
+            offset: number,
+            length: number,
+            position: number,
+          ) => target.read(buffer, offset, Math.min(1, length), position);
+        const value: unknown = Reflect.get(target, property);
+        return value;
+      },
+    });
     const result = await selectTextFile(
       fragmented,
       { offset: 1 },
-      t.signal,
+      testSignal(),
       25000,
     );
     assert.equal(result.text, "α😀\nβ");

@@ -299,7 +299,9 @@ export async function projectMcpResult(
         type: "text",
         text:
           !raw.content.length && raw.error !== undefined
-            ? String(raw.error)
+            ? typeof raw.error === "string"
+              ? raw.error
+              : JSON.stringify(raw.error)
             : "Unknown error",
       });
   } else if (Object.hasOwn(raw, "toolResult")) {

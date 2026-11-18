@@ -519,7 +519,7 @@ class StdioConnection {
           reject(
             new McpProtocolError(
               -32600,
-              `MCP resultType ${String(value.resultType)} is not supported by this port; the call will not be replayed`,
+              `MCP resultType ${typeof value.resultType === "string" ? value.resultType : JSON.stringify(value.resultType)} is not supported by this port; the call will not be replayed`,
             ),
           );
         },
@@ -871,7 +871,11 @@ export class McpManager {
   }
   /** Await pending list-change refreshes before constructing the next model request. */
   async refreshTools(): Promise<void> {
-    await Promise.all(this.servers.map((server) => server.refresh));
+    await Promise.all(
+      this.servers.flatMap((server) =>
+        server.refresh ? [server.refresh] : [],
+      ),
+    );
   }
 
   private rebuild(): void {
@@ -967,9 +971,8 @@ export class McpManager {
     );
     if (
       object(result) &&
-      ["task", "input_required", "upload_required"].includes(
-        String(result.resultType),
-      )
+      typeof result.resultType === "string" &&
+      ["task", "input_required", "upload_required"].includes(result.resultType)
     )
       throw new Error(
         `MCP ${result.resultType} results are not supported by this port; the call will not be replayed`,
@@ -991,7 +994,9 @@ export class McpManager {
     this.tools.clear();
     await Promise.all(this.servers.map((server) => server.connection.close()));
     await Promise.all(
-      this.servers.map((server) => server.refresh?.catch(() => {})),
+      this.servers.flatMap((server) =>
+        server.refresh ? [server.refresh.catch(() => {})] : [],
+      ),
     );
   }
 }

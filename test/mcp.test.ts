@@ -1,4 +1,5 @@
-import test from "node:test";
+import { test } from "bun:test";
+import { z } from "zod";
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, writeFile, rm, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -15,6 +16,24 @@ import {
   parseMcpCallResult,
   type McpStdioConfig,
 } from "../src/mcp.js";
+
+const eventRow = z.looseObject({
+  pid: z.number(),
+  event: z.string(),
+  explicit: z.string().optional(),
+  message: z
+    .looseObject({
+      id: z.union([z.string(), z.number()]).optional(),
+      method: z.string().optional(),
+      params: z.record(z.string(), z.unknown()).optional(),
+      result: z.unknown().optional(),
+    })
+    .optional(),
+});
+const protocolVersion = (params: unknown) =>
+  z.object({ _meta: z.record(z.string(), z.unknown()) }).parse(params)._meta[
+    "io.modelcontextprotocol/protocolVersion"
+  ];
 
 // Independently written local server; the recovered application is never executed.
 const fixture = String.raw`
@@ -101,23 +120,11 @@ async function harness(mode = "legacy") {
       );
       return manager;
     },
-    async events(): Promise<
-      Array<{
-        pid: number;
-        event: string;
-        explicit?: string;
-        message?: {
-          id?: string | number;
-          method?: string;
-          params?: Record<string, unknown>;
-          result?: unknown;
-        };
-      }>
-    > {
+    async events() {
       return (await readFile(log, "utf8"))
         .trim()
         .split("\n")
-        .map((line) => JSON.parse(line) as { pid: number; event: string });
+        .map((line) => eventRow.parse(JSON.parse(line)));
     },
     async cleanup() {
       await manager?.close();
@@ -264,19 +271,9 @@ test("MCP modern workflow sends request envelopes and opens/cleans list-change s
     const discover = messages.find(
       (message) => message.method === "server/discover",
     );
-    assert.equal(
-      (discover?.params?._meta as Record<string, unknown>)[
-        "io.modelcontextprotocol/protocolVersion"
-      ],
-      "2026-07-28",
-    );
+    assert.equal(protocolVersion(discover?.params), "2026-07-28");
     const call = messages.find((message) => message.method === "tools/call");
-    assert.equal(
-      (call?.params?._meta as Record<string, unknown>)[
-        "io.modelcontextprotocol/protocolVersion"
-      ],
-      "2026-07-28",
-    );
+    assert.equal(protocolVersion(call?.params), "2026-07-28");
     assert.ok(
       messages.some((message) => message.method === "subscriptions/listen"),
     );
@@ -326,7 +323,8 @@ test("MCP distinguishes tool errors and JSON-RPC errors and never replays failed
       (error) =>
         error instanceof McpProtocolError &&
         error.code === -32602 &&
-        (error.data as { detail: string }).detail === "specific",
+        z.object({ detail: z.string() }).safeParse(error.data).data?.detail ===
+          "specific",
     );
     await assert.rejects(
       manager.callTool(name("die"), {}, signal()),
@@ -443,8 +441,10 @@ test("MCP source projection keeps images, structured data, resources, and saved 
     const directory = join(h.directory, ".tau", "mcp-results");
     const files = await readdir(directory);
     assert.equal(files.length, 1);
+    const [file] = files;
+    assert.ok(file);
     assert.equal(
-      (await readFile(join(directory, files[0]!))).toString(),
+      (await readFile(join(directory, file))).toString(),
       "RIFFtest",
     );
   } finally {

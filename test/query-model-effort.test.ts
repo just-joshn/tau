@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "bun:test";
 import {
   buildQueryEffortSettings,
   captureQueryRequestModel,
@@ -462,10 +462,15 @@ test("query entry captures API model while later skill context and effort remain
   let contextModel = "sonnet";
   const frame = captureQueryRequestModel(contextModel);
   contextModel = "haiku";
+  const lowEffort = resolveQueryEffort({
+    capabilities: all,
+    turnEffort: "low",
+  });
+  assert.ok(lowEffort);
   const laterRequest = {
     model: selectQueryRequestModel(frame),
     output_config: queryEffortOutputConfig({
-      effort: resolveQueryEffort({ capabilities: all, turnEffort: "low" })!,
+      effort: lowEffort,
       capabilities: all,
     }).outputConfig,
   };

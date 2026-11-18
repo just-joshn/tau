@@ -12,14 +12,68 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import test from "node:test";
+import { test, onTestFinished } from "bun:test";
+import { z } from "zod";
 import { fixtureSse } from "./sse-fixture.js";
 
-async function fixture(t: any) {
+const requestBodySchema = z.looseObject({
+  system: z.unknown().optional(),
+  messages: z.array(
+    z.looseObject({
+      role: z.string(),
+      content: z.array(
+        z.looseObject({
+          type: z.string(),
+          text: z.string().optional(),
+          tool_use_id: z.string().optional(),
+          content: z.unknown().optional(),
+          is_error: z.unknown().optional(),
+        }),
+      ),
+    }),
+  ),
+  tools: z.array(
+    z.looseObject({ name: z.string(), description: z.string().optional() }),
+  ),
+});
+type RequestBody = z.infer<typeof requestBodySchema>;
+type ReplyBlock = Record<string, unknown> & { type: string };
+const hookRowSchema = z.looseObject({
+  input: z.looseObject({
+    tool_name: z.string(),
+    permission_mode: z.string().optional(),
+  }),
+  root: z.string(),
+});
+const mcpRowSchema = z.looseObject({
+  pid: z.number(),
+  event: z.string(),
+  method: z.string().optional(),
+  root: z.string().optional(),
+  data: z.string().optional(),
+  state: z.string().optional(),
+});
+function present<T>(value: T | null | undefined): T {
+  assert.ok(value !== null && value !== undefined);
+  return value;
+}
+function bodyAt(bodies: readonly RequestBody[], index: number): RequestBody {
+  return present(bodies[index]);
+}
+function toolNamed(body: RequestBody, name: string) {
+  return body.tools.find((entry) => entry.name === name);
+}
+async function readRows<T>(file: string, schema: z.ZodType<T>): Promise<T[]> {
+  return (await readFile(file, "utf8"))
+    .trim()
+    .split("\n")
+    .map((row) => schema.parse(JSON.parse(row)));
+}
+async function fixture() {
   const root = await realpath(
     await mkdtemp(join(tmpdir(), "tau-cli-plugins-")),
   );
-  t.after(() => rm(root, { recursive: true, force: true }));
+  onTestFinished(() => rm(root, { recursive: true, force: true }));
   const cwd = join(root, "project"),
     plugin = join(root, "owned-plugin"),
     config = join(root, "config"),
@@ -73,15 +127,15 @@ async function fixture(t: any) {
       },
     }),
   );
-  let responder: (body: any, index: number) => any = () => ({
+  let responder: (body: RequestBody, index: number) => ReplyBlock = () => ({
     type: "text",
     text: "done",
   });
-  const bodies: any[] = [];
+  const bodies: RequestBody[] = [];
   const api = createServer(async (req, res) => {
     let raw = "";
     for await (const chunk of req) raw += chunk;
-    const body = JSON.parse(raw);
+    const body = requestBodySchema.parse(JSON.parse(raw));
     bodies.push(body);
     const block = responder(body, bodies.length);
     res.writeHead(200, { "content-type": "text/event-stream" });
@@ -109,7 +163,7 @@ async function fixture(t: any) {
       ]),
     );
   });
-  t.after(
+  onTestFinished(
     () =>
       new Promise<void>((done) => {
         api.closeAllConnections();
@@ -125,7 +179,7 @@ async function fixture(t: any) {
         const child = spawn(
           process.execPath,
           [
-            fileURLToPath(new URL("../src/cli.js", import.meta.url)),
+            fileURLToPath(new URL("../src/cli.ts", import.meta.url)),
             "--cwd",
             cwd,
             "-p",
@@ -186,20 +240,21 @@ const tool = (name: string, input: unknown, id: number) => ({
   input,
   id: `plugin-call-${id}`,
 });
-const result = (body: any, id: number) =>
-  body.messages
-    .flatMap((row: any) => row.content)
-    .find(
-      (block: any) =>
-        block.type === "tool_result" &&
-        block.tool_use_id === `plugin-call-${id}`,
-    );
+const result = (body: RequestBody, id: number) =>
+  present(
+    body.messages
+      .flatMap((row) => row.content)
+      .find(
+        (block) =>
+          block.type === "tool_result" &&
+          block.tool_use_id === `plugin-call-${id}`,
+      ),
+  );
 
 test(
   "compiled explicit plugin Skill→Write→Agent→Read registers namespaces, grants and hook origins",
-  { timeout: 15000 },
-  async (t) => {
-    const f = await fixture(t);
+  async () => {
+    const f = await fixture();
     f.respond((_body, index) =>
       index === 1
         ? tool(
@@ -242,68 +297,70 @@ test(
       "OWNED_PLUGIN_FILE",
     );
     assert.match(
-      JSON.stringify(f.bodies[1].messages),
+      JSON.stringify(bodyAt(f.bodies, 1).messages),
       /PLUGIN_PREPARE_BODY owned-argument/,
     );
-    assert.match(JSON.stringify(f.bodies[1].messages), /owned-plugin/);
-    assert.match(JSON.stringify(f.bodies[3].system), /PLUGIN_CHILD_MARKER/);
+    assert.match(JSON.stringify(bodyAt(f.bodies, 1).messages), /owned-plugin/);
+    assert.match(
+      JSON.stringify(bodyAt(f.bodies, 3).system),
+      /PLUGIN_CHILD_MARKER/,
+    );
     assert.deepEqual(
-      f.bodies[3].tools.map((entry: any) => entry.name),
+      bodyAt(f.bodies, 3).tools.map((entry) => entry.name),
       ["Read"],
     );
-    assert.match(result(f.bodies[4], 4).content, /OWNED_PLUGIN_FILE/);
+    const readContent = result(bodyAt(f.bodies, 4), 4).content;
+    assert.ok(typeof readContent === "string");
+    assert.match(readContent, /OWNED_PLUGIN_FILE/);
     assert.match(
-      JSON.stringify(result(f.bodies[5], 3).content),
+      JSON.stringify(result(bodyAt(f.bodies, 5), 3).content),
       /PLUGIN_CHILD_REPORT/,
     );
-    const rows = (await readFile(f.log, "utf8"))
-      .trim()
-      .split("\n")
-      .map((row) => JSON.parse(row));
+    const rows = await readRows(f.log, hookRowSchema);
     assert.deepEqual(
       rows.map((row) => row.input.tool_name),
       ["Write", "Read"],
     );
     assert.ok(rows.every((row) => row.root === f.plugin));
     assert.equal(
-      rows[1].input.permission_mode,
+      present(rows[1]).input.permission_mode,
       "default",
       "Plugin agent frontmatter cannot activate bypass mode",
     );
   },
+  { timeout: 15000 },
 );
 
 test(
   "compiled plugin legacy slash command keeps command invocation without a skill base-directory prefix",
-  { timeout: 15000 },
-  async (t) => {
-    const f = await fixture(t);
+  async () => {
+    const f = await fixture();
     const execution = await f.cli("/owned:legacy owned-argument", [
       "--setting-sources",
       "",
     ]);
     assert.equal(execution.code, 0, execution.err);
     assert.equal(f.bodies.length, 1);
-    const expanded = f.bodies[0].messages
-      .flatMap((row: any) => row.content)
+    const expanded = bodyAt(f.bodies, 0)
+      .messages.flatMap((row) => row.content)
       .filter(
-        (block: any) =>
-          block.type === "text" && block.text.includes("LEGACY_BODY"),
+        (block) => block.type === "text" && block.text?.includes("LEGACY_BODY"),
       );
     assert.equal(expanded.length, 1);
-    assert.match(expanded[0].text, /LEGACY_BODY owned-argument/);
+    const expandedText = present(present(expanded[0]).text);
+    assert.match(expandedText, /LEGACY_BODY owned-argument/);
     assert.equal(
-      expanded[0].text.includes("Base directory for this skill:"),
+      expandedText.includes("Base directory for this skill:"),
       false,
     );
   },
+  { timeout: 15000 },
 );
 
 test(
   "compiled disabled, managed-locked and missing-dependency plugins have no active prompts, agents or hooks",
-  { timeout: 15000 },
-  async (t) => {
-    const f = await fixture(t);
+  async () => {
+    const f = await fixture();
     for (const [settings, managed, dependencies] of [
       [{ enabledPlugins: { "owned@inline": false } }, undefined, undefined],
       [{}, { enabledPlugins: { "owned@market": false } }, undefined],
@@ -335,20 +392,20 @@ test(
       const execution = await f.cli("owned refusal");
       assert.equal(execution.code, 0, execution.err);
       assert.equal(f.bodies.length, 2);
-      assert.equal(result(f.bodies[1], 1).is_error, true);
+      assert.equal(result(bodyAt(f.bodies, 1), 1).is_error, true);
       assert.equal(
-        f.bodies[0].tools.some((entry: any) => entry.name === "Skill"),
+        bodyAt(f.bodies, 0).tools.some((entry) => entry.name === "Skill"),
         false,
         JSON.stringify({
           settings,
           managed,
           dependencies,
-          tools: f.bodies[0].tools.map((entry: any) => entry.name),
+          tools: bodyAt(f.bodies, 0).tools.map((entry) => entry.name),
           diagnostics: execution.err,
         }),
       );
       assert.equal(
-        JSON.stringify(f.bodies[0].messages).includes("owned:reader"),
+        JSON.stringify(bodyAt(f.bodies, 0).messages).includes("owned:reader"),
         false,
       );
       await assert.rejects(readFile(f.log), { code: "ENOENT" });
@@ -358,13 +415,13 @@ test(
       );
     }
   },
+  { timeout: 15000 },
 );
 
 test(
   "plugin-only customization retains inline skills and agents while withholding ordinary customizations",
-  { timeout: 15000 },
-  async (t) => {
-    const f = await fixture(t),
+  async () => {
+    const f = await fixture(),
       marker = join(f.root, "ordinary-hook-ran");
     await mkdir(join(f.config, "skills", "ordinary"), { recursive: true });
     await mkdir(join(f.config, "agents"));
@@ -405,40 +462,37 @@ test(
     ]);
     assert.equal(execution.code, 0, execution.err);
     assert.equal(f.bodies.length, 1);
-    const skill = f.bodies[0].tools.find(
-        (entry: any) => entry.name === "Skill",
-      ),
-      agent = f.bodies[0].tools.find((entry: any) => entry.name === "Agent");
-    assert.equal(skill.description.includes("owned:prepare"), false);
-    assert.equal(agent.description.includes("owned:reader"), false);
-    const catalogs = f.bodies[0].messages
-      .filter((message: any) => message.role === "user")
-      .flatMap((message: any) => message.content)
+    const skill = present(toolNamed(bodyAt(f.bodies, 0), "Skill")),
+      agent = present(toolNamed(bodyAt(f.bodies, 0), "Agent"));
+    assert.equal(present(skill.description).includes("owned:prepare"), false);
+    assert.equal(present(agent.description).includes("owned:reader"), false);
+    const catalogs = bodyAt(f.bodies, 0)
+      .messages.filter((message) => message.role === "user")
+      .flatMap((message) => message.content)
       .filter(
-        (block: any) =>
-          block.type === "text" && block.text.includes("<system-reminder>"),
+        (block) =>
+          block.type === "text" && block.text?.includes("<system-reminder>"),
       );
     assert.match(
-      catalogs.find((block: any) =>
-        block.text.includes("Agent types available"),
-      )?.text ?? "",
+      catalogs.find((block) => block.text?.includes("Agent types available"))
+        ?.text ?? "",
       /owned:reader/,
     );
     assert.match(
-      catalogs.find((block: any) => block.text.includes("Skills available"))
+      catalogs.find((block) => block.text?.includes("Skills available"))
         ?.text ?? "",
       /owned:prepare/,
     );
     assert.equal(JSON.stringify(catalogs).includes("ordinary"), false);
     await assert.rejects(readFile(marker), { code: "ENOENT" });
   },
+  { timeout: 15000 },
 );
 
 test(
   "compiled plugin MCP discovers, calls and closes a qualified stdio server with plugin context",
-  { timeout: 15000 },
-  async (t) => {
-    const f = await fixture(t),
+  async () => {
+    const f = await fixture(),
       log = join(f.root, "mcp.jsonl"),
       script = join(f.plugin, "mcp.cjs");
     await writeFile(
@@ -471,40 +525,36 @@ test(
     assert.equal(execution.code, 0, execution.err);
     assert.equal(f.bodies.length, 2);
     assert.ok(
-      f.bodies[0].tools.some(
-        (entry: any) => entry.name === "mcp__plugin_owned_probe__echo",
+      bodyAt(f.bodies, 0).tools.some(
+        (entry) => entry.name === "mcp__plugin_owned_probe__echo",
       ),
     );
     assert.match(
-      JSON.stringify(result(f.bodies[1], 1).content),
+      JSON.stringify(result(bodyAt(f.bodies, 1), 1).content),
       /PLUGIN_MCP_REPLY/,
     );
-    const rows = (await readFile(log, "utf8"))
-      .trim()
-      .split("\n")
-      .map((row) => JSON.parse(row));
-    assert.equal(rows[0].root, f.plugin);
-    assert.equal(
-      rows[0].data,
-      join(f.config, "plugins", "data", "owned-inline"),
-    );
-    assert.equal(rows[0].state, rows[0].data);
+    const rows = await readRows(log, mcpRowSchema);
+    const first = present(rows[0]);
+    assert.equal(first.root, f.plugin);
+    assert.equal(first.data, join(f.config, "plugins", "data", "owned-inline"));
+    assert.equal(first.state, first.data);
     assert.equal(
       rows.filter(
         (row) => row.event === "request" && row.method === "tools/call",
       ).length,
       1,
     );
-    assert.equal(rows.at(-1).event, "exit");
-    assert.throws(() => process.kill(rows[0].pid, 0), { code: "ESRCH" });
+    assert.equal(present(rows.at(-1)).event, "exit");
+    assert.throws(() => process.kill(first.pid, 0), { code: "ESRCH" });
     f.bodies.length = 0;
     await rm(log);
     const strict = await f.cli("strict plugin MCP", ["--strict-mcp-config"]);
     assert.equal(strict.code, 0, strict.err);
     assert.equal(
-      f.bodies[0].tools.some((entry: any) => entry.name.startsWith("mcp__")),
+      bodyAt(f.bodies, 0).tools.some((entry) => entry.name.startsWith("mcp__")),
       false,
     );
     await assert.rejects(readFile(log), { code: "ENOENT" });
   },
+  { timeout: 15000 },
 );

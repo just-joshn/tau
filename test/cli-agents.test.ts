@@ -13,12 +13,82 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import test from "node:test";
+import { test, onTestFinished } from "bun:test";
+import { z } from "zod";
 import { fixtureSse } from "./sse-fixture.js";
 
-async function fixture(t: any) {
+const textBlock = z.object({ type: z.literal("text"), text: z.string() });
+const toolResult = z.object({
+  type: z.literal("tool_result"),
+  tool_use_id: z.string(),
+  content: z.union([z.string(), z.array(textBlock)]),
+  is_error: z.boolean().optional(),
+});
+type ToolResult = z.infer<typeof toolResult>;
+const bodySchema = z.object({
+  model: z.string(),
+  system: z.unknown(),
+  messages: z.array(
+    z.object({
+      role: z.string(),
+      content: z.union([z.string(), z.array(z.unknown())]),
+    }),
+  ),
+  tools: z.array(z.object({ name: z.string() })).default([]),
+  max_tokens: z.number(),
+});
+type Body = z.infer<typeof bodySchema>;
+type Action =
+  | { type: "text"; text: string }
+  | {
+      type: "tool_use";
+      id: string;
+      name: string;
+      input: Record<string, unknown>;
+    };
+const outputSchema = z.object({
+  result: z.string(),
+  usage: z.unknown(),
+  session_id: z.string(),
+  result_index: z.number(),
+  num_turns: z.number(),
+});
+const metadataSchema = z.object({
+  output_file: z.string(),
+  agentId: z.string(),
+});
+const archiveSchema = z.object({ status: z.string(), messages: z.unknown() });
+const taskSchema = z.object({
+  status: z.string(),
+  settled: z.boolean(),
+  agentId: z.string().optional(),
+  killedBy: z.string().optional(),
+  notification: z.string().optional(),
+  result: z.object({ totalTokens: z.number() }).optional(),
+  usage: z.object({ totalTokens: z.number() }).optional(),
+});
+const hookRowSchema = z.object({
+  input: z.object({
+    hook_event_name: z.string(),
+    permission_mode: z.unknown().optional(),
+    effort: z.unknown().optional(),
+    stop_hook_active: z.boolean().optional(),
+    transcript_path: z.string().optional(),
+    agent_id: z.string().optional(),
+    agent_transcript_path: z.string().optional(),
+  }),
+  archive: z.unknown().optional(),
+});
+const fail = (message: string): never => {
+  throw new Error(message);
+};
+const lastLine = (text: string) => text.split("\n").at(-1) ?? "";
+const firstText = (content: ToolResult["content"]) =>
+  typeof content === "string" ? content : (content[0]?.text ?? "");
+
+async function fixture() {
   const root = await realpath(await mkdtemp(join(tmpdir(), "tau-cli-agents-")));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  onTestFinished(() => rm(root, { recursive: true, force: true }));
   const cwd = join(root, "project"),
     config = join(root, "config"),
     home = join(root, "home");
@@ -29,15 +99,15 @@ async function fixture(t: any) {
     join(config, "agents", "reader.md"),
     "---\nname: reader\ndescription: Read an owned file\ntools: Read\nmodel: sonnet\nmaxTurns: 3\n---\nCHILD_SYSTEM_MARKER",
   );
-  const bodies: any[] = [];
-  let responder: (body: any, index: number) => any = () => ({
-    type: "text",
-    text: "done",
-  });
+  const bodies: Body[] = [];
+  let responder: (
+    body: Body,
+    index: number,
+  ) => Action | Promise<Action> = () => ({ type: "text", text: "done" });
   const api = createServer(async (req, res) => {
     let raw = "";
     for await (const chunk of req) raw += chunk;
-    const body = JSON.parse(raw);
+    const body = bodySchema.parse(JSON.parse(raw));
     bodies.push(body);
     const index = bodies.length,
       block = await responder(body, index);
@@ -66,7 +136,7 @@ async function fixture(t: any) {
       ]),
     );
   });
-  t.after(
+  onTestFinished(
     () =>
       new Promise<void>((done) => {
         api.closeAllConnections();
@@ -86,7 +156,7 @@ async function fixture(t: any) {
         const child = spawn(
           process.execPath,
           [
-            fileURLToPath(new URL("../src/cli.js", import.meta.url)),
+            fileURLToPath(new URL("../src/cli.ts", import.meta.url)),
             "--cwd",
             cwd,
             "-p",
@@ -133,13 +203,15 @@ async function fixture(t: any) {
     config,
     state: join(root, "state"),
     bodies,
+    body: (index: number) =>
+      bodies[index] ?? fail(`Owned request missing: ${String(index)}`),
     cli,
     respond: (fn: typeof responder) => {
       responder = fn;
     },
   };
 }
-const agent = (overrides = {}) => ({
+const agent = (overrides: Record<string, unknown> = {}): Action => ({
   type: "tool_use",
   id: "parent-agent",
   name: "Agent",
@@ -151,18 +223,21 @@ const agent = (overrides = {}) => ({
     ...overrides,
   },
 });
-const result = (body: any, id: string) =>
-  body.messages
-    .flatMap((row: any) => row.content)
-    .find(
-      (block: any) => block.type === "tool_result" && block.tool_use_id === id,
-    );
+function result(body: Body, id: string) {
+  for (const row of body.messages)
+    if (typeof row.content !== "string")
+      for (const block of row.content) {
+        const parsed = toolResult.safeParse(block);
+        if (parsed.success && parsed.data.tool_use_id === id)
+          return parsed.data;
+      }
+  throw new Error(`Owned result missing: ${id}`);
+}
 
 test(
   "compiled foreground Agent isolates child history, narrows tools and uses independent query defaults",
-  { timeout: 15000 },
-  async (t) => {
-    const f = await fixture(t);
+  async () => {
+    const f = await fixture();
     f.respond((_body, index) =>
       index === 1
         ? agent()
@@ -185,46 +260,48 @@ test(
       Array(4).fill("claude-sonnet-4-6"),
     );
     assert.deepEqual(
-      f.bodies[1].tools.map((tool: any) => tool.name),
+      f.body(1).tools.map((tool) => tool.name),
       ["Read"],
     );
     assert.equal(
-      JSON.stringify(f.bodies[1].messages).includes("PARENT_PRIVATE_PROMPT"),
+      JSON.stringify(f.body(1).messages).includes("PARENT_PRIVATE_PROMPT"),
       false,
     );
-    assert.match(JSON.stringify(f.bodies[1].system), /CHILD_SYSTEM_MARKER/);
-    assert.equal(f.bodies[0].max_tokens, 17);
-    assert.ok(f.bodies[1].max_tokens > 17);
+    assert.match(JSON.stringify(f.body(1).system), /CHILD_SYSTEM_MARKER/);
+    assert.equal(f.body(0).max_tokens, 17);
+    assert.ok(f.body(1).max_tokens > 17);
     assert.match(
-      result(f.bodies[2], "child-read").content,
+      firstText(result(f.body(2), "child-read").content),
       /CHILD_PRIVATE_FILE/,
     );
-    const report = result(f.bodies[3], "parent-agent");
+    const report = result(f.body(3), "parent-agent");
     assert.ok(Array.isArray(report.content));
     assert.match(JSON.stringify(report.content), /OWNED_CHILD_REPORT/);
     assert.match(JSON.stringify(report.content), /subagent_tokens: 13/);
     assert.match(JSON.stringify(report.content), /tool_uses: 1/);
     assert.equal(
-      JSON.stringify(f.bodies[3].messages).includes("CHILD_PRIVATE_FILE"),
+      JSON.stringify(f.body(3).messages).includes("CHILD_PRIVATE_FILE"),
       false,
     );
-    const output = JSON.parse(execution.out);
+    const output = outputSchema.parse(JSON.parse(execution.out));
     assert.equal(output.result, "PARENT_FINAL");
     assert.deepEqual(output.usage, { input_tokens: 20, output_tokens: 6 });
-    const id = /agentId: ([^\n]+)/.exec(report.content[0].text)?.[1];
+    const id = /agentId: ([^\n]+)/.exec(firstText(report.content))?.[1];
     assert.ok(id);
     const key = createHash("sha256").update(f.cwd).digest("hex").slice(0, 24);
-    const archive = JSON.parse(
-      await readFile(
-        join(
-          f.state,
-          "sessions",
-          key,
-          output.session_id,
-          "subagents",
-          `${id}.json`,
+    const archive = archiveSchema.parse(
+      JSON.parse(
+        await readFile(
+          join(
+            f.state,
+            "sessions",
+            key,
+            output.session_id,
+            "subagents",
+            `${id}.json`,
+          ),
+          "utf8",
         ),
-        "utf8",
       ),
     );
     assert.equal(archive.status, "completed");
@@ -234,13 +311,13 @@ test(
       false,
     );
   },
+  { timeout: 15000 },
 );
 
 test(
   "compiled Agent refuses unknown, denied and unsupported isolation before child requests",
-  { timeout: 15000 },
-  async (t) => {
-    const f = await fixture(t);
+  async () => {
+    const f = await fixture();
     for (const [input, args, expected] of [
       [{ subagent_type: "missing" }, [], /not found/],
       [{}, ["--disallowed-tools", "Agent(reader)"], /denied/],
@@ -253,9 +330,9 @@ test(
       const execution = await f.cli([...args]);
       assert.equal(execution.code, 0, execution.err);
       assert.equal(f.bodies.length, 2);
-      const failure = result(f.bodies[1], "parent-agent");
+      const failure = result(f.body(1), "parent-agent");
       assert.equal(failure.is_error, true);
-      assert.match(failure.content, expected);
+      assert.match(firstText(failure.content), expected);
       assert.equal(
         f.bodies.some((body) =>
           JSON.stringify(body.system).includes("CHILD_SYSTEM_MARKER"),
@@ -264,13 +341,13 @@ test(
       );
     }
   },
+  { timeout: 15000 },
 );
 
 test(
   "compiled default background Agent returns before child completion, drains a new parent query and reads owned output",
-  { timeout: 15000 },
-  async (t) => {
-    const f = await fixture(t);
+  async () => {
+    const f = await fixture();
     let release!: () => void, continued!: () => void;
     const childGate = new Promise<void>((resolve) => {
       release = resolve;
@@ -278,7 +355,7 @@ test(
     const parentContinued = new Promise<void>((resolve) => {
       continued = resolve;
     });
-    t.after(() => release());
+    onTestFinished(() => release());
     let parentRequests = 0,
       childRequests = 0,
       outputFile = "",
@@ -315,8 +392,8 @@ test(
         assert.equal(childFinished, false);
         const launch = result(body, "parent-agent");
         assert.equal(launch.is_error, undefined);
-        outputFile = JSON.parse(
-          launch.content[0].text.split("\n").at(-1),
+        outputFile = metadataSchema.parse(
+          JSON.parse(lastLine(firstText(launch.content))),
         ).output_file;
         assert.match(outputFile, /\.output$/);
         continued();
@@ -353,28 +430,30 @@ test(
     assert.equal(execution.code, 0, execution.err);
     assert.equal(parentRequests, 4);
     assert.equal(childRequests, 2);
-    const terminal = JSON.parse(execution.out);
+    const terminal = outputSchema.parse(JSON.parse(execution.out));
     assert.equal(terminal.result, "PARENT_AFTER_NOTIFICATION");
     assert.deepEqual(terminal.usage, { input_tokens: 20, output_tokens: 6 });
     assert.equal(terminal.result_index, 1);
     assert.equal(terminal.num_turns, 2);
-    const task = JSON.parse(
-      await readFile(outputFile.replace(/\.output$/, ".task.json"), "utf8"),
+    const task = taskSchema.parse(
+      JSON.parse(
+        await readFile(outputFile.replace(/\.output$/, ".task.json"), "utf8"),
+      ),
     );
     assert.equal(task.status, "completed");
     assert.equal(task.settled, true);
     assert.equal(task.notification, "enqueued");
-    assert.equal(task.result.totalTokens, 13);
-    assert.equal(task.usage.totalTokens, 15);
+    assert.equal(task.result?.totalTokens, 13);
+    assert.equal(task.usage?.totalTokens, 15);
   },
+  { timeout: 15000 },
 );
 
 for (const disabled of ["true", "false"])
   test(
     `raw truthy background-disabled setting ${disabled} resolves an explicit async request to foreground`,
-    { timeout: 15000 },
-    async (t) => {
-      const f = await fixture(t);
+    async () => {
+      const f = await fixture();
       f.respond((_body, index) =>
         index === 1
           ? agent({ run_in_background: true })
@@ -388,25 +467,25 @@ for (const disabled of ["true", "false"])
       });
       assert.equal(execution.code, 0, execution.err);
       assert.equal(f.bodies.length, 3);
-      const report = result(f.bodies[2], "parent-agent");
+      const report = result(f.body(2), "parent-agent");
       assert.match(JSON.stringify(report), /DISABLED_SYNC_CHILD/);
       assert.equal(
         JSON.stringify(report).includes("Background agent launched"),
         false,
       );
     },
+    { timeout: 15000 },
   );
 
 test(
   "compiled TaskStop cancels a detached child while the parent continues and archives killed ownership",
-  { timeout: 15000 },
-  async (t) => {
-    const f = await fixture(t);
+  async () => {
+    const f = await fixture();
     let release!: () => void, started!: () => void;
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    t.after(() => release());
+    onTestFinished(() => release());
     const childStarted = new Promise<void>((resolve) => {
       started = resolve;
     });
@@ -422,12 +501,12 @@ test(
         return { type: "text", text: "CHILD_MUST_NOT_FINISH" };
       }
       parentRequests++;
-      assert.ok(body.tools.some((tool: any) => tool.name === "TaskStop"));
+      assert.ok(body.tools.some((tool) => tool.name === "TaskStop"));
       if (parentRequests === 1) return agent({ run_in_background: true });
       if (parentRequests === 2) {
         await childStarted;
-        const metadata = JSON.parse(
-          result(body, "parent-agent").content[0].text.split("\n").at(-1),
+        const metadata = metadataSchema.parse(
+          JSON.parse(lastLine(firstText(result(body, "parent-agent").content))),
         );
         agentId = metadata.agentId;
         outputFile = metadata.output_file;
@@ -448,23 +527,28 @@ test(
     );
     assert.equal(execution.code, 0, execution.err);
     assert.equal(childRequests, 1);
-    assert.equal(JSON.parse(execution.out).result, "PARENT_STOPPED_CHILD");
+    assert.equal(
+      outputSchema.parse(JSON.parse(execution.out)).result,
+      "PARENT_STOPPED_CHILD",
+    );
     assert.equal(execution.out.includes("CHILD_MUST_NOT_FINISH"), false);
-    const archived = JSON.parse(
-      await readFile(outputFile.replace(/\.output$/, ".task.json"), "utf8"),
+    const archived = taskSchema.parse(
+      JSON.parse(
+        await readFile(outputFile.replace(/\.output$/, ".task.json"), "utf8"),
+      ),
     );
     assert.equal(archived.agentId, agentId);
     assert.equal(archived.status, "killed");
     assert.equal(archived.killedBy, "parent");
     assert.equal(archived.settled, true);
   },
+  { timeout: 15000 },
 );
 
 test(
   "compiled child retains parent Read asks and rejects model-selected tools outside the admitted scope",
-  { timeout: 15000 },
-  async (t) => {
-    const f = await fixture(t);
+  async () => {
+    const f = await fixture();
     await writeFile(
       join(f.config, "settings.json"),
       JSON.stringify({ permissions: { ask: ["Read"] } }),
@@ -493,20 +577,20 @@ test(
     const execution = await f.cli();
     assert.equal(execution.code, 0, execution.err);
     assert.equal(f.bodies.length, 5);
-    assert.equal(result(f.bodies[2], "child-read").is_error, true);
-    assert.equal(result(f.bodies[3], "child-write").is_error, true);
+    assert.equal(result(f.body(2), "child-read").is_error, true);
+    assert.equal(result(f.body(3), "child-write").is_error, true);
     assert.equal(
       await readFile(join(f.cwd, "owned.txt"), "utf8"),
       "CHILD_PRIVATE_FILE\n",
     );
   },
+  { timeout: 15000 },
 );
 
 test(
   "compiled fresh Agent distinguishes exact type asks from generic argument asks",
-  { timeout: 15000 },
-  async (t) => {
-    const f = await fixture(t);
+  async () => {
+    const f = await fixture();
     for (const [rule, expected] of [
       ["Agent(reader)", 3],
       ["Agent(subagent_type:read*)", 2],
@@ -530,13 +614,13 @@ test(
       );
     }
   },
+  { timeout: 15000 },
 );
 
 test(
   "compiled custom agent model precedence preserves family inheritance only for call and definition",
-  { timeout: 15000 },
-  async (t) => {
-    const f = await fixture(t);
+  async () => {
+    const f = await fixture();
     for (const [declared, call, env, expected] of [
       [
         "sonnet",
@@ -579,18 +663,18 @@ test(
       const execution = await f.cli([], env);
       assert.equal(execution.code, 0, execution.err);
       assert.equal(f.bodies.length, 3);
-      assert.equal(f.bodies[1].model, expected);
-      assert.equal(f.bodies[0].model, "claude-sonnet-4-6");
-      assert.equal(f.bodies[2].model, "claude-sonnet-4-6");
+      assert.equal(f.body(1).model, expected);
+      assert.equal(f.body(0).model, "claude-sonnet-4-6");
+      assert.equal(f.body(2).model, "claude-sonnet-4-6");
     }
   },
+  { timeout: 15000 },
 );
 
 test(
   "compiled child mode declarations retain sticky parent modes and personal/explicit permission floors",
-  { timeout: 15000 },
-  async (t) => {
-    const f = await fixture(t);
+  async () => {
+    const f = await fixture();
     let caseIndex = 0;
     for (const [declared, args, extraEnv, ask, permitted] of [
       ["acceptEdits", [], {}, false, true],
@@ -639,7 +723,7 @@ test(
       assert.equal(execution.code, 0, execution.err);
       assert.equal(f.bodies.length, 4);
       assert.equal(
-        result(f.bodies[2], "mode-write").is_error === true,
+        result(f.body(2), "mode-write").is_error === true,
         !permitted,
       );
       if (permitted)
@@ -648,13 +732,13 @@ test(
         await assert.rejects(readFile(join(f.cwd, path)), { code: "ENOENT" });
     }
   },
+  { timeout: 15000 },
 );
 
 test(
   "compiled Subagent hooks project Start context, continue only the child and preserve transcript identities",
-  { timeout: 15000 },
-  async (t) => {
-    const f = await fixture(t),
+  async () => {
+    const f = await fixture(),
       script = join(f.config, "lifecycle.cjs"),
       log = join(f.cwd, "hooks.jsonl"),
       counter = join(f.cwd, "stop-count");
@@ -702,12 +786,12 @@ test(
     const execution = await f.cli();
     assert.equal(execution.code, 0, execution.err);
     assert.equal(f.bodies.length, 5);
-    assert.match(JSON.stringify(f.bodies[1].messages), /START_VISIBLE/);
+    assert.match(JSON.stringify(f.body(1).messages), /START_VISIBLE/);
     assert.equal(
-      JSON.stringify(f.bodies[1].messages).includes("START_TRANSCRIPT_ONLY"),
+      JSON.stringify(f.body(1).messages).includes("START_TRANSCRIPT_ONLY"),
       false,
     );
-    assert.match(JSON.stringify(f.bodies[3].messages), /STOP_RETRY/);
+    assert.match(JSON.stringify(f.body(3).messages), /STOP_RETRY/);
     assert.equal(
       JSON.stringify(f.bodies).includes("STOP_HIDDEN_FINISH"),
       false,
@@ -715,7 +799,7 @@ test(
     const rows = (await readFile(log, "utf8"))
         .trim()
         .split("\n")
-        .map((row) => JSON.parse(row)),
+        .map((row) => hookRowSchema.parse(JSON.parse(row))),
       starts = rows.filter(
         (row) => row.input.hook_event_name === "SubagentStart",
       ),
@@ -723,9 +807,13 @@ test(
         (row) => row.input.hook_event_name === "SubagentStop",
       );
     assert.equal(starts.length, 2);
-    assert.equal(starts[0].input.permission_mode, undefined);
-    assert.equal(starts[0].input.effort, undefined);
+    const [start] = starts;
+    assert.ok(start);
+    assert.equal(start.input.permission_mode, undefined);
+    assert.equal(start.input.effort, undefined);
     assert.equal(stops.length, 2);
+    const [stop] = stops;
+    assert.ok(stop);
     assert.deepEqual(
       stops.map((row) => row.input.stop_hook_active),
       [false, true],
@@ -735,29 +823,31 @@ test(
       (row) => row.input.hook_event_name === "PreToolUse",
     );
     assert.equal(pre.length, 2);
-    assert.equal(pre[0].input.transcript_path, pre[1].input.transcript_path);
-    assert.equal(pre[1].input.agent_id, stops[0].input.agent_id);
-    assert.equal(stops[0].input.transcript_path, pre[0].input.transcript_path);
+    const [pre0, pre1] = pre;
+    assert.ok(pre0 && pre1);
+    assert.equal(pre0.input.transcript_path, pre1.input.transcript_path);
+    assert.equal(pre1.input.agent_id, stop.input.agent_id);
+    assert.equal(stop.input.transcript_path, pre0.input.transcript_path);
     assert.notEqual(
-      stops[0].input.agent_transcript_path,
-      stops[0].input.transcript_path,
+      stop.input.agent_transcript_path,
+      stop.input.transcript_path,
     );
     assert.match(
-      JSON.stringify(result(f.bodies[4], "parent-agent").content),
+      JSON.stringify(result(f.body(4), "parent-agent").content),
       /CHILD_AFTER_STOP/,
     );
     assert.equal(
-      JSON.stringify(f.bodies[4].messages).includes("STOP_RETRY"),
+      JSON.stringify(f.body(4).messages).includes("STOP_RETRY"),
       false,
     );
   },
+  { timeout: 15000 },
 );
 
 test(
   "compiled child reaching maxTurns exits normally without a teardown SubagentStop",
-  { timeout: 15000 },
-  async (t) => {
-    const f = await fixture(t),
+  async () => {
+    const f = await fixture(),
       script = join(f.config, "teardown.cjs"),
       log = join(f.cwd, "teardown.jsonl");
     await writeFile(
@@ -803,8 +893,9 @@ test(
     assert.equal(f.bodies.length, 3);
     await assert.rejects(readFile(log), { code: "ENOENT" });
     assert.equal(JSON.stringify(f.bodies).includes("TEARDOWN_HIDDEN"), false);
-    const handoff = result(f.bodies[2], "parent-agent");
+    const handoff = result(f.body(2), "parent-agent");
     assert.equal(handoff.is_error, undefined);
     assert.match(JSON.stringify(handoff.content), /partial|turn limit/);
   },
+  { timeout: 15000 },
 );

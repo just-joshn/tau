@@ -40,18 +40,18 @@ export function createLaunchPlanHost(options: {
   cwd: string;
   userConfigDir: string;
   configuredDirectory?: string;
-  sessionId(): string;
+  sessionId: () => string;
   saved(): SavedPlanState | undefined;
   save(state: SavedPlanState): void;
   mode(): PermissionMode;
   setMode(mode: PermissionMode): void;
   policy(): ToolPolicy;
-  canRequestApproval(): boolean;
+  canRequestApproval: () => boolean;
   approve(description: string): Promise<boolean>;
   hooks: ToolHookRuntime;
   requestApproval?(call: ToolUse, signal: AbortSignal): Promise<PlanApproval>;
-  hasTaskTool?(): boolean;
-  onDiagnostic?(message: string): void;
+  hasTaskTool?: () => boolean;
+  onDiagnostic?: (message: string) => void;
 }) {
   if (options.mode() === "plan" && options.saved()?.active !== true)
     options.save({ ...options.saved(), active: true });
@@ -155,29 +155,32 @@ export function createLaunchPlanHost(options: {
       return { savedPath: allowed };
     },
   };
+  const setPermissions = (
+    update: (state: PlanPermissionState) => PlanPermissionState,
+  ) => {
+    const state = update(permissions());
+    if (!isCliPermissionMode(state.mode))
+      throw new Error(`Unsupported CLI plan permission mode: ${state.mode}`);
+    options.setMode(state.mode);
+    const slug = files.peekSlug(options.sessionId()) ?? options.saved()?.slug;
+    options.save({
+      active: state.mode === "plan",
+      ...(slug === undefined ? {} : { slug }),
+      ...(state.prePlanMode === undefined ||
+      !isCliPermissionMode(state.prePlanMode)
+        ? {}
+        : { prePlanMode: state.prePlanMode }),
+      ...(state.isBypassPermissionsModeAvailable === undefined
+        ? {}
+        : { bypassAvailable: state.isBypassPermissionsModeAvailable }),
+    });
+  };
   const runtime = new PlanRuntime({
     sessionId: options.sessionId,
     files,
     storage,
     permissions,
-    setPermissions: (update) => {
-      const state = update(permissions());
-      if (!isCliPermissionMode(state.mode))
-        throw new Error(`Unsupported CLI plan permission mode: ${state.mode}`);
-      options.setMode(state.mode);
-      const slug = files.peekSlug(options.sessionId()) ?? options.saved()?.slug;
-      options.save({
-        active: state.mode === "plan",
-        ...(slug === undefined ? {} : { slug }),
-        ...(state.prePlanMode === undefined ||
-        !isCliPermissionMode(state.prePlanMode)
-          ? {}
-          : { prePlanMode: state.prePlanMode }),
-        ...(state.isBypassPermissionsModeAvailable === undefined
-          ? {}
-          : { bypassAvailable: state.isBypassPermissionsModeAvailable }),
-      });
-    },
+    setPermissions,
     canRequestApproval: options.canRequestApproval,
     approve: async (request) => ({
       approved: await options.approve(
@@ -199,6 +202,9 @@ export function createLaunchPlanHost(options: {
     runtime,
     files,
     access,
+    permissions,
+    setPermissions,
+    storage,
     location: () => runtime.planLocation(),
     wrap(
       base: ToolExecutor | (() => ToolExecutor),

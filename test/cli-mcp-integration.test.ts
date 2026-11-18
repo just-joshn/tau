@@ -11,7 +11,8 @@ import {
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import test from "node:test";
+import { test, onTestFinished } from "bun:test";
+import { z } from "zod";
 import { fixtureSse } from "./sse-fixture.js";
 
 const serverSource = String.raw`
@@ -40,16 +41,44 @@ createInterface({input:process.stdin}).on('line',line=>{
 
 `;
 
+const requestBody = z.looseObject({
+  tools: z.array(z.looseObject({ name: z.string() })),
+  messages: z.array(
+    z.looseObject({
+      content: z.array(
+        z.looseObject({
+          type: z.string(),
+          content: z.unknown().optional(),
+          is_error: z.boolean().optional(),
+        }),
+      ),
+    }),
+  ),
+});
+const cliResult = z.looseObject({ result: z.string() });
+const sessionResult = cliResult.extend({ session_id: z.string() });
+const fixtureEvent = z.looseObject({
+  event: z.string(),
+  pid: z.number(),
+  origin: z.string().optional(),
+  arguments: z.unknown().optional(),
+});
+
+function at<T>(items: readonly T[], index: number): T {
+  const item = items.at(index);
+  if (item === undefined) assert.fail(`no item at index ${String(index)}`);
+  return item;
+}
+
 function run(
   args: string[],
   env: NodeJS.ProcessEnv,
 ): Promise<{ code: number | null; out: string; err: string }> {
   return new Promise((done, reject) => {
-    const child = spawn(
-      process.execPath,
-      [resolve("dist/src/cli.js"), ...args],
-      { env, stdio: ["ignore", "pipe", "pipe"] },
-    );
+    const child = spawn(process.execPath, [resolve("src/cli.ts"), ...args], {
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     let out = "",
       err = "";
     child.stdout.setEncoding("utf8").on("data", (chunk) => {
@@ -65,12 +94,11 @@ function run(
 
 test(
   "compiled MCP config→discovery→permitted rich call→refresh→save/resume and denied calls close every server",
-  { timeout: 20000 },
-  async (t) => {
+  async () => {
     const directory = await realpath(
       await mkdtemp(join(tmpdir(), "tau-cli-mcp-")),
     );
-    t.after(() => rm(directory, { recursive: true, force: true }));
+    onTestFinished(() => rm(directory, { recursive: true, force: true }));
     const script = join(directory, "fixture.cjs"),
       log = join(directory, "events.jsonl"),
       config = join(directory, "mcp.json");
@@ -87,13 +115,14 @@ test(
         },
       }),
     );
-    const bodies: any[] = [];
+    const bodies: unknown[] = [];
+    const sentBody = (index: number) => requestBody.parse(bodies.at(index));
     let scenario = "allowed",
       request = 0;
     const api = createServer(async (incoming, response) => {
       let raw = "";
       for await (const chunk of incoming) raw += chunk;
-      const body = JSON.parse(raw);
+      const body: unknown = JSON.parse(raw);
       bodies.push(body);
       request++;
       const content =
@@ -130,7 +159,7 @@ test(
         ]),
       );
     });
-    t.after(
+    onTestFinished(
       () =>
         new Promise<void>((done) => {
           api.closeAllConnections();
@@ -166,17 +195,17 @@ test(
       env,
     );
     assert.equal(allowed.code, 0, allowed.err);
-    const result = JSON.parse(allowed.out);
+    const result = sessionResult.parse(JSON.parse(allowed.out));
     assert.equal(result.result, "Done.");
     assert.deepEqual(
-      bodies[0].tools.map((tool: any) => tool.name),
+      sentBody(0).tools.map((tool) => tool.name),
       ["mcp__fixture__lookup"],
     );
     assert.deepEqual(
-      bodies[1].tools.map((tool: any) => tool.name),
+      sentBody(1).tools.map((tool) => tool.name),
       ["mcp__fixture__lookup", "mcp__fixture__followup"],
     );
-    const returned = bodies[1].messages.at(-1).content[0];
+    const returned = at(at(sentBody(1).messages, -1).content, 0);
     assert.deepEqual(returned.content, [
       {
         type: "image",
@@ -189,15 +218,12 @@ test(
     request = 0;
     const resumed = await run([...args, "--resume", result.session_id], env);
     assert.equal(resumed.code, 0, resumed.err);
-    assert.equal(JSON.parse(resumed.out).result, "Resumed.");
-    assert.deepEqual(
-      bodies
-        .at(-1)
-        .messages.find((message: any) =>
-          message.content.some((block: any) => block.type === "tool_result"),
-        ).content[0],
-      returned,
+    assert.equal(cliResult.parse(JSON.parse(resumed.out)).result, "Resumed.");
+    const resumedToolMessage = sentBody(-1).messages.find((message) =>
+      message.content.some((block) => block.type === "tool_result"),
     );
+    assert.ok(resumedToolMessage);
+    assert.deepEqual(resumedToolMessage.content[0], returned);
     for (const flags of [
       [],
       [
@@ -211,40 +237,42 @@ test(
       request = 0;
       const denied = await run([...args, ...flags], env);
       assert.equal(denied.code, 0, denied.err);
-      const error = bodies.at(-1).messages.at(-1).content[0];
+      const error = at(at(sentBody(-1).messages, -1).content, 0);
       assert.equal(error.is_error, true);
+      assert.ok(typeof error.content === "string");
       assert.match(error.content, /Permission denied|denied by policy/);
     }
     const events = (await readFile(log, "utf8"))
       .trim()
       .split("\n")
-      .map((row) => JSON.parse(row));
+      .map((row) => fixtureEvent.parse(JSON.parse(row)));
     assert.equal(events.filter((event) => event.event === "called").length, 1);
-    assert.deepEqual(
-      events.find((event) => event.event === "called").arguments,
-      { query: { labels: ["a", "b"], limit: 2 } },
-    );
+    const called = events.find((event) => event.event === "called");
+    assert.ok(called);
+    assert.deepEqual(called.arguments, {
+      query: { labels: ["a", "b"], limit: 2 },
+    });
     const started = events
       .filter((event) => event.event === "start")
       .map((event) => event.pid)
-      .sort();
+      .sort((a, b) => a - b);
     const exited = events
       .filter((event) => event.event === "exit")
       .map((event) => event.pid)
-      .sort();
+      .sort((a, b) => a - b);
     assert.equal(started.length, 4);
     assert.deepEqual(exited, started);
   },
+  { timeout: 20000 },
 );
 
 test(
   "compiled MCP autoload selects scopes before connecting and honors strict, rejection, overrides and local disables",
-  { timeout: 20000 },
-  async (t) => {
+  async () => {
     const root = await realpath(
       await mkdtemp(join(tmpdir(), "tau-cli-mcp-scopes-")),
     );
-    t.after(() => rm(root, { recursive: true, force: true }));
+    onTestFinished(() => rm(root, { recursive: true, force: true }));
     const cwd = join(root, "work"),
       user = join(root, "user"),
       managed = join(root, "managed");
@@ -281,16 +309,16 @@ test(
       explicit,
       JSON.stringify({ mcpServers: { fixture: config("explicit") } }),
     );
-    const bodies: any[] = [];
+    const bodies: unknown[] = [];
     let firstRequest = true;
     const api = createServer(async (request, response) => {
       let raw = "";
       for await (const chunk of request) raw += chunk;
-      const body = JSON.parse(raw);
+      const body = requestBody.parse(JSON.parse(raw));
       bodies.push(body);
       const call =
         firstRequest &&
-        body.tools.some((tool: any) => tool.name === "mcp__fixture__lookup");
+        body.tools.some((tool) => tool.name === "mcp__fixture__lookup");
       firstRequest = false;
       const block = call
         ? {
@@ -322,7 +350,7 @@ test(
         ]),
       );
     });
-    t.after(
+    onTestFinished(
       () =>
         new Promise<void>((done) => {
           api.closeAllConnections();
@@ -403,7 +431,7 @@ test(
         .trim()
         .split("\n")
         .filter(Boolean)
-        .map((line) => JSON.parse(line));
+        .map((line) => fixtureEvent.parse(JSON.parse(line)));
       assert.deepEqual(
         events
           .filter((event) => event.event === "start")
@@ -418,14 +446,15 @@ test(
       const started = events
         .filter((event) => event.event === "start")
         .map((event) => event.pid)
-        .sort();
+        .sort((a, b) => a - b);
       assert.deepEqual(
         events
           .filter((event) => event.event === "exit")
           .map((event) => event.pid)
-          .sort(),
+          .sort((a, b) => a - b),
         started,
       );
     }
   },
+  { timeout: 20000 },
 );

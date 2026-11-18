@@ -248,7 +248,9 @@ export function classifyLocalSettingsGitProbe(
   if (result.error && absent(result.error)) return "untracked";
   if (result.signal !== null || result.error) return "tracked";
   if (result.status === 128)
-    return /^fatal: not a git repository \(or any/.test(result.stderr ?? "")
+    return (result.stderr ?? "").startsWith(
+      "fatal: not a git repository (or any",
+    )
       ? "indeterminate"
       : "tracked";
   if (result.status === 0) return "tracked_in_index";

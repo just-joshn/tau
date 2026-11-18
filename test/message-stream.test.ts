@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test } from "bun:test";
 import { MessageStream, streamEventSchema } from "../src/message-stream.js";
 import {
   normalizeToolInput,
@@ -189,7 +189,8 @@ test("tool normalization removes nested __proto__ keys without removing construc
     '{"__proto__":{"polluted":true},"nested":[{"__proto__":{"bad":1},"constructor":"kept"}]}',
   );
   assert.deepEqual(result, { nested: [{ constructor: "kept" }] });
-  assert.equal(({} as any).polluted, undefined);
+  const probe: Record<string, unknown> = {};
+  assert.equal(probe.polluted, undefined);
   const long = "x".repeat(2047) + "😀broken";
   const marker = unparsedToolInput(normalizeToolInput(long));
   assert.equal(marker?.raw, "x".repeat(2047));
@@ -198,9 +199,14 @@ test("tool normalization removes nested __proto__ keys without removing construc
 });
 
 test("deep tool input sanitization is iterative", () => {
-  let source: any = JSON.parse('{"__proto__":1,"leaf":true}');
+  let source: unknown = JSON.parse('{"__proto__":1,"leaf":true}');
   for (let n = 0; n < 12000; n++) source = { child: source };
-  let result: any = normalizeToolInput(source);
-  for (let n = 0; n < 12000; n++) result = result.child;
+  let result: unknown = normalizeToolInput(source);
+  for (let n = 0; n < 12000; n++) {
+    assert.ok(
+      typeof result === "object" && result !== null && "child" in result,
+    );
+    result = result.child;
+  }
   assert.deepEqual(result, { leaf: true });
 });

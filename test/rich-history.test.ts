@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { onTestFinished, test } from "bun:test";
 import { SummaryPlanner } from "../src/compaction-plan.js";
 import { newSession, SessionStore } from "../src/session.js";
 import { projectMessages } from "../src/thinking-history.js";
@@ -31,11 +31,11 @@ const richResult = (): ToolResult => ({
   },
 });
 
-test("rich MCP results survive save/resume while the API receives only projected content", async (t) => {
+test("rich MCP results survive save/resume while the API receives only projected content", async () => {
   const directory = await realpath(
     await mkdtemp(join(tmpdir(), "tau-rich-history-")),
   );
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  onTestFinished(() => rm(directory, { recursive: true, force: true }));
   const store = await SessionStore.create(directory, join(directory, "state"));
   const session = newSession(directory, "claude-sonnet-4-5");
   const result = richResult();

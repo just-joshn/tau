@@ -11,7 +11,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { test } from "node:test";
+import { test } from "bun:test";
 import {
   classifyLocalSettingsGitProbe,
   inspectWorkspaceConfiguration,
@@ -19,9 +19,8 @@ import {
   type WorkspaceConfigurationOptions,
 } from "../src/workspace-configuration.js";
 
-async function fixture(
-  run: (base: string, env: NodeJS.ProcessEnv) => Promise<void>,
-) {
+type FixtureEnv = NodeJS.ProcessEnv & { HOME: string };
+async function fixture(run: (base: string, env: FixtureEnv) => Promise<void>) {
   const base = await realpath(
       await mkdtemp(join(tmpdir(), "tau-workspace-config-")),
     ),
@@ -71,13 +70,13 @@ async function localFile(
 }
 const inspect = (
   cwd: string,
-  env: NodeJS.ProcessEnv,
+  env: FixtureEnv,
   extra: Partial<WorkspaceConfigurationOptions> = {},
 ) =>
   inspectWorkspaceConfiguration({
     cwd,
-    configDirectory: join(env.HOME!, ".claude"),
-    homeDirectory: env.HOME!,
+    configDirectory: join(env.HOME, ".claude"),
+    homeDirectory: env.HOME,
     env,
     ...extra,
   });
@@ -349,14 +348,14 @@ test("Git overrides cannot redirect local tracking into another repository index
   }));
 test("home/config alias permits local MCP approval and project=user alias without workspace trust", async () =>
   fixture(async (_base, env) => {
-    const result = await inspect(env.HOME!, env);
+    const result = await inspect(env.HOME, env);
     assert.equal(result.projectEqualsUserSettings, true);
     assert.equal(result.localMcpApprovalTrusted, true);
     assert.equal(result.localTracking.reason, "user-location-exception");
     assert.equal(result.projectPermissionAllowsAdmitted, true);
     assert.equal(result.localPermissionAllowsAdmitted, true);
     assert.equal(
-      (await inspect(env.HOME!, env, { projectConfigRoot: env.HOME! }))
+      (await inspect(env.HOME, env, { projectConfigRoot: env.HOME }))
         .localMcpApprovalTrusted,
       false,
     );
@@ -439,7 +438,7 @@ test("diskless/absent workspace has no local admission but retains user settings
     assert.equal(result.localTracking.reason, "diskless");
     const missing = await inspectWorkspaceConfiguration({
       cwd: null,
-      configDirectory: join(env.HOME!, ".claude"),
+      configDirectory: join(env.HOME, ".claude"),
     });
     assert.equal(missing.projectKey, null);
     assert.equal(missing.projectSettingsPath, undefined);

@@ -302,9 +302,10 @@ function matchesAgentRule(
     return false;
   const field: unknown = Reflect.get(value, key);
   return (
-    field !== null &&
-    field !== undefined &&
-    !["object", "function", "symbol"].includes(typeof field) &&
+    (typeof field === "string" ||
+      typeof field === "number" ||
+      typeof field === "boolean" ||
+      typeof field === "bigint") &&
     matchesPermissionArgument(pattern, String(field).trim())
   );
 }
@@ -341,11 +342,10 @@ function matchesSkillRule(
     return false;
   const value: unknown = Reflect.get(record, key);
   if (
-    value === null ||
-    value === undefined ||
-    typeof value === "object" ||
-    typeof value === "function" ||
-    typeof value === "symbol"
+    typeof value !== "string" &&
+    typeof value !== "number" &&
+    typeof value !== "boolean" &&
+    typeof value !== "bigint"
   )
     return false;
   return matchesPermissionArgument(pattern, String(value).trim());
@@ -397,11 +397,10 @@ export function matchingToolRule(
         continue;
       const value: unknown = Reflect.get(input, parsed.parameter.key);
       if (
-        value === null ||
-        value === undefined ||
-        typeof value === "object" ||
-        typeof value === "function" ||
-        typeof value === "symbol"
+        typeof value !== "string" &&
+        typeof value !== "number" &&
+        typeof value !== "boolean" &&
+        typeof value !== "bigint"
       )
         continue;
       if (

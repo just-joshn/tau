@@ -236,7 +236,7 @@ export async function createPluginMcpDocument(
           choices.set(name, {
             raw,
             component,
-            unsupported: `Transport ${String(raw.type)} is not implemented by the local plugin stdio adapter`,
+            unsupported: `Transport ${typeof raw.type === "string" ? raw.type : JSON.stringify(raw.type)} is not implemented by the local plugin stdio adapter`,
           });
           continue;
         }

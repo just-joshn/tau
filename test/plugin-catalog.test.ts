@@ -1,4 +1,4 @@
-import test from "node:test";
+import { onTestFinished, test } from "bun:test";
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -10,11 +10,16 @@ import {
   type LocalPluginRoot,
 } from "../src/plugin-catalog.js";
 
-async function fixture(t: test.TestContext, manifest?: unknown) {
+function first<T>(items: readonly T[]): T {
+  const [item] = items;
+  assert.ok(item);
+  return item;
+}
+async function fixture(manifest?: unknown) {
   const workspace = await mkdtemp(join(tmpdir(), "tau-plugin-catalog-")),
     root = join(workspace, "plugin");
   await mkdir(root);
-  t.after(() => rm(workspace, { recursive: true, force: true }));
+  onTestFinished(() => rm(workspace, { recursive: true, force: true }));
   const put = async (path: string, data: string | object = "owned") => {
     await mkdir(dirname(join(root, path)), { recursive: true });
     await writeFile(
@@ -38,8 +43,8 @@ const guard = {
   ],
 };
 
-test("catalog refuses lexical and symlinked MCP extraction cache components using source segment folding", async (t) => {
-  const f = await fixture(t, {
+test("catalog refuses lexical and symlinked MCP extraction cache components using source segment folding", async () => {
+  const f = await fixture({
     name: "owned",
     commands: ["./.MCPB-CACHE. /hidden.md", "./commands/link.md", "./safe.md"],
   });
@@ -53,7 +58,7 @@ test("catalog refuses lexical and symlinked MCP extraction cache components usin
   );
   const result = await loadLocalPluginCatalog({ roots: [f.declaration] });
   assert.deepEqual(
-    result.plugins[0]!.components.map((component) => component.path),
+    first(result.plugins).components.map((component) => component.path),
     [join(f.root, "safe.md")],
   );
   assert.equal(
@@ -83,14 +88,14 @@ test("catalog refuses lexical and symlinked MCP extraction cache components usin
   );
 });
 
-test("explicit roots support manifestless directory and root skill fallback without searching other roots", async (t) => {
-  const f = await fixture(t);
+test("explicit roots support manifestless directory and root skill fallback without searching other roots", async () => {
+  const f = await fixture();
   await f.put("SKILL.md", "Owned fixture instructions");
   const result = await loadLocalPluginCatalog({
     roots: [{ ...f.declaration, fallbackName: "owned" }],
   });
   assert.equal(result.plugins.length, 1);
-  const p = result.plugins[0]!;
+  const p = first(result.plugins);
   assert.equal(p.name, "owned");
   assert.equal(p.manifestPath, undefined);
   assert.equal(p.source, "owned@inline");
@@ -102,8 +107,8 @@ test("explicit roots support manifestless directory and root skill fallback with
   assert.deepEqual(result.diagnostics, []);
 });
 
-test("manifest declarations replace commands/agents defaults while skills are supplemental", async (t) => {
-  const f = await fixture(t, {
+test("manifest declarations replace commands/agents defaults while skills are supplemental", async () => {
+  const f = await fixture({
     name: "owned",
     commands: "./custom.md",
     agents: ["./alternate.md"],
@@ -119,7 +124,7 @@ test("manifest declarations replace commands/agents defaults while skills are su
     roots: [f.declaration],
   });
   assert.deepEqual(
-    plugins[0]!.components.map((c) => [c.kind, c.path]),
+    first(plugins).components.map((c) => [c.kind, c.path]),
     [
       ["commands", join(f.root, "custom.md")],
       ["agents", join(f.root, "alternate.md")],
@@ -130,8 +135,8 @@ test("manifest declarations replace commands/agents defaults while skills are su
   assert.deepEqual(diagnostics, []);
 });
 
-test("inline named commands preserve metadata and source names; no vendor content is loaded", async (t) => {
-  const f = await fixture(t, {
+test("inline named commands preserve metadata and source names; no vendor content is loaded", async () => {
+  const f = await fixture({
     name: "owned",
     commands: {
       inline: { content: "Owned command", allowedTools: ["Read"] },
@@ -139,8 +144,9 @@ test("inline named commands preserve metadata and source names; no vendor conten
     },
   });
   await f.put("a.md", "Owned file");
-  const p = (await loadLocalPluginCatalog({ roots: [f.declaration] }))
-    .plugins[0]!;
+  const p = first(
+    (await loadLocalPluginCatalog({ roots: [f.declaration] })).plugins,
+  );
   assert.deepEqual(
     p.components.map((c) => [c.commandName, c.metadata]),
     [
@@ -148,11 +154,11 @@ test("inline named commands preserve metadata and source names; no vendor conten
       ["source", { source: "./a.md", description: "Owned metadata" }],
     ],
   );
-  assert.equal(p.components[0]!.path, undefined);
+  assert.equal(first(p.components).path, undefined);
 });
 
-test("default hooks/MCP/LSP precede additive paths and inline declarations; hook file aliases dedupe", async (t) => {
-  const f = await fixture(t, {
+test("default hooks/MCP/LSP precede additive paths and inline declarations; hook file aliases dedupe", async () => {
+  const f = await fixture({
     name: "owned",
     hooks: [
       "./hooks/hooks.json",
@@ -175,18 +181,20 @@ test("default hooks/MCP/LSP precede additive paths and inline declarations; hook
   });
   await f.put("extra-lsp.json", { custom: { command: "owned-extra" } });
   const result = await loadLocalPluginCatalog({ roots: [f.declaration] }),
-    components = result.plugins[0]!.components;
+    components = first(result.plugins).components;
   for (const kind of ["hooks", "mcp", "lsp"])
     assert.deepEqual(
       components.filter((c) => c.kind === kind).map((c) => c.origin),
       ["default", "manifest", "manifest"],
     );
-  assert.deepEqual(components.find((c) => c.kind === "hooks")!.config, guard);
+  const hooks = components.find((c) => c.kind === "hooks");
+  assert.ok(hooks);
+  assert.deepEqual(hooks.config, guard);
   assert.equal(result.diagnostics.length, 0);
 });
 
-test("enable precedence is host ordered and preserves scope/provenance and disabled metadata", async (t) => {
-  const f = await fixture(t, { name: "owned", defaultEnabled: false });
+test("enable precedence is host ordered and preserves scope/provenance and disabled metadata", async () => {
+  const f = await fixture({ name: "owned", defaultEnabled: false });
   await f.put("skills/a/SKILL.md");
   const root = {
     ...f.declaration,
@@ -201,9 +209,10 @@ test("enable precedence is host ordered and preserves scope/provenance and disab
     },
     { source: "localSettings", enabledPlugins: { "owned@inline": true } },
   ];
-  const disabled = (
-    await loadLocalPluginCatalog({ roots: [root], enableLayers: layers })
-  ).plugins[0]!;
+  const disabled = first(
+    (await loadLocalPluginCatalog({ roots: [root], enableLayers: layers }))
+      .plugins,
+  );
   assert.equal(disabled.enabled, false);
   assert.deepEqual(disabled.components, []);
   assert.equal(disabled.projectPath, f.workspace);
@@ -213,12 +222,14 @@ test("enable precedence is host ordered and preserves scope/provenance and disab
     key: "OWNED@inline",
     managed: true,
   });
-  const enabled = (
-    await loadLocalPluginCatalog({
-      roots: [root],
-      enableLayers: layers.toReversed(),
-    })
-  ).plugins[0]!;
+  const enabled = first(
+    (
+      await loadLocalPluginCatalog({
+        roots: [root],
+        enableLayers: layers.toReversed(),
+      })
+    ).plugins,
+  );
   assert.equal(enabled.enabled, true);
   assert.equal(enabled.components.length, 1);
   assert.equal(
@@ -256,8 +267,8 @@ test("ordinary marketplace settings stay exact; folded inline collisions deny an
   );
 });
 
-test("manifest schema and namespace failures reject plugins with no admitted components", async (t) => {
-  const f = await fixture(t);
+test("manifest schema and namespace failures reject plugins with no admitted components", async () => {
+  const f = await fixture();
   await f.put("skills/a/SKILL.md");
   for (const manifest of [
     { name: "owned@bad" },
@@ -282,8 +293,8 @@ test("manifest schema and namespace failures reject plugins with no admitted com
   );
 });
 
-test("lexical traversal, component symlink and manifest symlink escapes are refused", async (t) => {
-  const f = await fixture(t, {
+test("lexical traversal, component symlink and manifest symlink escapes are refused", async () => {
+  const f = await fixture({
     name: "owned",
     commands: ["./../outside.md", "./escape.md", "./okay.md"],
   });
@@ -292,7 +303,7 @@ test("lexical traversal, component symlink and manifest symlink escapes are refu
   await f.put("okay.md");
   const result = await loadLocalPluginCatalog({ roots: [f.declaration] });
   assert.deepEqual(
-    result.plugins[0]!.components.map((c) => c.path),
+    first(result.plugins).components.map((c) => c.path),
     [join(f.root, "okay.md")],
   );
   assert.equal(
@@ -314,8 +325,8 @@ test("lexical traversal, component symlink and manifest symlink escapes are refu
   );
 });
 
-test("invalid or host rejected protected guards reject the whole plugin transaction", async (t) => {
-  const f = await fixture(t, { name: "owned" });
+test("invalid or host rejected protected guards reject the whole plugin transaction", async () => {
+  const f = await fixture({ name: "owned" });
   await f.put("commands/a.md");
   for (const hooks of [
     { PreToolUse: { hooks: [] } },
@@ -337,8 +348,8 @@ test("invalid or host rejected protected guards reject the whole plugin transact
   assert.deepEqual(result.plugins, []);
 });
 
-test("duplicate additional hook files diagnose once while preserving group source order", async (t) => {
-  const f = await fixture(t, {
+test("duplicate additional hook files diagnose once while preserving group source order", async () => {
+  const f = await fixture({
     name: "owned",
     hooks: [
       "./extra.json",
@@ -352,13 +363,13 @@ test("duplicate additional hook files diagnose once while preserving group sourc
     },
   });
   const result = await loadLocalPluginCatalog({ roots: [f.declaration] });
-  assert.equal(result.plugins[0]!.components.length, 2);
+  assert.equal(first(result.plugins).components.length, 2);
   assert.equal(
     result.diagnostics.filter((d) => d.code === "duplicate-hooks").length,
     1,
   );
   assert.deepEqual(
-    result.plugins[0]!.components.map((c) => c.config?.Stop),
+    first(result.plugins).components.map((c) => c.config?.Stop),
     [
       [{ hooks: [{ type: "command", command: "printf earlier" }] }],
       [{ hooks: [{ type: "command", command: "printf later" }] }],
@@ -366,9 +377,9 @@ test("duplicate additional hook files diagnose once while preserving group sourc
   );
 });
 
-test("host policy gates complete plugins and individual components without performing lifecycle actions", async (t) => {
+test("host policy gates complete plugins and individual components without performing lifecycle actions", async () => {
   const priorOwned = process.env.OWNED;
-  const f = await fixture(t, {
+  const f = await fixture({
     name: "owned",
     settings: { env: { OWNED: "untouched" } },
     dependencies: ["missing@owned"],
@@ -395,10 +406,10 @@ test("host policy gates complete plugins and individual components without perfo
     },
   });
   assert.deepEqual(
-    allowed.plugins[0]!.components.map((c) => c.kind),
+    first(allowed.plugins).components.map((c) => c.kind),
     ["hooks"],
   );
-  assert.equal(allowed.plugins[0]!.manifest.settings !== undefined, true);
+  assert.equal(first(allowed.plugins).manifest.settings !== undefined, true);
   assert.equal(
     allowed.diagnostics.filter((d) => d.code === "unsupported").length,
     2,
@@ -406,23 +417,23 @@ test("host policy gates complete plugins and individual components without perfo
   assert.equal(process.env.OWNED, priorOwned);
 });
 
-test("module hooks and local/remote MCP bundles are explicit unsupported locations and never executed", async (t) => {
-  const f = await fixture(t, {
+test("module hooks and local/remote MCP bundles are explicit unsupported locations and never executed", async () => {
+  const f = await fixture({
     name: "owned",
     mcpServers: ["./owned.mcpb", "https://example.invalid/owned.mcpb"],
   });
   await f.put("owned.mcpb", "Owned fake archive");
   await f.put("hooks/hooks.json", { modules: ["./owned.js"] });
   const result = await loadLocalPluginCatalog({ roots: [f.declaration] });
-  assert.deepEqual(result.plugins[0]!.components, []);
+  assert.deepEqual(first(result.plugins).components, []);
   assert.equal(
     result.diagnostics.filter((d) => d.code === "unsupported").length,
     3,
   );
 });
 
-test("missing declared components report diagnostics, project scope is explicit, and cancellation rejects", async (t) => {
-  const f = await fixture(t, {
+test("missing declared components report diagnostics, project scope is explicit, and cancellation rejects", async () => {
+  const f = await fixture({
     name: "owned",
     commands: "./missing.md",
     skills: "./skill-file",
@@ -462,18 +473,18 @@ test("missing declared components report diagnostics, project scope is explicit,
   );
 });
 
-test("skills-dir provenance suppresses recursive root skill fallback and explicit root duplication", async (t) => {
-  const f = await fixture(t, { name: "owned" });
+test("skills-dir provenance suppresses recursive root skill fallback and explicit root duplication", async () => {
+  const f = await fixture({ name: "owned" });
   await f.put("SKILL.md", "Owned top-level skill");
   const declaration = { ...f.declaration, source: "owned@skills-dir" };
   assert.deepEqual(
-    (await loadLocalPluginCatalog({ roots: [declaration] })).plugins[0]!
+    first((await loadLocalPluginCatalog({ roots: [declaration] })).plugins)
       .components,
     [],
   );
   await f.put(".claude-plugin/plugin.json", { name: "owned", skills: "." });
   assert.deepEqual(
-    (await loadLocalPluginCatalog({ roots: [declaration] })).plugins[0]!
+    first((await loadLocalPluginCatalog({ roots: [declaration] })).plugins)
       .components,
     [],
   );

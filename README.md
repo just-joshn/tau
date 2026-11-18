@@ -4,58 +4,57 @@ An independent TypeScript coding-agent CLI implementing the core Claude Code-sty
 
 ## Run
 
-Requires Node.js 22+ and an Anthropic API key with access to the selected model. The Grep tool additionally requires a trusted standalone `rg` (ripgrep) in an absolute `PATH` directory; other tools work without it.
+Requires Bun 1.4+ and an Anthropic API key with access to the selected model. The Grep tool additionally requires a trusted standalone `rg` (ripgrep) in an absolute `PATH` directory; other tools work without it.
 
 ```sh
-npm ci
-npm run build
+bun install
 export ANTHROPIC_API_KEY='your-api-key'
-node dist/src/cli.js
+bun src/cli.ts
 ```
 
-Or `npm start -- [options]`. To install the local `tau` command, run `npm link` after building. Nothing replaces `~/.local/bin/claude`.
+To install the local `tau` command, run `bun link`. Nothing replaces `~/.local/bin/claude`.
 
 ```sh
 # Interactive conversation, streaming output, approval before edits/shell
-npm start -- "Explain the structure of this project"
+bun src/cli.ts "Explain the structure of this project"
 
 # One prompt; file inspection allowed, edits/shell denied without preapproval
-node dist/src/cli.js -p "Find the entry point" --permission-mode plan
+bun src/cli.ts -p "Find the entry point" --permission-mode plan
 
 # Explicitly preapprove file edits, but not shell commands
-node dist/src/cli.js -p "Update the README title" --permission-mode acceptEdits
+bun src/cli.ts -p "Update the README title" --permission-mode acceptEdits
 
 # Piped input and machine-readable results
-printf 'Explain the package scripts' | node dist/src/cli.js --output-format json
-node dist/src/cli.js -p "List the source files" --output-format stream-json
+printf 'Explain the package scripts' | bun src/cli.ts --output-format json
+bun src/cli.ts -p "List the source files" --output-format stream-json
 
 # Resume tau's own session for the same working directory
-node dist/src/cli.js --continue
-node dist/src/cli.js --resume SESSION_UUID
+bun src/cli.ts --continue
+bun src/cli.ts --resume SESSION_UUID
 
 # Limit available tools, or explicitly preapprove selected tools
-node dist/src/cli.js -p "Summarize this project" --tools 'Read,Glob,Grep'
-node dist/src/cli.js -p "Update the title" --allowed-tools 'Read,Edit'
-node dist/src/cli.js --disallowed-tools 'Bash'
-node dist/src/cli.js -p "Answer without tools" --tools ''
+bun src/cli.ts -p "Summarize this project" --tools 'Read,Glob,Grep'
+bun src/cli.ts -p "Update the title" --allowed-tools 'Read,Edit'
+bun src/cli.ts --disallowed-tools 'Bash'
+bun src/cli.ts -p "Answer without tools" --tools ''
 
 # Configure a local stdio MCP server and preapprove its tools
-node dist/src/cli.js -p "Use the project lookup" --mcp-config ./mcp.json --allowedTools 'mcp__lookup__*'
+bun src/cli.ts -p "Use the project lookup" --mcp-config ./mcp.json --allowedTools 'mcp__lookup__*'
 
 # Select a model available to your account
-node dist/src/cli.js --model claude-sonnet-4-5
+bun src/cli.ts --model claude-sonnet-4-5
 
 # Disable ordinary request retries (default: 10; explicit range: 0–15)
-node dist/src/cli.js -p "Explain this project" --max-retries 0
+bun src/cli.ts -p "Explain this project" --max-retries 0
 
 # Bound dispatches across all tool rounds and retries for one prompt
-node dist/src/cli.js -p "Inspect this project" --max-api-attempts 5
+bun src/cli.ts -p "Inspect this project" --max-api-attempts 5
 
 # Disable JSON fallback (enabled by default)
-node dist/src/cli.js -p "Explain this project" --no-nonstream-fallback
+bun src/cli.ts -p "Explain this project" --no-nonstream-fallback
 
 # Try ordered fallback models when the primary is busy or unavailable
-node dist/src/cli.js -p "Explain this project" --fallback-model 'model-b,model-c'
+bun src/cli.ts -p "Explain this project" --fallback-model 'model-b,model-c'
 ```
 
 Use `--help` for all flags. Model selection uses `--model`, nonempty `ANTHROPIC_MODEL`, then layered settings. A fresh direct API-key launch otherwise uses `ANTHROPIC_DEFAULT_OPUS_MODEL` or the pinned `claude-opus-5-5` default. A resumed session keeps its model unless `--model` is provided.
@@ -173,7 +172,7 @@ Session files contain plaintext conversation, reasoning/signatures and tool outp
 A separate static inspector can reproduce the recovered Bun layout without executing the target:
 
 ```sh
-node dist/scripts/inspect-bun.js "$HOME/.local/bin/claude"
+bun scripts/inspect-bun.ts "$HOME/.local/bin/claude"
 # Add --modules for the full bounded module metadata list.
 ```
 
@@ -184,11 +183,13 @@ No original executable bytes, bundled application implementation, original syste
 ## Verification
 
 ```sh
-npm run check
-npm test
+bun run typecheck
+bun run lint
+bun fmt --check
+bun test
 ```
 
-The suite compiles the project and runs the recorded unit and integration tests (see [current verification status](docs/HANDOFF.md)): real temporary-directory tools, encoding/BOM/quote/escape fidelity, Read windows/byte/token pages/streaming boundaries/shared large-read room and stale-file guards, exhaustive bounded Glob comparisons and an isolated hang regression, regex modes/pagination/ordering and backend isolation, shell output/timeouts/cancellation, fragmented local HTTP SSE, shared API allowances, JSON fallback, billing/body bounds, header/body deadlines, ping limits and clock handling, retry cancellation/non-replay, indexed stream normalization, tool-JSON repair, model-specific thinking requests, output-limit continuation, signed-thinking/prefix recovery, context windows/usage/compaction, output-cap repair, reactive and larger-model admission, agent history, CLI tool use, permission denial, JSON output, session resume, instruction loading, stdio MCP discovery/modern and legacy negotiation, cancellation, dynamic catalogs, rich results and compiled MCP save/resume/permission workflows, source-aware configuration/instruction resolver fixtures, and SSE label/fallback regression cases. No network model calls or live keys are used.
+The suite runs the recorded unit and integration tests (see [current verification status](docs/HANDOFF.md)): real temporary-directory tools, encoding/BOM/quote/escape fidelity, Read windows/byte/token pages/streaming boundaries/shared large-read room and stale-file guards, exhaustive bounded Glob comparisons and an isolated hang regression, regex modes/pagination/ordering and backend isolation, shell output/timeouts/cancellation, fragmented local HTTP SSE, shared API allowances, JSON fallback, billing/body bounds, header/body deadlines, ping limits and clock handling, retry cancellation/non-replay, indexed stream normalization, tool-JSON repair, model-specific thinking requests, output-limit continuation, signed-thinking/prefix recovery, context windows/usage/compaction, output-cap repair, reactive and larger-model admission, agent history, CLI tool use, permission denial, JSON output, session resume, instruction loading, stdio MCP discovery/modern and legacy negotiation, cancellation, dynamic catalogs, rich results and compiled MCP save/resume/permission workflows, source-aware configuration/instruction resolver fixtures, and SSE label/fallback regression cases. No network model calls or live keys are used.
 
 An additional temporary PTY harness checks the interactive prompt, slash commands, mode changes, approval, file writing, cancellation, and clean exit. Live Anthropic service behavior remains unverified. Controlled original-versus-tau print, coding, tool-failure, MCP permission/lifecycle and SSE fallback comparisons now use a verified deny-default disposable macOS sandbox, dummy home/config/credentials and an exact loopback mock endpoint; this does not sandbox tau product tools. See [the subsystem/workflow map](docs/SUBSYSTEM-MAP.md) for verification levels and remaining work, and [the investigation](docs/investigation.md) for earlier evidence.
 

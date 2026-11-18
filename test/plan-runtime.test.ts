@@ -1,4 +1,4 @@
-import test from "node:test";
+import { onTestFinished, test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   mkdir,
@@ -10,7 +10,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, relative, sep } from "node:path";
+import { join, relative, sep } from "node:path";
 import {
   PlanRuntime,
   PlanFileManager,
@@ -33,14 +33,13 @@ const tool = (name: string, input: unknown = {}): ToolUse => ({
 const enter = () => tool("EnterPlanMode"),
   exit = (input: unknown = {}) => tool("ExitPlanMode", input);
 const signal = () => new AbortController().signal;
-async function fixture(
-  t: any,
-  initial: PlanPermissionState = { mode: "default" },
-) {
+const planFile = (f: { runtime: { planLocation(): string | undefined } }) =>
+  f.runtime.planLocation() ?? assert.fail("missing plan location");
+async function fixture(initial: PlanPermissionState = { mode: "default" }) {
   const cwd = await realpath(
     await mkdtemp(join(tmpdir(), "tau-plan-runtime-")),
   );
-  t.after(() => rm(cwd, { recursive: true, force: true }));
+  onTestFinished(() => rm(cwd, { recursive: true, force: true }));
   const directory = join(cwd, "plans");
   await mkdir(directory);
   const files = new PlanFileManager({
@@ -81,7 +80,12 @@ async function fixture(
         try {
           return await readFile(path, "utf8");
         } catch (error) {
-          if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+          if (
+            error instanceof Error &&
+            "code" in error &&
+            error.code === "ENOENT"
+          )
+            return null;
           throw error;
         }
       },
@@ -127,8 +131,8 @@ async function fixture(
   };
 }
 
-test("ordinary entry saves prior permissions, clears stale Doc state and repeated entry is idempotent", async (t) => {
-  const f = await fixture(t, {
+test("ordinary entry saves prior permissions, clears stale Doc state and repeated entry is idempotent", async () => {
+  const f = await fixture({
     mode: "acceptEdits",
     planDoc: { id: "stale" },
     marker: "keep",
@@ -159,8 +163,8 @@ test("ordinary entry saves prior permissions, clears stale Doc state and repeate
   assert.equal(f.state.prePlanMode, "acceptEdits");
 });
 
-test("agent entry, built-in fork exit and exit outside plan reject before approval", async (t) => {
-  const f = await fixture(t);
+test("agent entry, built-in fork exit and exit outside plan reject before approval", async () => {
+  const f = await fixture();
   f.actorTo({ agentId: "child" });
   await assert.rejects(
     f.runtime.execute(enter(), signal()),
@@ -179,8 +183,8 @@ test("agent entry, built-in fork exit and exit outside plan reject before approv
   assert.equal(f.writes, 0);
 });
 
-test("headless without a prompt bridge and deny-instead sessions do not advertise plan tools", async (t) => {
-  const f = await fixture(t);
+test("headless without a prompt bridge and deny-instead sessions do not advertise plan tools", async () => {
+  const f = await fixture();
   f.bridgeTo(false);
   assert.deepEqual(f.runtime.definitions, []);
   await assert.rejects(f.runtime.execute(enter(), signal()), /unavailable/);
@@ -197,9 +201,9 @@ test("headless without a prompt bridge and deny-instead sessions do not advertis
   );
 });
 
-test("declining or cancelling plan approval preserves mode and the plan file", async (t) => {
-  const f = await fixture(t, { mode: "plan", prePlanMode: "acceptEdits" });
-  const path = f.runtime.planLocation()!;
+test("declining or cancelling plan approval preserves mode and the plan file", async () => {
+  const f = await fixture({ mode: "plan", prePlanMode: "acceptEdits" });
+  const path = planFile(f);
   await writeFile(path, "owned plan\n");
   f.approveWith(async () => ({ approved: false, reason: "revise the scope" }));
   await assert.rejects(f.runtime.execute(exit(), signal()), /revise the scope/);
@@ -219,9 +223,9 @@ test("declining or cancelling plan approval preserves mode and the plan file", a
   assert.equal(f.writes, 0);
 });
 
-test("disk plan replaces model-supplied approval text and host-approved edits are saved", async (t) => {
-  const f = await fixture(t, { mode: "plan", prePlanMode: "acceptEdits" });
-  const path = f.runtime.planLocation()!;
+test("disk plan replaces model-supplied approval text and host-approved edits are saved", async () => {
+  const f = await fixture({ mode: "plan", prePlanMode: "acceptEdits" });
+  const path = planFile(f);
   await writeFile(path, "owned disk plan");
   const original = exit({
     plan: "counterfeit model plan",
@@ -249,8 +253,8 @@ test("disk plan replaces model-supplied approval text and host-approved edits ar
   assert.match(completed.result.content, /approved edit/);
 });
 
-test("missing or empty main-session plan can be approved and repeated exit is rejected", async (t) => {
-  const f = await fixture(t, { mode: "plan" });
+test("missing or empty main-session plan can be approved and repeated exit is rejected", async () => {
+  const f = await fixture({ mode: "plan" });
   const missing = await f.runtime.execute(exit(), signal());
   assert.equal(missing.data.plan, null);
   assert.equal(f.state.mode, "default");
@@ -260,15 +264,15 @@ test("missing or empty main-session plan can be approved and repeated exit is re
     /Enter plan mode before/,
   );
   await f.runtime.execute(enter(), signal());
-  await writeFile(f.runtime.planLocation()!, "");
+  await writeFile(planFile(f), "");
   const empty = await f.runtime.execute(exit(), signal());
   assert.equal(empty.data.plan, "");
   assert.equal(f.state.mode, "default");
 });
 
-test("a plan created while approval waits is read during the approved call if no snapshot was injected", async (t) => {
-  const f = await fixture(t, { mode: "plan" });
-  const path = f.runtime.planLocation()!;
+test("a plan created while approval waits is read during the approved call if no snapshot was injected", async () => {
+  const f = await fixture({ mode: "plan" });
+  const path = planFile(f);
   f.approveWith(async (request) => {
     assert.equal(request.plan, null);
     await writeFile(path, "created during approval");
@@ -279,8 +283,8 @@ test("a plan created while approval waits is read during the approved call if no
   assert.equal(f.writes, 0);
 });
 
-test("restoration respects unavailable auto/bypass modes and host transition effects", async (t) => {
-  const f = await fixture(t, {
+test("restoration respects unavailable auto/bypass modes and host transition effects", async () => {
+  const f = await fixture({
     mode: "plan",
     prePlanMode: "bypassPermissions",
   });
@@ -316,8 +320,8 @@ test("restoration respects unavailable auto/bypass modes and host transition eff
   assert.equal(f.state.effect, "exit_plan_mode");
 });
 
-test("permission state already changed by the approval host is preserved", async (t) => {
-  const f = await fixture(t, { mode: "plan", prePlanMode: "default" });
+test("permission state already changed by the approval host is preserved", async () => {
+  const f = await fixture({ mode: "plan", prePlanMode: "default" });
   f.approveWith(async () => {
     f.stateTo({ mode: "acceptEdits", marker: "UI decision" });
     return { approved: true };
@@ -327,10 +331,10 @@ test("permission state already changed by the approval host is preserved", async
   assert.deepEqual(f.state, { mode: "acceptEdits", marker: "UI decision" });
 });
 
-test("ordinary agent exits use agent filenames while teammate submission leaves approval pending", async (t) => {
-  const f = await fixture(t, { mode: "plan", prePlanMode: "default" });
+test("ordinary agent exits use agent filenames while teammate submission leaves approval pending", async () => {
+  const f = await fixture({ mode: "plan", prePlanMode: "default" });
   f.actorTo({ agentId: "agent-one" });
-  const path = f.runtime.planLocation()!;
+  const path = planFile(f);
   assert.equal(path, join(f.directory, "owned-plan-agent-agent-one.md"));
   await writeFile(path, "owned child plan");
   const result = await f.runtime.execute(exit(), signal());
@@ -371,9 +375,9 @@ test("ordinary agent exits use agent filenames while teammate submission leaves 
   await assert.rejects(team.execute(exit(), signal()), /Write a plan file/);
 });
 
-test("storage failure retains approved text and fallback storage updates the designated path", async (t) => {
-  const f = await fixture(t, { mode: "plan" });
-  const originalPath = f.runtime.planLocation()!;
+test("storage failure retains approved text and fallback storage updates the designated path", async () => {
+  const f = await fixture({ mode: "plan" });
+  const originalPath = planFile(f);
   await writeFile(originalPath, "owned approved text");
   f.saveWith(async () => {
     throw new Error("owned storage failure");
@@ -460,8 +464,8 @@ test("slug reservation and session plan family matching reject unrelated paths a
     "bounded source reservation keeps the final candidate after ten collisions",
   );
 });
-test("configured plan directories require project containment and explicit real-path vetting", async (t) => {
-  const f = await fixture(t),
+test("configured plan directories require project containment and explicit real-path vetting", async () => {
+  const f = await fixture(),
     outside = join(f.cwd, "outside"),
     project = join(f.cwd, "project");
   await mkdir(outside);
@@ -478,7 +482,10 @@ test("configured plan directories require project containment and explicit real-
       defaultDirectory: f.directory,
       configuredDirectory,
       vet: (candidate) => {
-        const rel = relative(canonicalProject, canonical.get(candidate)!);
+        const rel = relative(
+          canonicalProject,
+          canonical.get(candidate) ?? assert.fail("unexpected candidate"),
+        );
         return rel !== ".." && !rel.startsWith(`..${sep}`);
       },
     });
@@ -498,8 +505,8 @@ test("configured plan directories require project containment and explicit real-
   );
 });
 
-test("prepared calls stay bound to their runtime and session", async (t) => {
-  const f = await fixture(t),
+test("prepared calls stay bound to their runtime and session", async () => {
+  const f = await fixture(),
     prepared = await f.runtime.prepare(enter(), signal());
   assert.throws(
     () => new PlanRuntime(f.options).checkPermissions(prepared),
@@ -510,8 +517,8 @@ test("prepared calls stay bound to their runtime and session", async (t) => {
   assert.equal(f.state.mode, "default");
 });
 
-test("deprecated allowed prompts never grant commands and exit approval remains required", async (t) => {
-  const f = await fixture(t, {
+test("deprecated allowed prompts never grant commands and exit approval remains required", async () => {
+  const f = await fixture({
     mode: "plan",
     prePlanMode: "bypassPermissions",
     isBypassPermissionsModeAvailable: true,
@@ -529,9 +536,9 @@ test("deprecated allowed prompts never grant commands and exit approval remains 
   assert.equal(completed.data.allowedPrompts, undefined);
 });
 
-test("session change during approved persistence cannot transition another session", async (t) => {
-  const f = await fixture(t, { mode: "plan", prePlanMode: "acceptEdits" });
-  const path = f.runtime.planLocation()!;
+test("session change during approved persistence cannot transition another session", async () => {
+  const f = await fixture({ mode: "plan", prePlanMode: "acceptEdits" });
+  const path = planFile(f);
   await writeFile(path, "owned plan");
   f.saveWith(async (ownedPath) => {
     f.sessionTo("other");

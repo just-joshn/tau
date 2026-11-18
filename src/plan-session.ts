@@ -357,7 +357,7 @@ export function createPlanFileAccess(options: {
       if (session !== options.sessionId()) return;
       pinnedDirectories.set(declared, directory);
       return canonical;
-    } catch (error) {
+    } catch {
       signal?.throwIfAborted();
       return undefined;
     }

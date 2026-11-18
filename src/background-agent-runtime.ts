@@ -94,7 +94,7 @@ export interface BackgroundAgentMaterialization {
   enforcesBackgroundToolScope: true;
   permissionPrompts: "avoid" | "host-routed";
   handledFeatures?: readonly SubagentFeature[];
-  afterStart?(signal: AbortSignal): Promise<readonly Message[]>;
+  afterStart?: (signal: AbortSignal) => Promise<readonly Message[]>;
   cleanup?(): void | Promise<void>;
 }
 export interface BackgroundWatchdogHandle {
@@ -151,7 +151,7 @@ export interface BackgroundAgentRuntimeOptions {
           onTimeout(message: string): void;
         }): BackgroundWatchdogHandle;
       };
-  now?(): number;
+  now?: () => number;
   onDiagnostic?(message: string): void;
 }
 export interface BackgroundAgentLaunchResult {

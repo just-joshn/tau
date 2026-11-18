@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 import { realpath } from "node:fs/promises";
 import { resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
@@ -18,7 +18,11 @@ import { McpManager } from "./mcp.js";
 import { loadLaunchMcp } from "./mcp-launch.js";
 import { routeExternalTools } from "./tool-router.js";
 import { loadLaunchConfiguration } from "./launch-configuration.js";
-import { combineToolPolicy, inheritedReadDeny } from "./tool-policy.js";
+import {
+  combineToolPolicy,
+  inheritedReadDeny,
+  matchingToolRule,
+} from "./tool-policy.js";
 import { createInstructionCatalog } from "./instructions.js";
 import { InstructionContext } from "./instruction-context.js";
 import { createHookRegistry, type HookSource } from "./hooks.js";
@@ -39,6 +43,7 @@ import { formatBackgroundNotification } from "./background-notifications.js";
 import type { BackgroundAgentCompletion } from "./background-agent-runtime.js";
 import { createBackgroundTaskTools } from "./background-task-tools.js";
 import { createChildCapabilityTools } from "./child-capability-tools.js";
+import { createChildPlanHost } from "./child-plan-host.js";
 import {
   builtinAgentProfile,
   createBuiltinAgentCatalog,
@@ -608,8 +613,9 @@ async function main(): Promise<void> {
     const owningHooks = activeHooks(),
       ownerSessionId = session.id,
       owningSkills = skillHost,
-      owningTasks = taskHost;
-    if (!owningSkills || !owningTasks)
+      owningTasks = taskHost,
+      owningPlans = planHost;
+    if (!owningSkills || !owningTasks || !owningPlans)
       throw new Error(
         "Session Skill and task hosts must precede agent initialization",
       );
@@ -656,6 +662,68 @@ async function main(): Promise<void> {
         },
       },
       pluginAgents: plugins.agents,
+      childPlan: (plan, context) =>
+        createChildPlanHost({
+          cwd,
+          sessionId: () => plan.parent.sessionId,
+          actor: { agentId: plan.agentId },
+          isAsync: plan.isAsync === true,
+          fileBacked: true,
+          files: owningPlans.files,
+          permissions: () => ({
+            ...owningPlans.permissions(),
+            mode: context.mode(),
+          }),
+          setSessionPermissions: (update) => owningPlans.setPermissions(update),
+          storage: owningPlans.storage,
+          enabled: (name) => plan.selectedToolNames.includes(name),
+          policy: () => context.policy(),
+          hooks: context.hooks,
+          canRequestApproval: () =>
+            !closing &&
+            ((!plan.isAsync && Boolean(terminal)) ||
+              options.permissionPromptTool !== undefined),
+          authorize: ({ call, hookPermission }) =>
+            matchingToolRule(context.policy(), "ask", call.name, {
+              input: call.input,
+            }) || hookPermission === "ask"
+              ? { behavior: "ask" }
+              : { behavior: "allow" },
+          approve: async ({ call, permission, signal }) => {
+            signal.throwIfAborted();
+            if (options.permissionPromptTool !== undefined) {
+              if (!permissionPrompt)
+                return {
+                  approved: false,
+                  reason:
+                    "The configured MCP permission prompt tool is unavailable",
+                };
+              const result = await permissionPrompt.request(call, signal);
+              if (result.interrupt)
+                active?.abort(
+                  new Error(
+                    result.reason ?? "Permission prompt requested interruption",
+                  ),
+                );
+              return result;
+            }
+            return {
+              approved:
+                !plan.isAsync &&
+                (await approve(
+                  `${permission.plan ? `Plan:\n${permission.plan}\n\n` : ""}Approve ${permission.tool} for ${plan.definition.agentType}?`,
+                )),
+            };
+          },
+          vetDirectory: (canonical) =>
+            !canonical
+              .split(/[\\/]/)
+              .some(
+                (part) =>
+                  part === ".git" || part === "node_modules" || part === ".tau",
+              ),
+          onDiagnostic: (message) => stderr.write(`Plans: ${safe(message)}\n`),
+        }),
       childCapabilities: (plan, context) =>
         createChildCapabilityTools({
           cwd,
@@ -798,17 +866,18 @@ async function main(): Promise<void> {
     agentHosts.push(host);
     return host;
   };
-  const createPlans = () =>
-    createLaunchPlanHost({
+  const createPlans = () => {
+    const owningSession = session;
+    return createLaunchPlanHost({
       cwd,
       userConfigDir: launch.userConfigDir,
       ...(typeof launch.snapshot.effective.plansDirectory === "string"
         ? { configuredDirectory: launch.snapshot.effective.plansDirectory }
         : {}),
-      sessionId: () => session.id,
-      saved: () => session.planState,
+      sessionId: () => owningSession.id,
+      saved: () => owningSession.planState,
       save: (state) => {
-        session.planState = state;
+        owningSession.planState = state;
       },
       mode: () => mode,
       setMode: (next) => {
@@ -856,6 +925,7 @@ async function main(): Promise<void> {
       hasTaskTool: () => agentHost?.available() ?? false,
       onDiagnostic: (message) => stderr.write(`Plans: ${safe(message)}\n`),
     });
+  };
   const createInstructions = () =>
     new InstructionContext({
       cwd,
@@ -972,7 +1042,13 @@ async function main(): Promise<void> {
         session.messages,
       ));
     };
-    const agentTools = agentHost ? agentHost.wrap(base) : undefined;
+    let completeTools: import("./types.js").ToolExecutor | undefined;
+    const agentTools = agentHost
+      ? agentHost.wrap(
+          base,
+          () => completeTools?.definitions ?? base().definitions,
+        )
+      : undefined;
     const withAgents = () => agentTools ?? base();
     const wrapped = skillHost
       ? skillHost.runtime.wrap(withAgents, session.messages)
@@ -980,6 +1056,7 @@ async function main(): Promise<void> {
     const planned = planHost
       ? planHost.wrap(wrapped, session.messages)
       : wrapped;
+    completeTools = planned;
     const notified = {
       ...planned,
       get definitions() {
@@ -1082,7 +1159,7 @@ async function main(): Promise<void> {
           break;
         default: {
           const exhaustive: never = event;
-          throw new Error(`Unknown event: ${exhaustive}`);
+          throw new Error(`Unknown event: ${String(exhaustive)}`);
         }
       }
     };
@@ -1266,8 +1343,8 @@ async function main(): Promise<void> {
     hookHost = createHookHost();
     skillHost = await createSkills();
     taskHost = createTasks();
-    agentHost = await createAgents();
     planHost = createPlans();
+    agentHost = await createAgents();
     active = new AbortController();
     try {
       const { configs } = await loadLaunchMcp({
@@ -1364,8 +1441,8 @@ async function main(): Promise<void> {
           hookHost = createHookHost();
           skillHost = await createSkills();
           taskHost = createTasks();
-          agentHost = await createAgents();
           planHost = createPlans();
+          agentHost = await createAgents();
           readState = new ReadState();
           instructions = createInstructions();
           provider.resetRequestLimits();
@@ -1438,9 +1515,9 @@ async function main(): Promise<void> {
             hookHost = createHookHost();
             skillHost = await createSkills();
             taskHost = createTasks();
-            agentHost = await createAgents();
             if (session.planState?.active) mode = "plan";
             planHost = createPlans();
+            agentHost = await createAgents();
             readState = new ReadState();
             instructions = createInstructions();
             provider.resetRequestLimits();

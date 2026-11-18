@@ -9,17 +9,17 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test, onTestFinished } from "bun:test";
 import { loadLaunchConfiguration } from "../src/launch-configuration.js";
 import { loadLaunchMcp } from "../src/mcp-launch.js";
 import { parseOptions } from "../src/options.js";
 import type { CatalogPlugin } from "../src/plugin-catalog.js";
 
-async function fixture(t: any) {
+async function fixture() {
   const root = await realpath(
     await mkdtemp(join(tmpdir(), "tau-plugin-mcp-launch-")),
   );
-  t.after(() => rm(root, { recursive: true, force: true }));
+  onTestFinished(() => rm(root, { recursive: true, force: true }));
   const cwd = join(root, "project"),
     user = join(root, "config"),
     managed = join(root, "managed"),
@@ -86,30 +86,24 @@ async function fixture(t: any) {
   };
 }
 
-test("plugin MCP is qualified autodiscovery independent of ordinary settings sources", async (t) => {
-  const f = await fixture(t),
+test("plugin MCP is qualified autodiscovery independent of ordinary settings sources", async () => {
+  const f = await fixture(),
     loaded = await f.load(["--setting-sources", ""]);
   assert.deepEqual(Object.keys(loaded.configs), ["plugin:owned:probe"]);
-  const server = loaded.resolution.selected["plugin:owned:probe"]!;
+  const server = loaded.resolution.selected["plugin:owned:probe"];
+  assert.ok(server);
   assert.equal(server.scope, "dynamic");
   assert.equal(server.config.pluginSource, "owned@inline");
-  assert.equal(
-    loaded.configs["plugin:owned:probe"]!.env!.CLAUDE_PLUGIN_ROOT,
-    f.pluginRoot,
-  );
-  assert.equal(
-    loaded.configs["plugin:owned:probe"]!.env!.CLAUDE_PLUGIN_DATA,
-    f.data,
-  );
-  assert.equal(
-    loaded.configs["plugin:owned:probe"]!.env!.VALUE,
-    "expanded-owned",
-  );
+  const env = loaded.configs["plugin:owned:probe"]?.env;
+  assert.ok(env);
+  assert.equal(env.CLAUDE_PLUGIN_ROOT, f.pluginRoot);
+  assert.equal(env.CLAUDE_PLUGIN_DATA, f.data);
+  assert.equal(env.VALUE, "expanded-owned");
   assert.ok((await stat(f.data)).isDirectory());
 });
 
-test("strict and enterprise MCP gates exclude plugins before data-directory side effects", async (t) => {
-  const f = await fixture(t);
+test("strict and enterprise MCP gates exclude plugins before data-directory side effects", async () => {
+  const f = await fixture();
   assert.deepEqual(Object.keys((await f.load([], true)).configs), []);
   await assert.rejects(stat(f.data), { code: "ENOENT" });
   await writeFile(join(f.managed, "managed-mcp.json"), "{broken");
@@ -117,8 +111,8 @@ test("strict and enterprise MCP gates exclude plugins before data-directory side
   await assert.rejects(stat(f.data), { code: "ENOENT" });
 });
 
-test("plugin MCP retains server policy rather than claiming a managed exemption", async (t) => {
-  const f = await fixture(t);
+test("plugin MCP retains server policy rather than claiming a managed exemption", async () => {
+  const f = await fixture();
   await writeFile(
     join(f.managed, "managed-settings.json"),
     JSON.stringify({ allowedMcpServers: [] }),
@@ -139,8 +133,8 @@ test("plugin MCP retains server policy rather than claiming a managed exemption"
   ]);
 });
 
-test("only an enabled policy-admitted manual MCP server suppresses a duplicate plugin endpoint", async (t) => {
-  const f = await fixture(t),
+test("only an enabled policy-admitted manual MCP server suppresses a duplicate plugin endpoint", async () => {
+  const f = await fixture(),
     global = join(f.user, ".claude.json");
   await writeFile(
     global,
@@ -182,8 +176,8 @@ test("only an enabled policy-admitted manual MCP server suppresses a duplicate p
   ]);
 });
 
-test("plugin-only MCP customization retains plugin and managed sources while withholding ordinary scopes", async (t) => {
-  const f = await fixture(t);
+test("plugin-only MCP customization retains plugin and managed sources while withholding ordinary scopes", async () => {
+  const f = await fixture();
   await writeFile(
     join(f.user, ".claude.json"),
     JSON.stringify({

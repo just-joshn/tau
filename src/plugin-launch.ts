@@ -139,7 +139,10 @@ export async function loadLaunchPlugins(options: {
       );
     },
     validateManifest: (manifest, declaration) => {
-      if (`${manifest.name}@inline` !== declaration.source)
+      if (
+        typeof manifest.name !== "string" ||
+        `${manifest.name}@inline` !== declaration.source
+      )
         throw new Error("Plugin identity changed between reads");
     },
     validateComponent: (component) => {

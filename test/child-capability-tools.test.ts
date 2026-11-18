@@ -1,4 +1,4 @@
-import test, { type TestContext } from "node:test";
+import { test, onTestFinished } from "bun:test";
 import assert from "node:assert/strict";
 import {
   mkdtemp,
@@ -43,8 +43,11 @@ const call = (name: string, input: unknown, id = "owned-call"): ToolUse => ({
   name,
   input,
 });
-const pre = () => ({
-  additionalContext: [] as string[],
+const pre = (): {
+  additionalContext: string[];
+  preventContinuation: boolean;
+} => ({
+  additionalContext: [],
   preventContinuation: false,
 });
 const hooks: ToolHookRuntime = {
@@ -68,11 +71,11 @@ const allNames = [
   "EnterPlanMode",
   "ExitPlanMode",
 ];
-async function fixture(t: TestContext) {
+async function fixture() {
   const cwd = await realpath(
     await mkdtemp(join(tmpdir(), "tau-child-capability-")),
   );
-  t.after(() => rm(cwd, { recursive: true, force: true }));
+  onTestFinished(() => rm(cwd, { recursive: true, force: true }));
   const user = join(cwd, "config"),
     managed = join(cwd, "managed");
   await mkdir(user);
@@ -174,8 +177,8 @@ async function fixture(t: TestContext) {
   };
 }
 
-test("real child Skill grants affect scoped file tools; primary model stays fixed while context model/effort advance", async (t) => {
-  const f = await fixture(t);
+test("real child Skill grants affect scoped file tools; primary model stays fixed while context model/effort advance", async () => {
+  const f = await fixture();
   await f.skill(
     "prepare",
     "---\ndescription: Owned prepare\nallowed-tools: Write\nmodel: haiku\neffort: high\n---\nOWNED_CHILD_SKILL",
@@ -244,7 +247,7 @@ test("real child Skill grants affect scoped file tools; primary model stays fixe
   );
   assert.equal(child.contextModel(), "haiku");
   assert.equal(child.primaryModel, "claude-sonnet-4-6");
-  const second = requests[1]!.messages,
+  const second = requests[1]?.messages ?? [],
     result = second.findIndex((message) =>
       message.content.some(
         (block) =>
@@ -260,8 +263,8 @@ test("real child Skill grants affect scoped file tools; primary model stays fixe
   assert.ok(body > result);
   assert.equal(f.approvals(), 0);
 });
-test("live parent deny/ask and narrowed declared pool remain floors after a child Skill grant", async (t) => {
-  const f = await fixture(t);
+test("live parent deny/ask and narrowed declared pool remain floors after a child Skill grant", async () => {
+  const f = await fixture();
   await f.skill("grant", "---\nallowed-tools: Write\n---\nOwned grant");
   const child = await f.make(),
     messages: Message[] = [],
@@ -323,8 +326,8 @@ test("live parent deny/ask and narrowed declared pool remain floors after a chil
   for (const name of ["denied", "asked", "unselected"])
     await assert.rejects(readFile(join(f.cwd, name)), { code: "ENOENT" });
 });
-test("live Skill policy changes are read after hook rewrites and cannot apply withheld effects", async (t) => {
-  const f = await fixture(t);
+test("live Skill policy changes are read after hook rewrites and cannot apply withheld effects", async () => {
+  const f = await fixture();
   await f.skill("safe", "Owned safe");
   await f.skill("grant", "---\nallowed-tools: Write\n---\nOwned grant");
   const child = await f.make({
@@ -358,8 +361,8 @@ test("live Skill policy changes are read after hook rewrites and cannot apply wi
   assert.equal(result.permissionDenied, true);
   assert.equal(child.policy().allowedTools.includes("Write"), false);
 });
-test("foreground CRUD shares parent store/list and child lifecycle identity without creator ownership locks", async (t) => {
-  const f = await fixture(t),
+test("foreground CRUD shares parent store/list and child lifecycle identity without creator ownership locks", async () => {
+  const f = await fixture(),
     child = await f.make(),
     tools = child.wrap(
       {
@@ -385,22 +388,24 @@ test("foreground CRUD shares parent store/list and child lifecycle identity with
   assert.equal(created.is_error, undefined);
   const rows = await f.store.list();
   assert.equal(rows.length, 1);
-  assert.equal(rows[0]!.owner, undefined);
+  const [row] = rows;
+  assert.ok(row);
+  assert.equal(row.owner, undefined);
   assert.match(
     (await parent.execute(call("TaskList", {}), signal())).content,
     /Owned child task/,
   );
   await parent.execute(
-    call("TaskUpdate", { taskId: rows[0]!.id, subject: "Parent edit" }),
+    call("TaskUpdate", { taskId: row.id, subject: "Parent edit" }),
     signal(),
   );
   assert.match(
-    (await tools.execute(call("TaskGet", { taskId: rows[0]!.id }), signal()))
+    (await tools.execute(call("TaskGet", { taskId: row.id }), signal()))
       .content,
     /Parent edit/,
   );
   await tools.execute(
-    call("TaskUpdate", { taskId: rows[0]!.id, status: "completed" }),
+    call("TaskUpdate", { taskId: row.id, status: "completed" }),
     signal(),
   );
   assert.deepEqual(
@@ -413,8 +418,8 @@ test("foreground CRUD shares parent store/list and child lifecycle identity with
     })),
   );
 });
-test("child task lifecycle blocking retains native create rollback and whole update rollback", async (t) => {
-  const f = await fixture(t);
+test("child task lifecycle blocking retains native create rollback and whole update rollback", async () => {
+  const f = await fixture();
   const child = await f.make({
     tasks: {
       store: f.store,
@@ -462,11 +467,11 @@ test("child task lifecycle blocking retains native create rollback and whole upd
   );
   assert.equal(update.is_error, undefined);
   assert.match(update.content, /Owned completion block/);
-  assert.equal((await f.store.get(row.id))!.subject, "before");
-  assert.equal((await f.store.get(row.id))!.status, "pending");
+  assert.equal((await f.store.get(row.id))?.subject, "before");
+  assert.equal((await f.store.get(row.id))?.status, "pending");
 });
-test("ordinary async child permits pure Skill, avoids prompts, and excludes CRUD", async (t) => {
-  const f = await fixture(t);
+test("ordinary async child permits pure Skill, avoids prompts, and excludes CRUD", async () => {
+  const f = await fixture();
   await f.skill("pure", "Owned body");
   await f.skill("grant", "---\nallowed-tools: Write\n---\nOwned grant");
   f.setPolicy({ ...f.getPolicy(), allowedTools: [] });
@@ -506,8 +511,8 @@ test("ordinary async child permits pure Skill, avoids prompts, and excludes CRUD
   assert.equal(f.approvals(), 0);
   assert.deepEqual(await f.store.list(), []);
 });
-test("foreground command denies publish only via explicit session adapter; async setter remains no-op", async (t) => {
-  const f = await fixture(t);
+test("foreground command denies publish only via explicit session adapter; async setter remains no-op", async () => {
+  const f = await fixture();
   await f.skill("deny", "---\ndisallowed-tools: Bash\n---\nOwned deny");
   const calls: unknown[] = [];
   const foreground = await f.make({
@@ -571,13 +576,18 @@ test("foreground command denies publish only via explicit session adapter; async
     true,
   );
 });
-test("child Skill hook registration retains session key and invoking actor, without merging root hooks", async (t) => {
-  const f = await fixture(t);
+test("child Skill hook registration retains session key and invoking actor, without merging root hooks", async () => {
+  const f = await fixture();
   await f.skill(
     "hooked",
     "---\nallowed-tools: Write\nhooks: {Stop: []}\n---\nOwned hooked",
   );
-  const registrations: unknown[] = [],
+  const registrations: {
+      request: Parameters<
+        NonNullable<ChildCapabilityToolsOptions["registerSkillHooks"]>
+      >[0];
+      actor: { agentId: string };
+    }[] = [],
     seen: string[] = [];
   const child = await f.make({
     registerSkillHooks(request, actor) {
@@ -608,13 +618,13 @@ test("child Skill hook registration retains session key and invoking actor, with
       .is_error,
     undefined,
   );
-  assert.equal((registrations[0] as any).request.sessionId, "parent-session");
-  assert.deepEqual((registrations[0] as any).actor, { agentId: "owned-child" });
+  assert.equal(registrations[0]?.request.sessionId, "parent-session");
+  assert.deepEqual(registrations[0]?.actor, { agentId: "owned-child" });
   assert.deepEqual(seen, ["Skill"]);
   assert.equal(registrations.length, 1);
 });
-test("declared preloads use explicit parent renderer without grant/model/effort/hooks publication", async (t) => {
-  const f = await fixture(t);
+test("declared preloads use explicit parent renderer without grant/model/effort/hooks publication", async () => {
+  const f = await fixture();
   await f.skill(
     "preload",
     "---\ndescription: Owned preload\nallowed-tools: Write\ndisallowed-tools: Bash\nmodel: haiku\neffort: low\ncontext: fork\nhooks: {Stop: []}\n---\nPRELOAD ${CLAUDE_SESSION_ID} ${CLAUDE_EFFORT}",
@@ -664,8 +674,8 @@ test("declared preloads use explicit parent renderer without grant/model/effort/
   assert.equal(child.policy().allowedTools.includes("Write"), false);
   assert.equal(child.policy().sourcedRules?.length ?? 0, 0);
 });
-test("main-only Enter and unsupported Exit do not block child materialization or execute hooks", async (t) => {
-  const f = await fixture(t);
+test("main-only Enter and unsupported Exit do not block child materialization or execute hooks", async () => {
+  const f = await fixture();
   let hookCalls = 0;
   const child = await f.make({
     hooks: {
@@ -803,8 +813,8 @@ test("preload render failure aborts sibling render, disabled catalog entries ski
   );
 });
 
-test("child task authorize rechecks a parent deny installed during PreToolUse despite hook allow", async (t) => {
-  const f = await fixture(t);
+test("child task authorize rechecks a parent deny installed during PreToolUse despite hook allow", async () => {
+  const f = await fixture();
   const child = await f.make({
     hooks: {
       async before(tool) {
@@ -842,11 +852,11 @@ test("child task authorize rechecks a parent deny installed during PreToolUse de
     false,
   );
 });
-test("child captures session/model/effort identity snapshots while continuing to use live parent policy", async (t) => {
-  const f = await fixture(t);
+test("child captures session/model/effort identity snapshots while continuing to use live parent policy", async () => {
+  const f = await fixture();
   let sid = "parent-session",
     model = "claude-sonnet-4-6",
-    effort = "medium" as "medium" | "high";
+    effort: "medium" | "high" = "medium";
   const child = await f.make({
     sessionId: () => sid,
     model: () => model,
@@ -871,7 +881,7 @@ test("child captures session/model/effort identity snapshots while continuing to
     call("TaskCreate", { subject: "snapshot", description: "snapshot" }),
     signal(),
   );
-  assert.equal(f.lifecycle[0]!.sessionId, "parent-session");
+  assert.equal(f.lifecycle[0]?.sessionId, "parent-session");
   f.setPolicy({ ...f.getPolicy(), tools: ["Read"] });
   assert.equal(
     tools.definitions.some((tool) => tool.name === "TaskCreate"),
@@ -879,8 +889,8 @@ test("child captures session/model/effort identity snapshots while continuing to
   );
 });
 
-test("history getter flushes Skill instructions into actual cloned child history after paired tool result", async (t) => {
-  const f = await fixture(t);
+test("history getter flushes Skill instructions into actual cloned child history after paired tool result", async () => {
+  const f = await fixture();
   await f.skill("context", "Owned dynamic history instructions");
   const child = await f.make(),
     original: Message[] = [];
@@ -899,10 +909,10 @@ test("history getter flushes Skill instructions into actual cloned child history
     signal(),
   );
   messages = [{ role: "user", content: [result] }];
-  await tools.beforeModelRequest!(signal());
+  await tools.beforeModelRequest?.(signal());
   assert.deepEqual(original, []);
   assert.equal(messages.length, 2);
-  assert.equal(messages[0]!.content[0]!.type, "tool_result");
+  assert.equal(messages[0]?.content[0]?.type, "tool_result");
   assert.match(
     JSON.stringify(messages[1]),
     /Owned dynamic history instructions/,

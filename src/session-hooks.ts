@@ -2,12 +2,7 @@ import {
   createToolHookRuntime,
   type HookCommonInput,
 } from "./tool-hook-runtime.js";
-import type {
-  HookBatchResult,
-  HookRegistry,
-  HookResult,
-  HookRunOptions,
-} from "./hooks.js";
+import type { HookBatchResult, HookResult, HookRunOptions } from "./hooks.js";
 import type { Message, ToolExecutor } from "./types.js";
 import type { HookRegistryLike } from "./composite-hooks.js";
 import { sanitizeHookAttachmentText } from "./hook-attachment-projection.js";
@@ -15,9 +10,9 @@ import { sanitizeHookAttachmentText } from "./hook-attachment-projection.js";
 /** Session lifecycle/context delivery around the validated tool-hook runtime. */
 export function createSessionHookHost(options: {
   registry: HookRegistryLike;
-  context(): HookCommonInput;
+  context: () => HookCommonInput;
   runOptions(): Omit<HookRunOptions, "signal" | "validateUpdatedInput">;
-  onDiagnostic?(message: string): void;
+  onDiagnostic?: (message: string) => void;
 }) {
   const pending: string[] = [];
   let closed = false,

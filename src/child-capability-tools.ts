@@ -121,26 +121,26 @@ export interface ChildCapabilityToolsOptions {
   sessionId(): string;
   selectedToolNames: readonly string[];
   policy(): ToolPolicy;
-  mode(): PermissionMode;
+  mode: () => PermissionMode;
   /** Snapshots captured once for this child's primary query. Skill changes tool-context model only. */
   model(): string;
   effort?(): SkillEffort | undefined;
-  effortLevel?(context: {
+  effortLevel?: (context: {
     model: string;
     effort: SkillEffort | undefined;
-  }): string | undefined;
+  }) => string | undefined;
   hooks: ToolHookRuntime;
   interactive: boolean;
-  approve(description: string): Promise<boolean>;
+  approve: (description: string) => Promise<boolean>;
   registry?: LocalSkillRegistry;
   env?: NodeJS.ProcessEnv;
   ignorePersistedTrust?: boolean;
   processShellBlocks?: SessionSkillHostOptions["processShellBlocks"];
   /** Registration key remains sessionId from the effect; invoking actor does not re-key or merge registry snapshots. */
-  registerSkillHooks?(
+  registerSkillHooks?: (
     request: NonNullable<SkillEffectRequest["sessionHooks"]>,
     actor: { agentId: string },
-  ): { registered: boolean; reason?: string };
+  ) => { registered: boolean; reason?: string };
   /** Required for a foreground invocation that actually declares command denies. Async source setter is a no-op. */
   publishSessionCommandDenies?(
     rules: readonly string[],
@@ -160,14 +160,14 @@ export interface ChildCapabilityToolsOptions {
         context: TaskLifecycleContext,
       ): Promise<TaskLifecycleDecision | void>;
     };
-    validateMutation?(context: {
+    validateMutation?: (context: {
       sessionId: string;
       actor?: string;
       mode?: "local";
-    }): boolean | string;
+    }) => boolean | string;
   };
   signal: AbortSignal;
-  onDiagnostic?(message: string): void;
+  onDiagnostic?: (message: string) => void;
 }
 const canonical = (name: string) =>
   name === "Task"

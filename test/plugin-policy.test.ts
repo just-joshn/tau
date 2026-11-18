@@ -1,4 +1,4 @@
-import test from "node:test";
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   managedLocalPluginAdmission,
@@ -6,18 +6,24 @@ import {
 } from "../src/plugin-policy.js";
 import type { CatalogPlugin } from "../src/plugin-catalog.js";
 
+const at = <T>(items: readonly T[], index: number): T => {
+  const item = items[index];
+  assert.ok(item !== undefined);
+  return item;
+};
+
 const plugin = (
   source: string,
   dependencies?: unknown,
   enabled = true,
 ): CatalogPlugin => ({
-  name: source.split("@")[0]!,
+  name: source.split("@")[0] ?? source,
   source,
   scope: "session",
   root: "/owned/" + source,
   realRoot: "/owned/" + source,
   manifest: {
-    name: source.split("@")[0]!,
+    name: source.split("@")[0] ?? source,
     ...(dependencies !== undefined && { dependencies }),
   },
   provenance: {},
@@ -142,8 +148,8 @@ test("fully enabled cycles and unqualified local dependencies work without insta
     plugin("a@inline"),
     plugin("a@inline", undefined, false),
   ]);
-  assert.equal(duplicate.plugins[0]!.components.length, 1);
-  assert.equal(duplicate.plugins[1]!.components.length, 0);
+  assert.equal(at(duplicate.plugins, 0).components.length, 1);
+  assert.equal(at(duplicate.plugins, 1).components.length, 0);
 });
 
 test("qualified dependencies accept inline overrides; ordinary installed bare names inherit their marketplace", () => {
@@ -158,14 +164,14 @@ test("qualified dependencies accept inline overrides; ordinary installed bare na
     resolveLocalPluginDependencies([
       plugin("a@market", ["b"]),
       plugin("b@other"),
-    ]).plugins[0]!.enabled,
+    ]).plugins.at(0)?.enabled,
     false,
   );
   assert.equal(
     resolveLocalPluginDependencies([
       plugin("a@market", [{ name: "b", marketplace: "other" }]),
       plugin("b@other"),
-    ]).plugins[0]!.enabled,
+    ]).plugins.at(0)?.enabled,
     true,
   );
 });
@@ -184,9 +190,9 @@ test("unsupported constraints and malformed declarations withhold plugin and its
       plugin("b@inline"),
       plugin("c@inline", ["a"]),
     ]);
-    assert.equal(result.plugins[0]!.enabled, false);
-    assert.equal(result.plugins[2]!.enabled, false);
-    assert.equal(result.diagnostics[0]!.reason, "unsupported");
+    assert.equal(at(result.plugins, 0).enabled, false);
+    assert.equal(at(result.plugins, 2).enabled, false);
+    assert.equal(at(result.diagnostics, 0).reason, "unsupported");
   }
 });
 

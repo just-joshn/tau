@@ -19,7 +19,8 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import test, { type TestContext } from "node:test";
+import { onTestFinished, test } from "bun:test";
+import { z } from "zod";
 import { createTools } from "../src/tools.js";
 import { ReadState } from "../src/read-state.js";
 import { ModelContextRoom } from "../src/context-room.js";
@@ -31,11 +32,22 @@ import {
 import { writeAtomic } from "../src/write.js";
 import { fixtureSse } from "./sse-fixture.js";
 
-async function fixture(t: TestContext) {
+const requestSchema = z.object({
+  messages: z.array(
+    z.object({
+      content: z.array(z.object({ is_error: z.boolean().optional() })),
+    }),
+  ),
+});
+const resultSchema = z.object({ result: z.string() });
+
+async function fixture() {
   const cwd = await realpath(
     await mkdtemp(path.join(tmpdir(), "tau-write-size-")),
   );
-  t.after(() => rm(cwd, { recursive: true, force: true }));
+  onTestFinished(() => rm(cwd, { recursive: true, force: true }));
+  const controller = new AbortController();
+  onTestFinished(() => controller.abort());
   const state = new ReadState(),
     tools = createTools({
       cwd,
@@ -43,7 +55,7 @@ async function fixture(t: TestContext) {
       mode: "bypassPermissions",
       approve: async () => true,
     });
-  tools.setReadContext!({
+  tools.setReadContext?.({
     room: new ModelContextRoom(
       () => 1000000,
       1013000,
@@ -55,15 +67,15 @@ async function fixture(t: TestContext) {
   const run = (
     name: string,
     input: Record<string, unknown>,
-    signal = t.signal,
+    signal = controller.signal,
   ) => tools.execute({ type: "tool_use", name, input, id: "tool" }, signal);
   const file = path.join(cwd, "a"),
     read = () => run("Read", { file_path: "a", allow_large: true });
-  return { cwd, file, state, tools, run, read };
+  return { cwd, file, state, tools, run, read, signal: controller.signal };
 }
 
-test("a complete300KB Read permits Edit and Write beyond the old64KiB mutation bound", async (t) => {
-  const f = await fixture(t),
+test("a complete300KB Read permits Edit and Write beyond the old64KiB mutation bound", async () => {
+  const f = await fixture(),
     text = "head\n" + "x".repeat(300000) + "\ntail";
   await writeFile(f.file, text);
   await chmod(f.file, 0o640);
@@ -88,8 +100,8 @@ test("a complete300KB Read permits Edit and Write beyond the old64KiB mutation b
   assert.deepEqual(await readdir(f.cwd), ["a"]);
 });
 
-test("Write accepts content above1MiB and consecutive Edit uses its full known-content baseline", async (t) => {
-  const f = await fixture(t),
+test("Write accepts content above1MiB and consecutive Edit uses its full known-content baseline", async () => {
+  const f = await fixture(),
     content = "head\n" + "x".repeat(1100000) + "\ntail";
   assert.equal(
     (await f.run("Write", { file_path: "a", content })).content,
@@ -112,8 +124,8 @@ test("Write accepts content above1MiB and consecutive Edit uses its full known-c
   );
 });
 
-test("Write's10MiB diff threshold does not become an input or existing-file limit", async (t) => {
-  const f = await fixture(t),
+test("Write's10MiB diff threshold does not become an input or existing-file limit", async () => {
+  const f = await fixture(),
     content = "x".repeat(10485761);
   assert.equal(
     (await f.run("Write", { file_path: "a", content })).content,
@@ -127,8 +139,8 @@ test("Write's10MiB diff threshold does not become an input or existing-file limi
   assert.equal(await readFile(f.file, "utf8"), "small");
 });
 
-test("large UTF16LE/BOM/CRLF Edit retains encoding, newlines and permissions", async (t) => {
-  const f = await fixture(t),
+test("large UTF16LE/BOM/CRLF Edit retains encoding, newlines and permissions", async () => {
+  const f = await fixture(),
     text = "\ufeffhead\r\n" + "α".repeat(140000) + "\r\ntail\r\n";
   await writeFile(f.file, Buffer.from(text, "utf16le"));
   await chmod(f.file, 0o600);
@@ -152,8 +164,8 @@ test("large UTF16LE/BOM/CRLF Edit retains encoding, newlines and permissions", a
   assert.equal((await stat(f.file)).mode & 0o777, 0o600);
 });
 
-test("large UTF8 BOM Write preserves its BOM and may truncate to empty", async (t) => {
-  const f = await fixture(t);
+test("large UTF8 BOM Write preserves its BOM and may truncate to empty", async () => {
+  const f = await fixture();
   await writeFile(f.file, "\ufeff" + "x".repeat(300000));
   await f.read();
   assert.equal(
@@ -169,8 +181,8 @@ test("large UTF8 BOM Write preserves its BOM and may truncate to empty", async (
   assert.equal((await stat(f.file)).size, 0);
 });
 
-test("changes beyond the former prefix are rejected even if mtime is restored", async (t) => {
-  const f = await fixture(t),
+test("changes beyond the former prefix are rejected even if mtime is restored", async () => {
+  const f = await fixture(),
     text = "head\n" + "x".repeat(300000) + "\ntail";
   await writeFile(f.file, text);
   await f.read();
@@ -189,8 +201,8 @@ test("changes beyond the former prefix are rejected even if mtime is restored", 
   assert.equal(await readFile(f.file, "utf8"), changed);
 });
 
-test("a partial large-file Read never authorizes replacement", async (t) => {
-  const f = await fixture(t);
+test("a partial large-file Read never authorizes replacement", async () => {
+  const f = await fixture();
   await writeFile(f.file, "head\n" + "x".repeat(300000));
   await f.run("Read", { file_path: "a", limit: 1 });
   assert.equal(
@@ -200,8 +212,8 @@ test("a partial large-file Read never authorizes replacement", async (t) => {
   assert.equal((await stat(f.file)).size, 300005);
 });
 
-test("Edit checks the exact1GiB metadata boundary before loading an unread sparse file", async (t) => {
-  const f = await fixture(t);
+test("Edit checks the exact1GiB metadata boundary before loading an unread sparse file", async () => {
+  const f = await fixture();
   await writeFile(f.file, "");
   await truncate(f.file, MAX_EDIT_BYTES);
   const at = await f.run("Edit", {
@@ -221,8 +233,8 @@ test("Edit checks the exact1GiB metadata boundary before loading an unread spars
   assert.match(over.content, /1073741824-byte Edit limit/);
 });
 
-test("unread Write does not inherit Edit's size cutoff or load a giant file", async (t) => {
-  const f = await fixture(t);
+test("unread Write does not inherit Edit's size cutoff or load a giant file", async () => {
+  const f = await fixture();
   await writeFile(f.file, "");
   await truncate(f.file, MAX_EDIT_BYTES + 1);
   const result = await f.run("Write", { file_path: "a", content: "lost" });
@@ -231,15 +243,15 @@ test("unread Write does not inherit Edit's size cutoff or load a giant file", as
   assert.equal((await stat(f.file)).size, MAX_EDIT_BYTES + 1);
 });
 
-test("precommit snapshot checking catches a same-size large tail change and removes the temp file", async (t) => {
-  const f = await fixture(t),
+test("precommit snapshot checking catches a same-size large tail change and removes the temp file", async () => {
+  const f = await fixture(),
     original = Buffer.from("x".repeat(300000) + "tail"),
     changed = Buffer.from("x".repeat(300000) + "else");
   await writeFile(f.file, original);
   await assert.rejects(
     writeAtomic(f.file, "proposal", async () => {
       await writeFile(f.file, changed);
-      await readFileSnapshot(f.file, t.signal, { expected: original });
+      await readFileSnapshot(f.file, f.signal, { expected: original });
     }),
     /changed before write/,
   );
@@ -247,26 +259,26 @@ test("precommit snapshot checking catches a same-size large tail change and remo
   assert.deepEqual(await readdir(f.cwd), ["a"]);
 });
 
-test("expected creation snapshot refuses a file created before commit", async (t) => {
-  const f = await fixture(t);
+test("expected creation snapshot refuses a file created before commit", async () => {
+  const f = await fixture();
   await writeFile(f.file, "external");
   await assert.rejects(
-    readFileSnapshot(f.file, t.signal, { expected: null }),
+    readFileSnapshot(f.file, f.signal, { expected: null }),
     /changed before write/,
   );
   assert.equal(
-    await readFileSnapshot(path.join(f.cwd, "absent"), t.signal, {
+    await readFileSnapshot(path.join(f.cwd, "absent"), f.signal, {
       expected: null,
     }),
     null,
   );
 });
 
-test("snapshot reading refuses symlinks and cancellation without changing files", async (t) => {
-  const f = await fixture(t);
+test("snapshot reading refuses symlinks and cancellation without changing files", async () => {
+  const f = await fixture();
   await writeFile(f.file, "x".repeat(300000));
   await symlink("a", path.join(f.cwd, "link"));
-  await assert.rejects(readFileSnapshot(path.join(f.cwd, "link"), t.signal));
+  await assert.rejects(readFileSnapshot(path.join(f.cwd, "link"), f.signal));
   const controller = new AbortController();
   controller.abort();
   await assert.rejects(readFileSnapshot(f.file, controller.signal), {
@@ -275,8 +287,8 @@ test("snapshot reading refuses symlinks and cancellation without changing files"
   assert.equal((await stat(f.file)).size, 300000);
 });
 
-test("atomic write verifies UTF8 byte length and returns the verified integer mtime", async (t) => {
-  const f = await fixture(t),
+test("atomic write verifies UTF8 byte length and returns the verified integer mtime", async () => {
+  const f = await fixture(),
     content = "β".repeat(150000);
   await writeFile(f.file, "old");
   await chmod(f.file, 0o640);
@@ -288,8 +300,8 @@ test("atomic write verifies UTF8 byte length and returns the verified integer mt
   assert.deepEqual(await readdir(f.cwd), ["a"]);
 });
 
-test("post-rename truncation reports verification failure after the committed file changed", async (t) => {
-  const f = await fixture(t);
+test("post-rename truncation reports verification failure after the committed file changed", async () => {
+  const f = await fixture();
   await writeFile(f.file, "old");
   await assert.rejects(
     writeAtomic(f.file, Buffer.alloc(300000, 120), undefined, {
@@ -306,19 +318,18 @@ test("post-rename truncation reports verification failure after the committed fi
 
 test(
   "compiled CLI streams Write input above1MiB then Edit and overwrite share the verified baseline",
-  { timeout: 15000 },
-  async (t) => {
-    const f = await fixture(t),
+  async () => {
+    const f = await fixture(),
       content = "head\n" + "x".repeat(1100000) + "\ntail";
     let generation = 0;
     const server = createServer(async (req, res) => {
       let raw = "";
       for await (const chunk of req) raw += chunk;
-      const body = JSON.parse(raw);
+      const body = requestSchema.parse(JSON.parse(raw));
       generation++;
       assert.equal(req.url, "/v1/messages");
       if (generation > 1)
-        assert.equal(body.messages.at(-1).content[0].is_error, undefined);
+        assert.equal(body.messages.at(-1)?.content[0]?.is_error, undefined);
       const block =
         generation === 1
           ? {
@@ -353,7 +364,7 @@ test(
           await readFile(f.file, "utf8"),
           content.slice(0, -4) + "TAIL",
         );
-      const events: any[] = [
+      const events: unknown[] = [
         {
           type: "message_start",
           message: {
@@ -398,7 +409,7 @@ test(
       res.end(fixtureSse(events));
     });
     await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
-    t.after(async () => {
+    onTestFinished(async () => {
       server.closeAllConnections();
       await new Promise<void>((done) => server.close(() => done()));
     });
@@ -407,7 +418,7 @@ test(
     const pending = promisify(execFile)(
       process.execPath,
       [
-        path.resolve("dist/src/cli.js"),
+        path.resolve("src/cli.ts"),
         "--cwd",
         f.cwd,
         "--print",
@@ -431,28 +442,30 @@ test(
           TAU_HOME: path.join(f.cwd, "state"),
         },
         maxBuffer: 1024 * 1024,
-        signal: t.signal,
+        signal: f.signal,
       },
     );
     pending.child.stdin?.end();
     const result = await pending;
-    assert.equal(JSON.parse(result.stdout).result, "Done");
+    assert.equal(resultSchema.parse(JSON.parse(result.stdout)).result, "Done");
     assert.equal(generation, 4);
     assert.equal(await readFile(f.file, "utf8"), "final\n");
   },
+  { timeout: 15000 },
 );
 
-test("a zero-size snapshot has the separate10MiB guard if the regular file grows after stat", async (t) => {
-  const f = await fixture(t);
+test("a zero-size snapshot has the separate10MiB guard if the regular file grows after stat", async () => {
+  const f = await fixture();
   await writeFile(f.file, "");
-  const accepted = await readFileSnapshot(f.file, t.signal, {
+  const accepted = await readFileSnapshot(f.file, f.signal, {
     requireRead: () =>
       writeFileSync(f.file, Buffer.alloc(MAX_UNSIZED_FILE_BYTES, 120)),
   });
-  assert.equal(accepted!.length, MAX_UNSIZED_FILE_BYTES);
+  assert.ok(accepted);
+  assert.equal(accepted.length, MAX_UNSIZED_FILE_BYTES);
   await writeFile(f.file, "");
   await assert.rejects(
-    readFileSnapshot(f.file, t.signal, {
+    readFileSnapshot(f.file, f.signal, {
       requireRead: () =>
         writeFileSync(f.file, Buffer.alloc(MAX_UNSIZED_FILE_BYTES + 1, 120)),
     }),

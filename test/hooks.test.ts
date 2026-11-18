@@ -1,9 +1,10 @@
-import test from "node:test";
+import { test, onTestFinished } from "bun:test";
 import assert from "node:assert/strict";
 import { mkdtemp, writeFile, readFile, rm, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { z } from "zod";
 import {
   createHookRegistry,
   DEFAULT_HOOK_TIMEOUT_MS,
@@ -11,6 +12,19 @@ import {
   type HookSource,
   type HookRunOptions,
 } from "../src/hooks.js";
+
+const loggedRow = z.record(z.string(), z.unknown());
+const loggedInput = z.looseObject({
+  tool_name: z.string().optional(),
+  error: z.string().optional(),
+  is_interrupt: z.boolean().optional(),
+  duration_ms: z.number().optional(),
+});
+const at = <T>(items: readonly T[], index: number): T => {
+  const item = items[index];
+  assert.ok(item !== undefined);
+  return item;
+};
 
 const script = String.raw`
 import { appendFileSync, writeFileSync } from 'node:fs';
@@ -31,9 +45,9 @@ else if(mode==='descendant'){
 else if(mode==='touch')writeFileSync(process.argv[4],'ran');
 `;
 
-test("subagent command events validate identity, use agent-type matching and retain event-specific context", async (t) => {
+test("subagent command events validate identity, use agent-type matching and retain event-specific context", async () => {
   const f = await fixture();
-  t.after(() => rm(f.root, { recursive: true, force: true }));
+  onTestFinished(() => rm(f.root, { recursive: true, force: true }));
   const registry = createHookRegistry([
     {
       source: "owned",
@@ -68,7 +82,7 @@ test("subagent command events validate identity, use agent-type matching and ret
       },
     },
   ]);
-  t.after(() => registry.close());
+  onTestFinished(() => registry.close());
   const identity = { agent_id: "child-owned", agent_type: "reader" };
   await assert.rejects(
     registry.run(f.input("SubagentStart"), f.options),
@@ -104,9 +118,9 @@ test("subagent command events validate identity, use agent-type matching and ret
   assert.deepEqual(stop.additionalContext, ["owned stop"]);
 });
 
-test("missing-script exit2 is nonblocking for supported stop/completion events", async (t) => {
+test("missing-script exit2 is nonblocking for supported stop/completion events", async () => {
   const f = await fixture();
-  t.after(() => rm(f.root, { recursive: true, force: true }));
+  onTestFinished(() => rm(f.root, { recursive: true, force: true }));
   const registry = createHookRegistry([
     {
       source: "owned",
@@ -117,7 +131,7 @@ test("missing-script exit2 is nonblocking for supported stop/completion events",
       ),
     },
   ]);
-  t.after(() => registry.close());
+  onTestFinished(() => registry.close());
   for (const event of [
     "Stop",
     "SubagentStop",
@@ -135,9 +149,9 @@ test("missing-script exit2 is nonblocking for supported stop/completion events",
       }),
       f.options,
     );
-    assert.equal(batch.results[0]!.exitCode, 2);
+    assert.equal(at(batch.results, 0).exitCode, 2);
     assert.equal(
-      batch.results[0]!.status,
+      at(batch.results, 0).status,
       event === "SubagentStart" ? "blocking" : "error",
     );
     assert.equal(
@@ -228,7 +242,7 @@ async function fixture() {
           .trim()
           .split("\n")
           .filter(Boolean)
-          .map((line) => JSON.parse(line) as Record<string, unknown>);
+          .map((line) => loggedRow.parse(JSON.parse(line)));
       } catch {
         return [];
       }
@@ -249,7 +263,7 @@ test("command hook receives newline JSON stdin, explicit cwd/environment and eff
     );
     assert.equal(result.results[0]?.stdout, "plain fixture output");
     assert.equal(result.results[0]?.status, "success");
-    const row = (await f.rows())[0]!;
+    const row = at(await f.rows(), 0);
     assert.equal(row.cwd, f.root);
     assert.deepEqual(row.env, {
       project: f.root,
@@ -257,7 +271,7 @@ test("command hook receives newline JSON stdin, explicit cwd/environment and eff
       effort: "high",
       custom: "dummy",
     });
-    assert.equal((row.input as HookInput).tool_name, "Write");
+    assert.equal(loggedInput.parse(row.input).tool_name, "Write");
     assert.equal(DEFAULT_HOOK_TIMEOUT_MS, 600000);
   } finally {
     await registry.close();
@@ -285,7 +299,7 @@ test("PostToolUseFailure matches the failed tool and serializes validated failur
       f.options,
     );
     assert.equal(batch.results.length, 1);
-    const input = (await f.rows())[0]!.input as HookInput;
+    const input = loggedInput.parse(at(await f.rows(), 0).input);
     assert.equal(input.error, "owned failure");
     assert.equal(input.is_interrupt, true);
     assert.equal(input.duration_ms, 12.5);
@@ -296,16 +310,14 @@ test("PostToolUseFailure matches the failed tool and serializes validated failur
       registry.run(missing, f.options),
       /requires error text/,
     );
-    for (const extra of [
+    const invalidExtras: Record<string, unknown>[] = [
       { is_interrupt: "false" },
       { duration_ms: "12" },
       { duration_ms: Infinity },
-    ]) {
+    ];
+    for (const extra of invalidExtras) {
       await assert.rejects(
-        registry.run(
-          { ...f.input("PostToolUseFailure"), ...extra } as HookInput,
-          f.options,
-        ),
+        registry.run({ ...f.input("PostToolUseFailure"), ...extra }, f.options),
         /must be/,
       );
     }
@@ -408,7 +420,7 @@ test("asynchronous failure hooks do not block the waiting tool through onFailure
     assert.deepEqual(batch.additionalContext, []);
     assert.equal(batch.results.length, 0);
     assert.equal(batch.background.length, 1);
-    assert.equal((await batch.background[0]!.completion).status, "error");
+    assert.equal((await at(batch.background, 0).completion).status, "error");
   } finally {
     await registry.close();
     await f.close();
@@ -650,7 +662,7 @@ test("SessionStart JSON returns context/title/initial message and project startu
     assert.equal(background.results.length, 0);
     assert.equal(background.background.length, 1);
     assert.equal(
-      (await background.background[0]!.completion).additionalContext,
+      (await at(background.background, 0).completion).additionalContext,
       "startup context",
     );
     const sync = await registry.run(f.input("SessionStart"), {
@@ -770,8 +782,10 @@ test("cancellation before spawn has no effects and active cancellation kills the
       });
     let child: number | undefined;
     for (let count = 0; count < 100; count++) {
-      child = (await f.rows()).find((row) => typeof row.child === "number")
-        ?.child as number | undefined;
+      const logged = (await f.rows()).find(
+        (row) => typeof row.child === "number",
+      );
+      child = typeof logged?.child === "number" ? logged.child : undefined;
       if (child) break;
       await sleep(20);
     }
@@ -927,7 +941,7 @@ test("managed-only/disabled selection and invalid hook inputs cannot spawn an un
     assert.equal((await disabled.run(f.input(), f.options)).results.length, 0);
     await assert.rejects(
       managed.run(
-        { ...f.input(), tool_name: undefined } as unknown as HookInput,
+        Object.assign(f.input(), { tool_name: undefined }),
         f.options,
       ),
       /tool hook input/i,

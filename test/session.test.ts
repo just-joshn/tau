@@ -12,14 +12,20 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { onTestFinished, test } from "bun:test";
+import { z } from "zod";
 import { parseOptions } from "../src/options.js";
 import { buildSystemPrompt } from "../src/prompt.js";
 import { newSession, SessionStore } from "../src/session.js";
 
-test("session roundtrip, latest, permissions and project isolation", async (t) => {
+const archiveFileSchema = z.object({
+  messages: z.unknown(),
+  status: z.string(),
+});
+
+test("session roundtrip, latest, permissions and project isolation", async () => {
   const temp = await mkdtemp(join(tmpdir(), "tau-session-"));
-  t.after(() => rm(temp, { recursive: true, force: true }));
+  onTestFinished(() => rm(temp, { recursive: true, force: true }));
   const cwd = await realpath(temp);
   const home = join(cwd, "home");
   const store = await SessionStore.create(cwd, home);
@@ -58,9 +64,9 @@ test("session roundtrip, latest, permissions and project isolation", async (t) =
   assert.deepEqual((await store.load(first.id)).messages, loaded.messages);
 });
 
-test("child archives preserve isolated history without replacing latest parent session", async (t) => {
+test("child archives preserve isolated history without replacing latest parent session", async () => {
   const temp = await mkdtemp(join(tmpdir(), "tau-subagent-archive-"));
-  t.after(() => rm(temp, { recursive: true, force: true }));
+  onTestFinished(() => rm(temp, { recursive: true, force: true }));
   const cwd = await realpath(temp),
     store = await SessionStore.create(cwd, join(cwd, "state")),
     parent = newSession(cwd, "parent");
@@ -84,12 +90,17 @@ test("child archives preserve isolated history without replacing latest parent s
   await store.saveSubagent(archive);
   const path = store.subagentPathFor(parent.id, archive.agentId);
   assert.equal((await stat(path)).mode & 0o777, 0o600);
-  const saved = JSON.parse(await readFile(path, "utf8"));
+  const saved = archiveFileSchema.parse(
+    JSON.parse(await readFile(path, "utf8")),
+  );
   assert.deepEqual(saved.messages, archive.messages);
   assert.equal((await store.latest()).id, parent.id);
   assert.deepEqual((await store.load(parent.id)).messages, []);
   await store.saveSubagent({ ...archive, status: "completed" });
-  assert.equal(JSON.parse(await readFile(path, "utf8")).status, "completed");
+  assert.equal(
+    archiveFileSchema.parse(JSON.parse(await readFile(path, "utf8"))).status,
+    "completed",
+  );
   assert.throws(() => store.subagentPathFor(parent.id, "../../parent"));
   await assert.rejects(
     store.saveSubagent({ ...archive, cwd: join(cwd, "other") }),
@@ -107,12 +118,15 @@ test("child archives preserve isolated history without replacing latest parent s
     }),
     /previous archive was preserved/,
   );
-  assert.equal(JSON.parse(await readFile(path, "utf8")).status, "completed");
+  assert.equal(
+    archiveFileSchema.parse(JSON.parse(await readFile(path, "utf8"))).status,
+    "completed",
+  );
 });
 
-test("project instructions bounded and external symlinks refused", async (t) => {
+test("project instructions bounded and external symlinks refused", async () => {
   const temp = await mkdtemp(join(tmpdir(), "tau-prompt-"));
-  t.after(() => rm(temp, { recursive: true, force: true }));
+  onTestFinished(() => rm(temp, { recursive: true, force: true }));
   const cwd = join(temp, "project");
   await mkdir(cwd);
   assert.match(await buildSystemPrompt(cwd), /independent coding assistant/);
@@ -147,9 +161,9 @@ test("CLI options fail closed on invalid modes and conflicting settings", () => 
   }
 });
 
-test("reasoning signatures, redacted blocks and partial/fallback metadata survive session roundtrip", async (t) => {
+test("reasoning signatures, redacted blocks and partial/fallback metadata survive session roundtrip", async () => {
   const temp = await mkdtemp(join(tmpdir(), "tau-reasoning-session-"));
-  t.after(() => rm(temp, { recursive: true, force: true }));
+  onTestFinished(() => rm(temp, { recursive: true, force: true }));
   const cwd = await realpath(temp),
     store = await SessionStore.create(cwd, join(cwd, "state"));
   const session = newSession(cwd, "primary");
@@ -169,8 +183,10 @@ test("reasoning signatures, redacted blocks and partial/fallback metadata surviv
   });
   await store.save(session);
   assert.deepEqual((await store.load(session.id)).messages, session.messages);
-  const bad = structuredClone(session) as any;
-  bad.messages[0].content[0].signature = 42;
+  const bad = structuredClone(session);
+  const content = bad.messages[0]?.content;
+  assert.ok(Array.isArray(content));
+  Reflect.set(content[0] ?? assert.fail("missing block"), "signature", 42);
   await assert.rejects(store.save(bad));
   assert.deepEqual((await store.load(session.id)).messages, session.messages);
 });

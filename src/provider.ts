@@ -324,7 +324,8 @@ export class AnthropicProvider implements Provider {
               ?.trim()
               .toLowerCase() === "application/json"
           ) {
-            const reader = response.body.getReader(),
+            const body: ReadableStream<Uint8Array> = response.body,
+              reader = body.getReader(),
               chunks: Uint8Array[] = [];
             let bytes = 0;
             try {
@@ -1019,7 +1020,8 @@ export class AnthropicProvider implements Provider {
       );
     }
     deadline.beginStream();
-    const reader = response.body.getReader();
+    const body: ReadableStream<Uint8Array> = response.body,
+      reader = body.getReader();
     // Match the SDK's replacement decoding. Keep BOMs here so its per-line
     // stripping rule also applies beyond the first line of the response.
     const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
@@ -1114,7 +1116,7 @@ export class AnthropicProvider implements Provider {
     try {
       while (!stream.stopped) {
         deadline.check();
-        let chunk: ReadableStreamReadResult<Uint8Array>;
+        let chunk: Awaited<ReturnType<typeof reader.read>>;
         try {
           chunk = await reader.read();
         } catch {
@@ -1174,13 +1176,14 @@ export class AnthropicProvider implements Provider {
       await response.body?.cancel().catch(() => undefined);
       throw new Error("Messages API fallback response is not JSON");
     }
-    const reader = response.body.getReader();
+    const body: ReadableStream<Uint8Array> = response.body,
+      reader = body.getReader();
     const chunks: Uint8Array[] = [];
     let bytes = 0;
     try {
       for (;;) {
         deadline.check();
-        let chunk: ReadableStreamReadResult<Uint8Array>;
+        let chunk: Awaited<ReturnType<typeof reader.read>>;
         try {
           chunk = await reader.read();
         } catch {

@@ -3,14 +3,14 @@ import { spawnSync } from "node:child_process";
 import { mkdtemp, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import test, { type TestContext } from "node:test";
+import { test, onTestFinished } from "bun:test";
 import { fileURLToPath } from "node:url";
 import { grepInputSchema, searchText } from "../src/grep.js";
 import { createTools } from "../src/tools.js";
 
-async function workspace(t: TestContext) {
+async function workspace() {
   const cwd = await mkdtemp(path.join(os.tmpdir(), "tau-grep-"));
-  t.after(() => rm(cwd, { recursive: true, force: true }));
+  onTestFinished(() => rm(cwd, { recursive: true, force: true }));
   const tools = createTools({ cwd, mode: "plan", approve: async () => false });
   const run = (
     input: Record<string, unknown>,
@@ -23,8 +23,8 @@ async function workspace(t: TestContext) {
   return { cwd, run };
 }
 
-test("Grep defaults to regex file results sorted by mtime, then name, before pagination", async (t) => {
-  const { cwd, run } = await workspace(t);
+test("Grep defaults to regex file results sorted by mtime, then name, before pagination", async () => {
+  const { cwd, run } = await workspace();
   for (const [name, time] of [
     ["a.ts", 1],
     ["b.ts", 2],
@@ -55,8 +55,8 @@ test("Grep defaults to regex file results sorted by mtime, then name, before pag
   );
 });
 
-test("Grep content has single-file/directory prefixes and explicit case/line-number control", async (t) => {
-  const { cwd, run } = await workspace(t);
+test("Grep content has single-file/directory prefixes and explicit case/line-number control", async () => {
+  const { cwd, run } = await workspace();
   await writeFile(path.join(cwd, "a.txt"), "Cat\ncat cat\nother\n");
   assert.equal(
     (await run({ pattern: "^cat", output_mode: "content" })).content,
@@ -103,8 +103,8 @@ test("Grep content has single-file/directory prefixes and explicit case/line-num
   );
 });
 
-test("Grep pagination defaults to 250, zero removes page limit, offset applies first", async (t) => {
-  const { cwd, run } = await workspace(t);
+test("Grep pagination defaults to 250, zero removes page limit, offset applies first", async () => {
+  const { cwd, run } = await workspace();
   await writeFile(path.join(cwd, "a"), "hit\n".repeat(260));
   const defaults = await run({
     pattern: "hit",
@@ -141,8 +141,8 @@ test("Grep pagination defaults to 250, zero removes page limit, offset applies f
   );
 });
 
-test("Grep rejects unknown options and unsupported filters instead of silently ignoring them", async (t) => {
-  const { cwd, run } = await workspace(t);
+test("Grep rejects unknown options and unsupported filters instead of silently ignoring them", async () => {
+  const { cwd, run } = await workspace();
   await writeFile(path.join(cwd, "a.ts"), "hit");
   for (const extra of [
     { multiline: true },
@@ -161,8 +161,8 @@ test("Grep rejects unknown options and unsupported filters instead of silently i
     assert.equal((await run({ pattern: "hit", ...extra })).is_error, true);
 });
 
-test("Grep distinguishes no matches, invalid regex including on empty trees, and unreadable paths", async (t) => {
-  const { cwd, run } = await workspace(t);
+test("Grep distinguishes no matches, invalid regex including on empty trees, and unreadable paths", async () => {
+  const { cwd, run } = await workspace();
   assert.equal((await run({ pattern: "none" })).content, "No files found");
   for (const pattern of ["[", "(?=x)", "(x)\\1"]) {
     const result = await run({ pattern });
@@ -177,8 +177,8 @@ test("Grep distinguishes no matches, invalid regex including on empty trees, and
   assert.equal((await run({ pattern: "--pre=not-a-command" })).content, "a");
 });
 
-test("Grep never searches its truncation marker, warns on prefixes, skips binaries and symlinks", async (t) => {
-  const { cwd, run } = await workspace(t);
+test("Grep never searches its truncation marker, warns on prefixes, skips binaries and symlinks", async () => {
+  const { cwd, run } = await workspace();
   await writeFile(path.join(cwd, "large"), "x".repeat(65536) + "secret-tail");
   await writeFile(path.join(cwd, "binary"), "binary-hit\0");
   await symlink(os.tmpdir(), path.join(cwd, "link"));
@@ -193,8 +193,8 @@ test("Grep never searches its truncation marker, warns on prefixes, skips binari
   assert.match(output.content, /\[output truncated\]$/);
 });
 
-async function backend(t: TestContext, code: string) {
-  const { cwd } = await workspace(t);
+async function backend(code: string) {
+  const { cwd } = await workspace();
   const executable = path.join(cwd, "rg.cjs");
   await writeFile(executable, `#!${process.execPath}\n${code}`, {
     mode: 0o700,
@@ -209,19 +209,14 @@ async function backend(t: TestContext, code: string) {
     });
 }
 
-test("Grep backend drains stdout, treats exit 1 as no-match, and isolates environment", async (t) => {
+test("Grep backend drains stdout, treats exit 1 as no-match, and isolates environment", async () => {
   const large = await backend(
-    t,
     'process.stdin.resume(); process.stdout.write("x".repeat(300000));',
   );
   assert.equal((await large()).output.length, 300000);
-  const absent = await backend(
-    t,
-    "process.stdin.resume(); process.exitCode = 1;",
-  );
+  const absent = await backend("process.stdin.resume(); process.exitCode = 1;");
   assert.deepEqual(await absent(), { matched: false, output: "" });
   const env = await backend(
-    t,
     'process.stdin.resume(); process.stdout.write(Object.keys(process.env).join(","));',
   );
   const keys = (await env()).output
@@ -229,15 +224,13 @@ test("Grep backend drains stdout, treats exit 1 as no-match, and isolates enviro
     .filter((key) => key !== "__CF_USER_TEXT_ENCODING");
   assert.deepEqual(keys, ["LC_ALL"]);
   const bad = await backend(
-    t,
     'process.stderr.write("invalid pattern"); process.exitCode = 2;',
   );
   await assert.rejects(bad(), /exit 2.*invalid pattern/);
 });
 
-test("Grep backend aborts, timeouts and excessive output terminate promptly", async (t) => {
+test("Grep backend aborts, timeouts and excessive output terminate promptly", async () => {
   const hanging = await backend(
-    t,
     "process.stdin.resume(); setInterval(() => {}, 1000);",
   );
   const start = Date.now();
@@ -250,15 +243,14 @@ test("Grep backend aborts, timeouts and excessive output terminate promptly", as
   cancelled.abort();
   assert.throws(() => hanging(cancelled.signal), /abort/i);
   const huge = await backend(
-    t,
     'process.stdin.resume(); process.stdout.write("x".repeat(600000));',
   );
   await assert.rejects(huge(), /output limit/);
   assert.ok(Date.now() - start < 3000);
 });
 
-test("Grep requires standalone rg and rejects relative PATH entries instead of running workspace programs", async (t) => {
-  const { cwd } = await workspace(t);
+test("Grep requires standalone rg and rejects relative PATH entries instead of running workspace programs", async () => {
+  const { cwd } = await workspace();
   const marker = path.join(cwd, "ran");
   await writeFile(
     path.join(cwd, "rg"),

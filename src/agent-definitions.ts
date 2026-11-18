@@ -130,6 +130,12 @@ const positive = (value: unknown): number | undefined => {
   let parsed: number;
   if (typeof value === "number") parsed = value;
   else {
+    if (
+      typeof value !== "string" &&
+      typeof value !== "boolean" &&
+      typeof value !== "bigint"
+    )
+      return;
     const raw = String(value).trim();
     if (raw.length <= 32 && /^[+-]?(\d+(\.\d*)?|\.\d+)[eE][+-]?\d+$/.test(raw))
       parsed = Number(raw);

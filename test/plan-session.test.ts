@@ -1,4 +1,4 @@
-import test from "node:test";
+import { test, onTestFinished } from "bun:test";
 import assert from "node:assert/strict";
 import {
   link,
@@ -17,6 +17,7 @@ import {
   PlanFileManager,
   PlanRuntime,
   type PlanApproval,
+  type PlanPermissionMode,
   type PlanPermissionState,
 } from "../src/plan-runtime.js";
 import {
@@ -29,6 +30,7 @@ import type {
   PreToolHookResult,
   ToolHookRuntime,
 } from "../src/tool-hook-runtime.js";
+import { z } from "zod";
 import { createTools } from "../src/tools.js";
 import { ReadState } from "../src/read-state.js";
 import { toolPolicySchema } from "../src/tool-policy.js";
@@ -55,14 +57,20 @@ const emptyBase: ToolExecutor = {
     };
   },
 };
-async function fixture(
-  t: any,
-  initial: PlanPermissionState = { mode: "default" },
-) {
+const planPathOf = (runtime: PlanRuntime): string => {
+  const path = runtime.planLocation();
+  assert.ok(path);
+  return path;
+};
+const toolMode = (mode: PlanPermissionMode): PermissionMode => {
+  assert.ok(mode !== "auto" && mode !== "dontAsk");
+  return mode;
+};
+async function fixture(initial: PlanPermissionState = { mode: "default" }) {
   const root = await realpath(
     await mkdtemp(join(tmpdir(), "tau-plan-session-")),
   );
-  t.after(() => rm(root, { recursive: true, force: true }));
+  onTestFinished(() => rm(root, { recursive: true, force: true }));
   const cwd = join(root, "workspace"),
     directory = join(root, "user", "plans");
   await mkdir(cwd);
@@ -90,7 +98,12 @@ async function fixture(
         try {
           return await readFile(path, "utf8");
         } catch (error) {
-          if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+          if (
+            error instanceof Error &&
+            "code" in error &&
+            error.code === "ENOENT"
+          )
+            return null;
           throw error;
         }
       },
@@ -174,8 +187,8 @@ async function fixture(
   };
 }
 
-test("plan adapter validates before hooks and ordinary entry follows full host policy", async (t) => {
-  const f = await fixture(t),
+test("plan adapter validates before hooks and ordinary entry follows full host policy", async () => {
+  const f = await fixture(),
     tools = f.wrap();
   const bad = await tools.execute(
     call("EnterPlanMode", { unsupported: true }),
@@ -194,8 +207,8 @@ test("plan adapter validates before hooks and ordinary entry follows full host p
   ]);
 });
 
-test("disabled plan tools produce permission metadata without consuming input-repair classification", async (t) => {
-  const f = await fixture(t),
+test("disabled plan tools produce permission metadata without consuming input-repair classification", async () => {
+  const f = await fixture(),
     tools = wrapPlanRuntime(emptyBase, {
       ...f.options,
       available: () => false,
@@ -206,8 +219,8 @@ test("disabled plan tools produce permission metadata without consuming input-re
   assert.deepEqual(f.events, []);
 });
 
-test("Exit pre-hook allow without replacement still asks and rejection keeps plan mode", async (t) => {
-  const f = await fixture(t, { mode: "plan" });
+test("Exit pre-hook allow without replacement still asks and rejection keeps plan mode", async () => {
+  const f = await fixture({ mode: "plan" });
   f.setPre({ ...emptyPre(), permission: "allow" });
   f.setApproval({ approved: false });
   const result = await f.wrap().execute(call("ExitPlanMode"), signal());
@@ -220,9 +233,9 @@ test("Exit pre-hook allow without replacement still asks and rejection keeps pla
   ]);
 });
 
-test("validated Exit hook allow plus replacement satisfies interaction and saves only the designated target", async (t) => {
-  const f = await fixture(t, { mode: "plan", prePlanMode: "acceptEdits" });
-  const designated = f.runtime.planLocation()!;
+test("validated Exit hook allow plus replacement satisfies interaction and saves only the designated target", async () => {
+  const f = await fixture({ mode: "plan", prePlanMode: "acceptEdits" });
+  const designated = planPathOf(f.runtime);
   await writeFile(designated, "disk plan");
   const original = call("ExitPlanMode", {
     plan: "untrusted model plan",
@@ -249,13 +262,13 @@ test("validated Exit hook allow plus replacement satisfies interaction and saves
     code: "ENOENT",
   });
   assert.equal(
-    (result.effectiveToolInput as { plan: string }).plan,
+    z.object({ plan: z.string() }).parse(result.effectiveToolInput).plan,
     "trusted hook plan",
   );
 });
 
-test("full host deny/ask and hook ask survive the validated Exit interaction exception", async (t) => {
-  const f = await fixture(t, { mode: "plan" });
+test("full host deny/ask and hook ask survive the validated Exit interaction exception", async () => {
+  const f = await fixture({ mode: "plan" });
   f.setPre({ ...emptyPre(), permission: "allow", updatedInput: {} });
   f.setPolicy({ behavior: "deny", reason: "protected policy" });
   assert.equal(
@@ -279,8 +292,8 @@ test("full host deny/ask and hook ask survive the validated Exit interaction exc
   assert.equal(f.events.includes("approve:ExitPlanMode"), true);
 });
 
-test("hook stop and malformed replacement produce no mode transition or execution failure hook", async (t) => {
-  const f = await fixture(t);
+test("hook stop and malformed replacement produce no mode transition or execution failure hook", async () => {
+  const f = await fixture();
   f.setPre({
     ...emptyPre(),
     preventContinuation: true,
@@ -302,8 +315,8 @@ test("hook stop and malformed replacement produce no mode transition or executio
   assert.deepEqual(f.events, ["pre:EnterPlanMode"]);
 });
 
-test("dynamic underlying executors preserve read context, compaction and model preparation callbacks", async (t) => {
-  const f = await fixture(t),
+test("dynamic underlying executors preserve read context, compaction and model preparation callbacks", async () => {
+  const f = await fixture(),
     observed: unknown[] = [];
   const wrapped = wrapPlanRuntime(
     () => ({
@@ -342,9 +355,9 @@ test("dynamic underlying executors preserve read context, compaction and model p
   );
 });
 
-test("plan path admission covers missing external session files without granting directory traversal", async (t) => {
-  const f = await fixture(t, { mode: "plan" }),
-    target = f.runtime.planLocation()!,
+test("plan path admission covers missing external session files without granting directory traversal", async () => {
+  const f = await fixture({ mode: "plan" }),
+    target = planPathOf(f.runtime),
     access = f.access();
   assert.equal(
     await access.extraPathAdmission({
@@ -407,9 +420,9 @@ test("plan path admission covers missing external session files without granting
   );
 });
 
-test("plan path admission retains leaf link safety and pins an admitted directory across symlink changes", async (t) => {
-  const f = await fixture(t, { mode: "plan" }),
-    path = f.runtime.planLocation()!,
+test("plan path admission retains leaf link safety and pins an admitted directory across symlink changes", async () => {
+  const f = await fixture({ mode: "plan" }),
+    path = planPathOf(f.runtime),
     access = f.access();
   await writeFile(path, "owned plan");
   const alias = join(f.directory, "owned-session-plan-agent-alias.md");
@@ -456,9 +469,9 @@ test("plan path admission retains leaf link safety and pins an admitted director
   );
 });
 
-test("plan directory vetting can refuse admission and cancellation cannot become a path grant", async (t) => {
-  const f = await fixture(t, { mode: "plan" }),
-    path = f.runtime.planLocation()!;
+test("plan directory vetting can refuse admission and cancellation cannot become a path grant", async () => {
+  const f = await fixture({ mode: "plan" }),
+    path = planPathOf(f.runtime);
   const refused = createPlanFileAccess({
     cwd: f.cwd,
     files: f.files,
@@ -492,15 +505,15 @@ test("plan directory vetting can refuse admission and cancellation cannot become
   );
 });
 
-test("coherent Enter, external plan Write/Read/Edit and Exit uses real builtin validation and approval", async (t) => {
-  const f = await fixture(t),
+test("coherent Enter, external plan Write/Read/Edit and Exit uses real builtin validation and approval", async () => {
+  const f = await fixture(),
     access = f.access(),
     readState = new ReadState(),
     fileApprovals: string[] = [];
   const base = () => {
     const configuration: Parameters<typeof createTools>[0] & typeof access = {
       cwd: f.cwd,
-      mode: f.state.mode as PermissionMode,
+      mode: toolMode(f.state.mode),
       readState,
       policy: toolPolicySchema.parse({}),
       ...access,
@@ -516,7 +529,7 @@ test("coherent Enter, external plan Write/Read/Edit and Exit uses real builtin v
     (await tools.execute(call("EnterPlanMode"), signal())).is_error,
     undefined,
   );
-  const path = f.runtime.planLocation()!;
+  const path = planPathOf(f.runtime);
   assert.equal(
     (
       await tools.execute(
@@ -555,9 +568,9 @@ test("coherent Enter, external plan Write/Read/Edit and Exit uses real builtin v
   assert.equal(await readFile(path, "utf8"), "final owned plan\n");
 });
 
-test("coherent builtin plan exception retains explicit asks and rejects unrelated external writes", async (t) => {
-  const f = await fixture(t, { mode: "plan" }),
-    path = f.runtime.planLocation()!,
+test("coherent builtin plan exception retains explicit asks and rejects unrelated external writes", async () => {
+  const f = await fixture({ mode: "plan" }),
+    path = planPathOf(f.runtime),
     access = f.access(),
     asks: string[] = [];
   const configuration: Parameters<typeof createTools>[0] & typeof access = {
@@ -594,8 +607,8 @@ test("coherent builtin plan exception retains explicit asks and rejects unrelate
   });
 });
 
-test("coherent sensitive plan exception follows Read validation and preserves ask/deny under bypass", async (t) => {
-  const f = await fixture(t),
+test("coherent sensitive plan exception follows Read validation and preserves ask/deny under bypass", async () => {
+  const f = await fixture(),
     directory = join(f.cwd, ".claude", "skills", "plans");
   await mkdir(directory, { recursive: true });
   const files = new PlanFileManager({
@@ -727,8 +740,8 @@ test("coherent sensitive plan exception follows Read validation and preserves as
   assert.deepEqual(f.events, []);
 });
 
-test("actual plan submission failures invoke failure hooks after validation and retain plan mode", async (t) => {
-  const f = await fixture(t, { mode: "plan" });
+test("actual plan submission failures invoke failure hooks after validation and retain plan mode", async () => {
+  const f = await fixture({ mode: "plan" });
   const runtime = new PlanRuntime({
     files: f.files,
     sessionId: () => "owned-session",

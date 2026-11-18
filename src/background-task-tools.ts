@@ -13,12 +13,7 @@ import {
   type ToolPolicy,
 } from "./tool-policy.js";
 import { unparsedToolInput } from "./tool-input.js";
-import type {
-  ToolDefinition,
-  ToolExecutor,
-  ToolResult,
-  ToolUse,
-} from "./types.js";
+import type { ToolDefinition, ToolExecutor, ToolUse } from "./types.js";
 
 export const taskStopToolNames = ["TaskStop", "KillShell", "KillBash"] as const;
 export const taskStopInputSchema = z
@@ -121,9 +116,10 @@ function matchesRule(
     if (colon <= 0 || !key || !pattern || !Object.hasOwn(input, key)) continue;
     const value: unknown = Reflect.get(input, key);
     if (
-      value === null ||
-      value === undefined ||
-      ["object", "function", "symbol"].includes(typeof value)
+      typeof value !== "string" &&
+      typeof value !== "number" &&
+      typeof value !== "boolean" &&
+      typeof value !== "bigint"
     )
       continue;
     if (matchesPermissionArgument(pattern, String(value).trim())) return true;

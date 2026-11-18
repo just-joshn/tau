@@ -3,7 +3,7 @@ import stringWidth from "string-width";
 
 export function terminalText(text: string): string {
   return stripVTControlCharacters(text).replace(
-    /[\x00-\x08\x0b-\x1f\x7f]/g,
+    /[\p{Cc}--[\t\n\u0080-\u009f]]/gv,
     "",
   );
 }

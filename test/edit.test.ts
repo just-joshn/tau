@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "bun:test";
 import { applyEdit } from "../src/edit.js";
 
 const edit = (old_string: string, new_string: string, replace_all = false) => ({

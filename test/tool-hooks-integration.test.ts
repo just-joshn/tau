@@ -1,15 +1,9 @@
 import assert from "node:assert/strict";
-import {
-  mkdir,
-  mkdtemp,
-  readFile,
-  realpath,
-  rm,
-  writeFile,
-} from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { onTestFinished, test } from "bun:test";
+import { z } from "zod";
 import { createTools } from "../src/tools.js";
 import { ReadState } from "../src/read-state.js";
 import { createHookRegistry } from "../src/hooks.js";
@@ -43,16 +37,43 @@ const defaultPre = (): PreToolHookResult => ({
   additionalContext: [],
   preventContinuation: false,
 });
-async function directory(t: any) {
+function nth<T>(items: readonly T[], index: number): T {
+  const item = items[index];
+  assert.ok(item);
+  return item;
+}
+const filePathOf = (input: unknown) =>
+  z.object({ file_path: z.string() }).parse(input).file_path;
+const inputRecord = (item: { input: unknown }) =>
+  z.record(z.string(), z.unknown()).parse(item.input);
+const writeRow = z.object({
+  tool_input: z
+    .object({
+      file_path: z.string().optional(),
+      content: z.string().optional(),
+    })
+    .optional(),
+  tool_response: z.object({ content: z.string().optional() }).optional(),
+});
+const failureRow = z.object({
+  tool_name: z.unknown().optional(),
+  error: z.unknown().optional(),
+  is_interrupt: z.unknown().optional(),
+});
+const stopRow = z.object({
+  stop_hook_active: z.unknown().optional(),
+  last_assistant_message: z.unknown().optional(),
+});
+async function directory() {
   const cwd = await realpath(
     await mkdtemp(join(tmpdir(), "tau-tool-hook-integration-")),
   );
-  t.after(() => rm(cwd, { recursive: true, force: true }));
+  onTestFinished(() => rm(cwd, { recursive: true, force: true }));
   return cwd;
 }
 
-test("builtin validation precedes hooks, while missing ordinary Read reaches pre hook then call failure", async (t) => {
-  const cwd = await directory(t),
+test("builtin validation precedes hooks, while missing ordinary Read reaches pre hook then call failure", async () => {
+  const cwd = await directory(),
     events: string[] = [],
     state = new ReadState();
   await writeFile(join(cwd, "a.txt"), "alpha\n");
@@ -113,9 +134,9 @@ test("builtin validation precedes hooks, while missing ordinary Read reaches pre
   assert.equal(await readFile(join(cwd, "a.txt"), "utf8"), "alpha\n");
 });
 
-test("normalized pre input, full rewritten validation and effective metadata preserve original model input", async (t) => {
-  const cwd = await directory(t),
-    seen: any[] = [];
+test("normalized pre input, full rewritten validation and effective metadata preserve original model input", async () => {
+  const cwd = await directory(),
+    seen: unknown[] = [];
   const hooks: ToolHookRuntime = {
     async before(tool, _signal, validate) {
       seen.push(tool.input);
@@ -149,8 +170,8 @@ test("normalized pre input, full rewritten validation and effective metadata pre
     file_path: "new.txt",
     content: "model input\n",
   });
-  assert.equal(seen[0].file_path, join(cwd, "new.txt"));
-  assert.equal(seen[1].file_path, join(cwd, "rewritten.txt"));
+  assert.equal(filePathOf(nth(seen, 0)), join(cwd, "new.txt"));
+  assert.equal(filePathOf(nth(seen, 1)), join(cwd, "rewritten.txt"));
   assert.deepEqual(result.effectiveToolInput, seen[1]);
   assert.deepEqual(seen[2], {
     type: "create",
@@ -174,9 +195,9 @@ test("normalized pre input, full rewritten validation and effective metadata pre
   assert.deepEqual(wire[0]?.content[0], modelCall);
 });
 
-test("hook inputs omit unspecified Read offsets and Bash timeouts but retain explicit values", async (t) => {
-  const cwd = await directory(t),
-    seen: Array<{ name: string; input: any }> = [];
+test("hook inputs omit unspecified Read offsets and Bash timeouts but retain explicit values", async () => {
+  const cwd = await directory(),
+    seen: Array<{ name: string; input: unknown }> = [];
   await writeFile(join(cwd, "a.txt"), "alpha\n");
   const hooks: ToolHookRuntime = {
     async before(tool) {
@@ -209,14 +230,14 @@ test("hook inputs omit unspecified Read offsets and Bash timeouts but retain exp
       (await tools.execute(call("Bash", input), signal())).is_error,
       undefined,
     );
-  assert.equal(Object.hasOwn(seen[0]!.input, "offset"), false);
-  assert.equal(seen[1]!.input.offset, 1);
-  assert.equal(Object.hasOwn(seen[2]!.input, "timeout"), false);
-  assert.equal(seen[3]!.input.timeout, 1000);
+  assert.equal(Object.hasOwn(inputRecord(nth(seen, 0)), "offset"), false);
+  assert.equal(inputRecord(nth(seen, 1)).offset, 1);
+  assert.equal(Object.hasOwn(inputRecord(nth(seen, 2)), "timeout"), false);
+  assert.equal(inputRecord(nth(seen, 3)).timeout, 1000);
 });
 
-test("invalid complete hook replacement cannot inherit allow or create files", async (t) => {
-  const cwd = await directory(t);
+test("invalid complete hook replacement cannot inherit allow or create files", async () => {
+  const cwd = await directory();
   const hooks: ToolHookRuntime = {
     async before() {
       return {
@@ -248,8 +269,8 @@ test("invalid complete hook replacement cannot inherit allow or create files", a
   await assert.rejects(readFile(join(cwd, "bad")), { code: "ENOENT" });
 });
 
-test("hook allow cannot waive explicit ask, sensitive writes, plan mode or deny; hook ask survives bypass", async (t) => {
-  const cwd = await directory(t);
+test("hook allow cannot waive explicit ask, sensitive writes, plan mode or deny; hook ask survives bypass", async () => {
+  const cwd = await directory();
   let permission: PreToolHookResult["permission"] = "allow",
     approvals = 0,
     posts = 0;
@@ -312,9 +333,9 @@ test("hook allow cannot waive explicit ask, sensitive writes, plan mode or deny;
   assert.equal(approvals, 3);
 });
 
-test("Read/Edit post payloads use execution data and Bash nonzero is failure, not a success post hook", async (t) => {
-  const cwd = await directory(t),
-    records: any[] = [];
+test("Read/Edit post payloads use execution data and Bash nonzero is failure, not a success post hook", async () => {
+  const cwd = await directory(),
+    records: Array<{ event: string; name: string; response?: unknown }> = [];
   await writeFile(join(cwd, "a.txt"), "alpha\n");
   const hooks: ToolHookRuntime = {
     async before() {
@@ -352,7 +373,7 @@ test("Read/Edit post payloads use execution data and Bash nonzero is failure, no
     signal(),
   );
   assert.equal(failed.is_error, true);
-  assert.deepEqual(records[0].response, {
+  assert.deepEqual(nth(records, 0).response, {
     type: "text",
     file: {
       filePath: "a.txt",
@@ -362,7 +383,7 @@ test("Read/Edit post payloads use execution data and Bash nonzero is failure, no
       totalLines: 2,
     },
   });
-  assert.deepEqual(records[1].response, {
+  assert.deepEqual(nth(records, 1).response, {
     filePath: "a.txt",
     oldString: "alpha",
     newString: "beta",
@@ -396,8 +417,8 @@ test("Read/Edit post payloads use execution data and Bash nonzero is failure, no
   });
 });
 
-test("actual registry commands rewrite after validation, preserve raw response, and reject unvalidated output replacement", async (t) => {
-  const cwd = await directory(t),
+test("actual registry commands rewrite after validation, preserve raw response, and reject unvalidated output replacement", async () => {
+  const cwd = await directory(),
     log = join(cwd, "hooks.jsonl"),
     script = join(cwd, "hook.cjs");
   await writeFile(
@@ -427,7 +448,7 @@ test("actual registry commands rewrite after validation, preserve raw response, 
       },
     },
   ]);
-  t.after(() => registry.close());
+  onTestFinished(() => registry.close());
   const diagnostics: string[] = [];
   const hooks = createToolHookRuntime({
     registry,
@@ -463,16 +484,16 @@ test("actual registry commands rewrite after validation, preserve raw response, 
   const rows = (await readFile(log, "utf8"))
     .trim()
     .split("\n")
-    .map((row) => JSON.parse(row));
-  assert.equal(rows[0].tool_input.file_path, join(cwd, "new"));
-  assert.equal(rows[1].tool_input.content, "hook content\n");
-  assert.equal(rows[1].tool_response.content, "hook content\n");
+    .map((row) => writeRow.parse(JSON.parse(row)));
+  assert.equal(nth(rows, 0).tool_input?.file_path, join(cwd, "new"));
+  assert.equal(nth(rows, 1).tool_input?.content, "hook content\n");
+  assert.equal(nth(rows, 1).tool_response?.content, "hook content\n");
   assert.equal(diagnostics.length, 1);
-  assert.match(diagnostics[0]!, /no output-schema validator/);
+  assert.match(nth(diagnostics, 0), /no output-schema validator/);
 });
 
-test("external hook rewrites revalidate and respect interaction/ask floors; MCP isError skips success post", async (t) => {
-  const cwd = await directory(t),
+test("external hook rewrites revalidate and respect interaction/ask floors; MCP isError skips success post", async () => {
+  const cwd = await directory(),
     name = "mcp__owned__lookup";
   let calls = 0,
     posts = 0,
@@ -664,7 +685,9 @@ test("a tool hook stop preserves paired results and skips all remaining side eff
   };
   await runAgent(f.options);
   assert.equal(count, 1);
-  const results = f.messages.at(-1)!.content;
+  const last = f.messages.at(-1);
+  assert.ok(last);
+  const results = last.content;
   assert.deepEqual(
     results.map(
       (result) => result.type === "tool_result" && result.tool_use_id,
@@ -694,7 +717,8 @@ test("agent commits hook attachments after tool results without contaminating ra
           stop_reason: "tool_use",
           usage: { input_tokens: 1, output_tokens: 1 },
         };
-      const row = projectMessages(f.messages).at(-1)!;
+      const row = projectMessages(f.messages).at(-1);
+      assert.ok(row);
       assert.deepEqual(row.content, [
         {
           type: "tool_result",
@@ -722,8 +746,8 @@ test("agent commits hook attachments after tool results without contaminating ra
   assert.equal(requests, 2);
 });
 
-test("failure-only command hooks attach feedback after failed execution without stopping or replacing it", async (t) => {
-  const cwd = await directory(t),
+test("failure-only command hooks attach feedback after failed execution without stopping or replacing it", async () => {
+  const cwd = await directory(),
     script = join(cwd, "failure.cjs"),
     log = join(cwd, "failure.jsonl");
   await writeFile(
@@ -744,7 +768,7 @@ test("failure-only command hooks attach feedback after failed execution without 
       },
     },
   ]);
-  t.after(() => registry.close());
+  onTestFinished(() => registry.close());
   const hooks = createToolHookRuntime({
     registry,
     context: () => ({
@@ -783,7 +807,7 @@ test("failure-only command hooks attach feedback after failed execution without 
   const rows = (await readFile(log, "utf8"))
     .trim()
     .split("\n")
-    .map((row) => JSON.parse(row));
+    .map((row) => failureRow.parse(JSON.parse(row)));
   assert.deepEqual(
     rows.map((row) => row.tool_name),
     ["Bash", "Read"],
@@ -793,11 +817,13 @@ test("failure-only command hooks attach feedback after failed execution without 
       (row) => typeof row.error === "string" && row.is_interrupt === false,
     ),
   );
-  assert.match(rows[0].error, /owned-failure/);
+  const error = nth(rows, 0).error;
+  assert.ok(typeof error === "string");
+  assert.match(error, /owned-failure/);
 });
 
-test("registry Stop receives current assistant text and active state while continuation stays in one agent run", async (t) => {
-  const cwd = await directory(t),
+test("registry Stop receives current assistant text and active state while continuation stays in one agent run", async () => {
+  const cwd = await directory(),
     log = join(cwd, "stop.jsonl"),
     script = join(cwd, "stop.cjs");
   await writeFile(
@@ -818,7 +844,7 @@ test("registry Stop receives current assistant text and active state while conti
       },
     },
   ]);
-  t.after(() => registry.close());
+  onTestFinished(() => registry.close());
   const hooks = createToolHookRuntime({
     registry,
     context: () => ({
@@ -829,13 +855,15 @@ test("registry Stop receives current assistant text and active state while conti
     runOptions: () => ({ cwd, projectDir: cwd, env: { LOG: log } }),
   });
   const f = agentFixture();
-  f.options.stopHook = hooks.stop!;
+  const stop = hooks.stop?.bind(hooks);
+  assert.ok(stop);
+  f.options.stopHook = stop;
   const result = await runAgent(f.options);
   assert.equal(result.turns, 2);
   const rows = (await readFile(log, "utf8"))
     .trim()
     .split("\n")
-    .map((row) => JSON.parse(row));
+    .map((row) => stopRow.parse(JSON.parse(row)));
   assert.deepEqual(
     rows.map((row) => [row.stop_hook_active, row.last_assistant_message]),
     [
@@ -846,8 +874,8 @@ test("registry Stop receives current assistant text and active state while conti
   assert.equal(f.requests[0]?.attemptBudget, f.requests[1]?.attemptBudget);
 });
 
-test("MCP post replacement validates raw output and retains pre/post context in model-visible rich projection", async (t) => {
-  const cwd = await directory(t),
+test("MCP post replacement validates raw output and retains pre/post context in model-visible rich projection", async () => {
+  const cwd = await directory(),
     script = join(cwd, "mcp-hook.cjs");
   let invalid = false;
   await writeFile(
@@ -868,7 +896,7 @@ test("MCP post replacement validates raw output and retains pre/post context in 
       },
     },
   ]);
-  t.after(() => registry.close());
+  onTestFinished(() => registry.close());
   const diagnostics: string[] = [];
   const hooks = createToolHookRuntime({
     registry,
@@ -954,5 +982,5 @@ test("MCP post replacement validates raw output and retains pre/post context in 
     ["pre context", "post context"],
   );
   assert.equal(diagnostics.length, 1);
-  assert.match(diagnostics[0]!, /invalid hook output rewrite/);
+  assert.match(nth(diagnostics, 0), /invalid hook output rewrite/);
 });

@@ -53,6 +53,8 @@ export class NativeHistoryProjectionError extends Error {
     this.name = "NativeHistoryProjectionError";
   }
 }
+const display = (value: unknown): string =>
+  typeof value === "string" ? value : (JSON.stringify(value) ?? "undefined");
 function fail(code: string, node?: NativeTranscriptNode): never {
   throw new NativeHistoryProjectionError(code, node?.uuid);
 }
@@ -467,8 +469,8 @@ export function reconstructNativeHistory(
         !seen.has(item.uuid),
     );
   const byTime = (a: NativeTranscriptNode, b: NativeTranscriptNode): number => {
-    const left = String(a.row.timestamp),
-      right = String(b.row.timestamp);
+    const left = display(a.row.timestamp),
+      right = display(b.row.timestamp);
     return left < right ? -1 : left > right ? 1 : 0;
   };
   const pending = [leaf],
@@ -633,15 +635,16 @@ export function projectNativeHistory(
     const row = line.value;
     if (
       isNativeObject(row) &&
+      typeof row.type === "string" &&
       [
         "last-prompt",
         "content-replacement",
         "fork-context-ref",
         "observer-ref",
-      ].includes(String(row.type)) &&
+      ].includes(row.type) &&
       (row.sessionId === undefined || row.sessionId === options.scope.sessionId)
     )
-      throw new NativeHistoryProjectionError(`unsupported-${String(row.type)}`);
+      throw new NativeHistoryProjectionError(`unsupported-${row.type}`);
   }
   const recovered = reconstructNativeHistory(
     indexNativeSession(document),

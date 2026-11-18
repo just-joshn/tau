@@ -11,21 +11,20 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import test, { type TestContext } from "node:test";
+import { test, onTestFinished } from "bun:test";
 import { createTools } from "../src/tools.js";
 import { ReadState } from "../src/read-state.js";
 import { writeAtomic } from "../src/write.js";
 import type { PermissionMode } from "../src/types.js";
 
 async function fixture(
-  t: TestContext,
   mode: PermissionMode = "bypassPermissions",
   approve: () => Promise<boolean> = async () => true,
 ) {
   const cwd = await realpath(
     await mkdtemp(path.join(tmpdir(), "tau-read-state-")),
   );
-  t.after(() => rm(cwd, { recursive: true, force: true }));
+  onTestFinished(() => rm(cwd, { recursive: true, force: true }));
   const file = path.join(cwd, "a");
   await writeFile(file, "one\ntwo\n");
   const tools = createTools({ cwd, mode, approve });
@@ -41,13 +40,13 @@ async function fixture(
   return { cwd, file, tools, run, read, edit, write };
 }
 
-test("existing files require a complete Read in every write-capable permission mode", async (t) => {
+test("existing files require a complete Read in every write-capable permission mode", async () => {
   for (const mode of [
     "default",
     "acceptEdits",
     "bypassPermissions",
   ] satisfies PermissionMode[]) {
-    const f = await fixture(t, mode);
+    const f = await fixture(mode);
     for (const result of [await f.edit(), await f.write()]) {
       assert.equal(result.is_error, true);
       assert.match(result.content, /Read.*before/i);
@@ -57,8 +56,8 @@ test("existing files require a complete Read in every write-capable permission m
   }
 });
 
-test("complete Reads allow edits, writes, and consecutive changes made by tau", async (t) => {
-  const f = await fixture(t);
+test("complete Reads allow edits, writes, and consecutive changes made by tau", async () => {
+  const f = await fixture();
   assert.equal((await f.read()).is_error, undefined);
   assert.equal((await f.edit()).content, "File edited");
   assert.equal((await f.write()).content, "File written");
@@ -90,8 +89,8 @@ test("complete Reads allow edits, writes, and consecutive changes made by tau", 
   );
 });
 
-test("partial and concatenated paginated Reads never authorize overwrites", async (t) => {
-  const f = await fixture(t);
+test("partial and concatenated paginated Reads never authorize overwrites", async () => {
+  const f = await fixture();
   for (const input of [
     { limit: 1 },
     { offset: 2 },
@@ -106,8 +105,8 @@ test("partial and concatenated paginated Reads never authorize overwrites", asyn
   assert.equal((await f.edit()).content, "File edited");
 });
 
-test("offset zero and empty complete Reads authorize a write", async (t) => {
-  const f = await fixture(t);
+test("offset zero and empty complete Reads authorize a write", async () => {
+  const f = await fixture();
   await f.read({ offset: 0 });
   assert.equal((await f.edit()).content, "File edited");
   await writeFile(f.file, "");
@@ -115,8 +114,8 @@ test("offset zero and empty complete Reads authorize a write", async (t) => {
   assert.equal((await f.write()).content, "File written");
 });
 
-test("token-truncated Read does not authorize writes, while complete numbered output can exceed 64KiB", async (t) => {
-  const f = await fixture(t);
+test("token-truncated Read does not authorize writes, while complete numbered output can exceed 64KiB", async () => {
+  const f = await fixture();
   await writeFile(f.file, "x".repeat(100004));
   assert.match((await f.read()).content, /truncated by token limit/);
   assert.equal((await f.write()).is_error, true);
@@ -127,8 +126,8 @@ test("token-truncated Read does not authorize writes, while complete numbered ou
   assert.equal((await f.write()).content, "File written");
 });
 
-test("a partial Read supersedes a previously complete Read", async (t) => {
-  const f = await fixture(t);
+test("a partial Read supersedes a previously complete Read", async () => {
+  const f = await fixture();
   await f.read();
   await f.read({ limit: 1 });
   assert.equal((await f.write()).is_error, true);
@@ -136,8 +135,8 @@ test("a partial Read supersedes a previously complete Read", async (t) => {
   assert.equal((await f.write()).content, "File written");
 });
 
-test("external changes are rejected even if the replacement still applies", async (t) => {
-  const f = await fixture(t);
+test("external changes are rejected even if the replacement still applies", async () => {
+  const f = await fixture();
   await f.read();
   await writeFile(f.file, "one\nexternal\n");
   assert.match((await f.edit()).content, /changed.*Read|Read.*again/i);
@@ -147,8 +146,8 @@ test("external changes are rejected even if the replacement still applies", asyn
   assert.equal((await f.edit()).content, "File edited");
 });
 
-test("content comparison catches changes with restored or older mtime", async (t) => {
-  const f = await fixture(t);
+test("content comparison catches changes with restored or older mtime", async () => {
+  const f = await fixture();
   await f.read();
   const info = await stat(f.file);
   await writeFile(f.file, "one\nexternal\n");
@@ -157,8 +156,8 @@ test("content comparison catches changes with restored or older mtime", async (t
   assert.equal((await f.write()).is_error, true);
 });
 
-test("mtime-only changes and normalized BOM/CRLF equality allow changes", async (t) => {
-  const f = await fixture(t);
+test("mtime-only changes and normalized BOM/CRLF equality allow changes", async () => {
+  const f = await fixture();
   await f.read();
   await utimes(f.file, new Date(), new Date(Date.now() + 60000));
   assert.equal((await f.edit()).content, "File edited");
@@ -167,9 +166,9 @@ test("mtime-only changes and normalized BOM/CRLF equality allow changes", async 
   assert.equal((await f.write()).content, "File written");
 });
 
-test("approval-time modification or creation is checked after the prompt", async (t) => {
+test("approval-time modification or creation is checked after the prompt", async () => {
   let mutate = async () => {};
-  const f = await fixture(t, "default", async () => {
+  const f = await fixture("default", async () => {
     await mutate();
     return true;
   });
@@ -190,8 +189,8 @@ test("approval-time modification or creation is checked after the prompt", async
   assert.equal(await readFile(path.join(f.cwd, "new"), "utf8"), "external");
 });
 
-test("failed, binary, and invalid-UTF8 Reads cannot authorize writes", async (t) => {
-  const f = await fixture(t);
+test("failed, binary, and invalid-UTF8 Reads cannot authorize writes", async () => {
+  const f = await fixture();
   for (const data of [
     Buffer.from([0]),
     Buffer.from([255]),
@@ -204,8 +203,8 @@ test("failed, binary, and invalid-UTF8 Reads cannot authorize writes", async (t)
   }
 });
 
-test("path spellings share a canonical baseline but distinct files do not", async (t) => {
-  const f = await fixture(t);
+test("path spellings share a canonical baseline but distinct files do not", async () => {
+  const f = await fixture();
   await f.run("Read", { file_path: f.file });
   assert.equal(
     (
@@ -224,8 +223,8 @@ test("path spellings share a canonical baseline but distinct files do not", asyn
   );
 });
 
-test("invalid UTF8 cannot match a cached real replacement character", async (t) => {
-  const f = await fixture(t);
+test("invalid UTF8 cannot match a cached real replacement character", async () => {
+  const f = await fixture();
   await writeFile(f.file, "\uFFFD");
   await f.read();
   await writeFile(f.file, Buffer.from([255]));
@@ -233,8 +232,8 @@ test("invalid UTF8 cannot match a cached real replacement character", async (t) 
   assert.deepEqual(await readFile(f.file), Buffer.from([255]));
 });
 
-test("shared read state survives new tool executors and fresh state requires rereading", async (t) => {
-  const f = await fixture(t);
+test("shared read state survives new tool executors and fresh state requires rereading", async () => {
+  const f = await fixture();
   const readState = new ReadState();
   const executor = (state = readState) =>
     createTools({
@@ -274,8 +273,8 @@ test("shared read state survives new tool executors and fresh state requires rer
   );
 });
 
-test("the atomic writer discards its temp file when the final recheck rejects", async (t) => {
-  const f = await fixture(t);
+test("the atomic writer discards its temp file when the final recheck rejects", async () => {
+  const f = await fixture();
   await assert.rejects(
     writeAtomic(f.file, "proposal", async () => {
       await writeFile(f.file, "external");

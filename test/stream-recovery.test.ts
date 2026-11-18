@@ -1,7 +1,8 @@
+import { z } from "zod";
 import { fixtureSse } from "./sse-fixture.js";
 import assert from "node:assert/strict";
 import { createServer, type ServerResponse } from "node:http";
-import { test, type TestContext } from "node:test";
+import { test, onTestFinished } from "bun:test";
 import { AnthropicProvider } from "../src/provider.js";
 import { ApiAttemptBudget } from "../src/attempt-ledger.js";
 import { runAgent } from "../src/agent.js";
@@ -10,6 +11,26 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CompletionRequest, Message } from "../src/types.js";
+
+const requestBlock = z.looseObject({
+  type: z.string().optional(),
+  signature: z.string().optional(),
+  tool_use_id: z.string().optional(),
+  is_error: z.boolean().optional(),
+  content: z.unknown().optional(),
+  input: z.unknown().optional(),
+});
+const requestMessage = z.looseObject({
+  role: z.string(),
+  partial: z.unknown().optional(),
+  content: z.array(requestBlock),
+});
+const requestBody = z.looseObject({
+  stream: z.boolean().optional(),
+  model: z.string(),
+  messages: z.array(requestMessage),
+});
+type RequestBody = z.infer<typeof requestBody>;
 
 const begin = {
   type: "message_start",
@@ -50,8 +71,12 @@ function send(res: ServerResponse, events: unknown[], broken = false): void {
     setTimeout(() => res.destroy(), 10);
   } else res.end(bytes);
 }
+const testSignal = () => {
+  const controller = new AbortController();
+  onTestFinished(() => controller.abort());
+  return controller.signal;
+};
 const request = (
-  t: TestContext,
   extra: Partial<CompletionRequest> = {},
 ): CompletionRequest => ({
   model: "primary",
@@ -59,22 +84,21 @@ const request = (
   messages: [{ role: "user", content: [{ type: "text", text: "hello" }] }],
   tools: [],
   maxTokens: 100,
-  signal: t.signal,
+  signal: testSignal(),
   onText: () => {},
   ...extra,
 });
 async function fixture(
-  t: TestContext,
-  handler: (res: ServerResponse, body: any, calls: number) => void,
+  handler: (res: ServerResponse, body: RequestBody, calls: number) => void,
   options: Partial<ConstructorParameters<typeof AnthropicProvider>[0]> = {},
 ) {
   let calls = 0;
-  const bodies: any[] = [];
+  const bodies: RequestBody[] = [];
   const http = createServer(async (req, res) => {
     try {
       let data = "";
       for await (const chunk of req) data += chunk;
-      const body = JSON.parse(data);
+      const body = requestBody.parse(JSON.parse(data));
       bodies.push(body);
       handler(res, body, ++calls);
     } catch {
@@ -82,7 +106,7 @@ async function fixture(
     }
   });
   await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve));
-  t.after(async () => {
+  onTestFinished(async () => {
     http.closeAllConnections();
     await new Promise<void>((resolve) => http.close(() => resolve()));
   });
@@ -100,8 +124,8 @@ async function fixture(
   };
 }
 
-test("thinking, signature replacement and redacted blocks assemble without visible reasoning output", async (t) => {
-  const f = await fixture(t, (res) =>
+test("thinking, signature replacement and redacted blocks assemble without visible reasoning output", async () => {
+  const f = await fixture((res) =>
     send(res, [
       begin,
       open(0, {
@@ -126,7 +150,7 @@ test("thinking, signature replacement and redacted blocks assemble without visib
   );
   let shown = "";
   const result = await f.provider.complete(
-    request(t, {
+    request({
       onText: (value) => {
         shown += value;
       },
@@ -142,9 +166,8 @@ test("thinking, signature replacement and redacted blocks assemble without visib
 
 test(
   "partial output connection retry explicitly resets provisional text and reuses the fixed request",
-  { timeout: 5000 },
-  async (t) => {
-    const f = await fixture(t, (res, _body, calls) =>
+  async () => {
+    const f = await fixture((res, _body, calls) =>
       calls === 1
         ? send(
             res,
@@ -160,7 +183,7 @@ test(
     let shown = "";
     const resets: string[] = [];
     const result = await f.provider.complete(
-      request(t, {
+      request({
         onText: (value) => {
           shown += value;
         },
@@ -176,12 +199,12 @@ test(
     assert.deepEqual(f.bodies[0], f.bodies[1]);
     assert.deepEqual(result.content, [{ type: "text", text: "replacement" }]);
   },
+  { timeout: 5000 },
 );
 
-test("partial malformed stream switches to JSON after reset with shared dispatch admission", async (t) => {
+test("partial malformed stream switches to JSON after reset with shared dispatch admission", async () => {
   const budget = new ApiAttemptBudget(2);
   const f = await fixture(
-    t,
     (res, body) =>
       body.stream
         ? send(res, [
@@ -204,7 +227,7 @@ test("partial malformed stream switches to JSON after reset with shared dispatch
   let shown = "";
   const resets: string[] = [];
   const result = await f.provider.complete(
-    request(t, {
+    request({
       attemptBudget: budget,
       onText: (value) => {
         shown += value;
@@ -225,8 +248,8 @@ test("partial malformed stream switches to JSON after reset with shared dispatch
   assert.equal(result.partial, undefined);
 });
 
-test("completed blocks survive truncation while an unfinished tool cannot enter history", async (t) => {
-  const f = await fixture(t, (res) =>
+test("completed blocks survive truncation while an unfinished tool cannot enter history", async () => {
+  const f = await fixture((res) =>
     send(res, [
       begin,
       ...text("Retained"),
@@ -234,26 +257,26 @@ test("completed blocks survive truncation while an unfinished tool cannot enter 
       delta(1, { type: "input_json_delta", partial_json: '{"path":' }),
     ]),
   );
-  const result = await f.provider.complete(request(t));
+  const result = await f.provider.complete(request());
   assert.deepEqual(result.content, [{ type: "text", text: "Retained" }]);
   assert.equal(result.stop_reason, "end_turn");
   assert.deepEqual(result.partial, { cause: "truncated" });
   assert.equal(f.calls(), 1);
 });
 
-test("coherent stop envelope completes after EOF without a final message_stop", async (t) => {
-  const f = await fixture(t, (res) =>
+test("coherent stop envelope completes after EOF without a final message_stop", async () => {
+  const f = await fixture((res) =>
     send(res, [begin, ...text("Complete"), end()]),
   );
-  const result = await f.provider.complete(request(t));
+  const result = await f.provider.complete(request());
   assert.equal(result.partial, undefined);
   assert.equal(result.stop_reason, "end_turn");
   assert.deepEqual(result.usage, { input_tokens: 5, output_tokens: 3 });
   assert.equal(f.calls(), 1);
 });
 
-test("usage-only message deltas update counts without fabricating a stop envelope", async (t) => {
-  const f = await fixture(t, (res) =>
+test("usage-only message deltas update counts without fabricating a stop envelope", async () => {
+  const f = await fixture((res) =>
     send(res, [
       begin,
       ...text("Answer"),
@@ -267,7 +290,7 @@ test("usage-only message deltas update counts without fabricating a stop envelop
       stop,
     ]),
   );
-  const result = await f.provider.complete(request(t));
+  const result = await f.provider.complete(request());
   assert.deepEqual(result.usage, { input_tokens: 8, output_tokens: 3 });
   assert.equal(result.stop_reason, "end_turn");
   assert.equal(result.partial, undefined);
@@ -275,9 +298,8 @@ test("usage-only message deltas update counts without fabricating a stop envelop
 
 test(
   "thinking-only retry discards the old attempt and preserves the replacement signature",
-  { timeout: 5000 },
-  async (t) => {
-    const f = await fixture(t, (res, _body, calls) =>
+  async () => {
+    const f = await fixture((res, _body, calls) =>
       send(
         res,
         calls === 1
@@ -301,7 +323,7 @@ test(
             ],
       ),
     );
-    const result = await f.provider.complete(request(t));
+    const result = await f.provider.complete(request());
     assert.equal(f.calls(), 2);
     assert.deepEqual(result.content[0], {
       type: "thinking",
@@ -310,14 +332,13 @@ test(
     });
     assert.equal(result.partial, undefined);
   },
+  { timeout: 5000 },
 );
 
 test(
   "body retry and subsequent HTTP failure share the ordinary retry count",
-  { timeout: 5000 },
-  async (t) => {
+  async () => {
     const f = await fixture(
-      t,
       (res, _body, calls) => {
         if (calls === 1)
           send(res, [begin, open(0, { type: "text", text: "discard" })], true);
@@ -331,21 +352,20 @@ test(
     const resets: string[] = [];
     await assert.rejects(
       f.provider.complete(
-        request(t, { onTextReset: (value) => resets.push(value) }),
+        request({ onTextReset: (value) => resets.push(value) }),
       ),
       /HTTP error 503/,
     );
     assert.equal(f.calls(), 2);
     assert.deepEqual(resets, [""]);
   },
+  { timeout: 5000 },
 );
 
 test(
   "nonstreaming body connection failure retries inside the same phase before publishing text",
-  { timeout: 5000 },
-  async (t) => {
+  async () => {
     const f = await fixture(
-      t,
       (res, _body, calls) => {
         if (calls === 1) {
           res.writeHead(404);
@@ -374,7 +394,7 @@ test(
     );
     let shown = "";
     const result = await f.provider.complete(
-      request(t, {
+      request({
         onText: (value) => {
           shown += value;
         },
@@ -387,12 +407,12 @@ test(
     );
     assert.equal(result.content[0]?.type, "thinking");
   },
+  { timeout: 5000 },
 );
 
-test("thinking-only server error executes model fallback without losing shared admission", async (t) => {
+test("thinking-only server error executes model fallback without losing shared admission", async () => {
   const budget = new ApiAttemptBudget(2);
   const f = await fixture(
-    t,
     (res, body) =>
       send(
         res,
@@ -410,9 +430,7 @@ test("thinking-only server error executes model fallback without losing shared a
       ),
     { fallbackModel: "secondary" },
   );
-  const result = await f.provider.complete(
-    request(t, { attemptBudget: budget }),
-  );
+  const result = await f.provider.complete(request({ attemptBudget: budget }));
   assert.deepEqual(
     f.bodies.map((body) => body.model),
     ["primary", "secondary"],
@@ -423,29 +441,28 @@ test("thinking-only server error executes model fallback without losing shared a
 
 test(
   "aborting from a provisional reset prevents any replacement dispatch",
-  { timeout: 5000 },
-  async (t) => {
+  async () => {
     const abort = new AbortController();
-    const f = await fixture(t, (res) =>
+    const f = await fixture((res) =>
       send(res, [begin, open(0, { type: "text", text: "discard" })], true),
     );
     await assert.rejects(
       f.provider.complete(
-        request(t, { signal: abort.signal, onTextReset: () => abort.abort() }),
+        request({ signal: abort.signal, onTextReset: () => abort.abort() }),
       ),
       { name: "AbortError" },
     );
     assert.equal(f.calls(), 1);
   },
+  { timeout: 5000 },
 );
 
 test(
   "agent retains closed tool calls once, trims open output and strips local metadata from replay",
-  { timeout: 5000 },
-  async (t) => {
+  async () => {
     let executions = 0,
       displayed = "";
-    const f = await fixture(t, (res, body, calls) =>
+    const f = await fixture((res, body, calls) =>
       calls === 1
         ? send(res, [
             begin,
@@ -477,7 +494,7 @@ test(
       system: "",
       maxTokens: 100,
       maxTurns: 3,
-      signal: t.signal,
+      signal: testSignal(),
       onEvent: (event) => {
         if (event.type === "text") displayed += event.text;
         if (event.type === "text_reset") displayed = event.text;
@@ -486,17 +503,17 @@ test(
     assert.equal(executions, 1);
     assert.equal(displayed, "Done");
     assert.equal(messages[1]?.partial?.cause, "truncated");
-    assert.equal(f.bodies[1].messages[1].partial, undefined);
-    assert.equal(f.bodies[1].messages[1].content.length, 1);
-    assert.equal(f.bodies[1].messages[2].content[0].tool_use_id, "closed");
+    assert.equal(f.bodies[1]?.messages[1]?.partial, undefined);
+    assert.equal(f.bodies[1]?.messages[1]?.content.length, 1);
+    assert.equal(f.bodies[1]?.messages[2]?.content[0]?.tool_use_id, "closed");
     assert.equal(f.calls(), 2);
   },
+  { timeout: 5000 },
 );
 
-test("ordered model fallbacks advance once each and the primary is retried on the next query", async (t) => {
+test("ordered model fallbacks advance once each and the primary is retried on the next query", async () => {
   const seen: string[] = [];
   const f = await fixture(
-    t,
     (res, body, calls) => {
       seen.push(body.model);
       send(
@@ -516,17 +533,15 @@ test("ordered model fallbacks advance once each and the primary is retried on th
     },
     { fallbackModel: " second,third,second ", maxRetries: 0 },
   );
-  assert.equal((await f.provider.complete(request(t))).model, "third");
-  assert.equal((await f.provider.complete(request(t))).model, undefined);
+  assert.equal((await f.provider.complete(request())).model, "third");
+  assert.equal((await f.provider.complete(request())).model, undefined);
   assert.deepEqual(seen, ["primary", "second", "third", "primary"]);
 });
 
 test(
   "HTTP overload executes the fallback model after its distinct overload threshold",
-  { timeout: 5000 },
-  async (t) => {
+  async () => {
     const f = await fixture(
-      t,
       (res, body) => {
         if (body.model === "primary") {
           res.writeHead(529);
@@ -535,17 +550,17 @@ test(
       },
       { fallbackModel: "secondary" },
     );
-    assert.equal((await f.provider.complete(request(t))).model, "secondary");
+    assert.equal((await f.provider.complete(request())).model, "secondary");
     assert.deepEqual(
       f.bodies.map((body) => body.model),
       ["primary", "primary", "primary", "secondary"],
     );
   },
+  { timeout: 5000 },
 );
 
-test("JSON fallback is enabled by default and may be explicitly disabled", async (t) => {
+test("JSON fallback is enabled by default and may be explicitly disabled", async () => {
   const f = await fixture(
-    t,
     (res, body) => {
       if (body.stream) {
         res.writeHead(404);
@@ -565,33 +580,29 @@ test("JSON fallback is enabled by default and may be explicitly disabled", async
     },
     { maxRetries: 0 },
   );
-  await f.provider.complete(request(t));
+  await f.provider.complete(request());
   assert.deepEqual(
     f.bodies.map((body) => body.stream),
     [true, false],
   );
   const disabled = await fixture(
-    t,
     (res) => {
       res.writeHead(404);
       res.end();
     },
     { maxRetries: 0, allowNonStreamingFallback: false },
   );
-  await assert.rejects(
-    disabled.provider.complete(request(t)),
-    /HTTP error 404/,
-  );
+  await assert.rejects(disabled.provider.complete(request()), /HTTP error 404/);
   assert.equal(disabled.calls(), 1);
 });
 
-test("consumer display exceptions do not trigger replay or fallback", async (t) => {
-  const f = await fixture(t, (res) =>
+test("consumer display exceptions do not trigger replay or fallback", async () => {
+  const f = await fixture((res) =>
     send(res, [begin, ...text("Answer"), end(), stop]),
   );
   await assert.rejects(
     f.provider.complete(
-      request(t, {
+      request({
         onText: () => {
           throw new Error("display failure");
         },
@@ -602,7 +613,7 @@ test("consumer display exceptions do not trigger replay or fallback", async (t) 
   assert.equal(f.calls(), 1);
 });
 
-test("reasoning delta/type corruption and failed tool JSON cannot become retained tool calls", async (t) => {
+test("reasoning delta/type corruption and failed tool JSON cannot become retained tool calls", async () => {
   for (const events of [
     [
       begin,
@@ -615,19 +626,19 @@ test("reasoning delta/type corruption and failed tool JSON cannot become retaine
       delta(0, { type: "thinking_delta", thinking: 42 }),
     ],
   ]) {
-    const f = await fixture(t, (res) => send(res, events), {
+    const f = await fixture((res) => send(res, events), {
       maxRetries: 0,
       allowNonStreamingFallback: false,
     });
-    await assert.rejects(f.provider.complete(request(t)), /protocol/);
+    await assert.rejects(f.provider.complete(request()), /protocol/);
     assert.equal(f.calls(), 1);
   }
 });
 
-test("malformed streamed tool JSON produces one tool error and can be repaired in the next model round", async (t) => {
+test("malformed streamed tool JSON produces one tool error and can be repaired in the next model round", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "tau-unparsed-tool-"));
-  t.after(() => rm(cwd, { recursive: true, force: true }));
-  const f = await fixture(t, (res, body, calls) => {
+  onTestFinished(() => rm(cwd, { recursive: true, force: true }));
+  const f = await fixture((res, body, calls) => {
     if (calls === 1)
       send(res, [
         begin,
@@ -652,22 +663,23 @@ test("malformed streamed tool JSON produces one tool error and can be repaired i
     maxTokens: 100,
     maxTurns: 2,
     maxApiAttempts: 2,
-    signal: t.signal,
+    signal: testSignal(),
     onEvent: (event) => {
       if (event.type === "tool_start") starts++;
     },
   });
   assert.equal(starts, 1);
   assert.equal(f.calls(), 2);
-  const result = f.bodies[1].messages.at(-1).content[0];
-  assert.equal(result.is_error, true);
+  const result = f.bodies[1]?.messages.at(-1)?.content[0];
+  assert.equal(result?.is_error, true);
+  assert.ok(typeof result?.content === "string");
   assert.match(result.content, /input JSON failed to parse/);
-  assert.deepEqual(f.bodies[1].messages[1].content[0].input, {
+  assert.deepEqual(f.bodies[1]?.messages[1]?.content[0]?.input, {
     __unparsedToolInput: { raw: '{"broken":', len: 10 },
   });
 });
 
-test("raw indexed streams normalize start fields and reconcile visible text with closed-block order", async (t) => {
+test("raw indexed streams normalize start fields and reconcile visible text with closed-block order", async () => {
   const http = createServer((_req, res) => {
     res.writeHead(200, { "content-type": "text/event-stream" });
     const events = [
@@ -691,7 +703,7 @@ test("raw indexed streams normalize start fields and reconcile visible text with
     );
   });
   await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve));
-  t.after(async () => {
+  onTestFinished(async () => {
     http.closeAllConnections();
     await new Promise<void>((resolve) => http.close(() => resolve()));
   });
@@ -704,7 +716,7 @@ test("raw indexed streams normalize start fields and reconcile visible text with
   let visible = "";
   const resets: string[] = [];
   const result = await provider.complete(
-    request(t, {
+    request({
       onText: (text) => {
         visible += text;
       },

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createServer, type ServerResponse } from "node:http";
-import { test, type TestContext } from "node:test";
+import { onTestFinished, test } from "bun:test";
+import { z } from "zod";
 import { fixtureSse } from "./sse-fixture.js";
 import { AnthropicProvider } from "../src/provider.js";
 import { ApiAttemptBudget } from "../src/attempt-ledger.js";
@@ -74,21 +75,41 @@ function fail(
     JSON.stringify({ error: { type: "invalid_request_error", message } }),
   );
 }
+const requestBody = z.looseObject({
+  system: z.unknown().optional(),
+  tools: z.unknown().optional(),
+  messages: z.array(
+    z.looseObject({
+      role: z.string(),
+      content: z.array(z.looseObject({ type: z.string(), text: z.string() })),
+    }),
+  ),
+});
+type RequestBody = z.infer<typeof requestBody>;
+function nth<T>(items: readonly T[], index: number): T {
+  const item = items[index];
+  assert.ok(item);
+  return item;
+}
+const lastOf = <T>(items: readonly T[]): T => nth(items, items.length - 1);
+const textAt = (body: RequestBody, message: number, part: number) =>
+  nth(nth(body.messages, message).content, part).text;
 async function fixture(
-  t: TestContext,
-  handler: (body: any, res: ServerResponse, count: number) => void,
+  handler: (body: RequestBody, res: ServerResponse, count: number) => void,
   maxRetries = 0,
 ) {
-  const bodies: any[] = [];
+  const bodies: RequestBody[] = [];
   const server = createServer(async (req, res) => {
     let raw = "";
     for await (const chunk of req) raw += chunk;
-    const body = JSON.parse(raw);
+    const body = requestBody.parse(JSON.parse(raw));
     bodies.push(body);
     handler(body, res, bodies.length);
   });
   await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
-  t.after(async () => {
+  const controller = new AbortController();
+  onTestFinished(() => controller.abort());
+  onTestFinished(async () => {
     server.closeAllConnections();
     await new Promise<void>((done) => server.close(() => done()));
   });
@@ -111,13 +132,18 @@ async function fixture(
       { name: "Write", description: "Write", input_schema: { type: "object" } },
     ],
     maxTokens: 32000,
-    signal: t.signal,
+    signal: controller.signal,
     onText: () => {
       throw new Error("Summary text leaked");
     },
     ...extra,
   });
-  return { bodies, provider, request };
+  return {
+    bodies,
+    body: (index: number) => nth(bodies, index),
+    provider,
+    request,
+  };
 }
 
 test("summary shapes ignore one completed analysis block and distinguish open anchors from inline text", () => {
@@ -165,8 +191,8 @@ test("summary text selection uses the first text block and accepts an output-lim
   );
 });
 
-test("a missing block gets one bounded formatting request with fresh original input and shared admission", async (t) => {
-  const f = await fixture(t, (_body, res, count) =>
+test("a missing block gets one bounded formatting request with fresh original input and shared admission", async () => {
+  const f = await fixture((_body, res, count) =>
     respond(res, count === 1 ? "first candidate" : closed("repaired")),
   );
   const messages = rows(),
@@ -184,34 +210,35 @@ test("a missing block gets one bounded formatting request with fresh original in
   assert.equal(f.bodies.length, 2);
   assert.equal(budget.remaining, 1);
   assert.deepEqual(
-    f.bodies[0].messages.slice(0, -1),
-    f.bodies[1].messages.slice(0, -1),
+    f.body(0).messages.slice(0, -1),
+    f.body(1).messages.slice(0, -1),
   );
-  assert.ok(!JSON.stringify(f.bodies[1]).includes("first candidate"));
-  const initialTail = f.bodies[0].messages.at(-1),
-    repairTail = f.bodies[1].messages.at(-1);
+  assert.ok(!JSON.stringify(f.body(1)).includes("first candidate"));
+  const initialTail = lastOf(f.body(0).messages),
+    repairTail = lastOf(f.body(1).messages);
   assert.equal(repairTail.role, "user");
   assert.deepEqual(
     initialTail.content.slice(0, -1),
     repairTail.content.slice(0, -1),
   );
   assert.ok(
-    initialTail.content.at(-1).text.startsWith("Create a continuation summary"),
+    lastOf(initialTail.content).text.startsWith(
+      "Create a continuation summary",
+    ),
   );
-  assert.ok(!initialTail.content.at(-1).text.includes("formatting retry"));
-  assert.ok(repairTail.content.at(-1).text.includes("formatting retry"));
-  assert.deepEqual(f.bodies[0].tools, f.bodies[1].tools);
-  assert.equal(f.bodies[0].system, "Parent");
-  const boundary = messages[activeContextStart(messages)]!;
+  assert.ok(!lastOf(initialTail.content).text.includes("formatting retry"));
+  assert.ok(lastOf(repairTail.content).text.includes("formatting retry"));
+  assert.deepEqual(f.body(0).tools, f.body(1).tools);
+  assert.equal(f.body(0).system, "Parent");
+  const boundary = nth(messages, activeContextStart(messages));
   assert.ok(JSON.stringify(boundary).includes("Summary:\\nrepaired"));
   assert.equal(boundary.contextBoundary?.formatRepairs, 1);
   assert.equal(events.filter((event) => event.type === "usage").length, 2);
 });
 
-test("format repair has one dispatch, then ordinary scope may retain its first unmarked text", async (t) => {
+test("format repair has one dispatch, then ordinary scope may retain its first unmarked text", async () => {
   for (const mode of ["failure", "unmarked", "disabled"] as const) {
     const f = await fixture(
-      t,
       (_body, res, count) =>
         count === 2 && mode === "failure"
           ? fail(res, 503)
@@ -238,9 +265,9 @@ test("format repair has one dispatch, then ordinary scope may retain its first u
   }
 });
 
-test("a one-attempt summary scope rejects unmarked text but accepts an open block without repair", async (t) => {
+test("a one-attempt summary scope rejects unmarked text but accepts an open block without repair", async () => {
   for (const marked of [false, true]) {
-    const f = await fixture(t, (_body, res) =>
+    const f = await fixture((_body, res) =>
       respond(res, marked ? "<summary>open" : "unmarked", "max_tokens"),
     );
     const messages = rows(),
@@ -262,13 +289,13 @@ test("a one-attempt summary scope rejects unmarked text but accepts an open bloc
   }
 });
 
-test("opening rescue uses the70k margin before sacrificing a substantive first exchange", async (t) => {
+test("opening rescue uses the70k margin before sacrificing a substantive first exchange", async () => {
   const original: Message[] = [
     user("O".repeat(360000)),
     assistant("keep this reply"),
     user(),
   ];
-  const f = await fixture(t, (_body, res) =>
+  const f = await fixture((_body, res) =>
     respond(res, closed("opening facts")),
   );
   const messages = structuredClone(original);
@@ -283,21 +310,16 @@ test("opening rescue uses the70k margin before sacrificing a substantive first e
     true,
   );
   assert.equal(f.bodies.length, 1);
-  assert.equal(f.bodies[0].messages.length, 1);
-  assert.equal(f.bodies[0].messages[0].role, "user");
-  assert.equal(f.bodies[0].messages[0].content.length, 2);
-  assert.equal(
-    f.bodies[0].messages[0].content[0].text,
-    "O".repeat(360000) + "\n",
-  );
+  assert.equal(f.body(0).messages.length, 1);
+  assert.equal(nth(f.body(0).messages, 0).role, "user");
+  assert.equal(nth(f.body(0).messages, 0).content.length, 2);
+  assert.equal(textAt(f.body(0), 0, 0), "O".repeat(360000) + "\n");
   assert.ok(
-    f.bodies[0].messages[0].content[1].text.startsWith(
-      "Create a continuation summary",
-    ),
+    textAt(f.body(0), 0, 1).startsWith("Create a continuation summary"),
   );
   assert.equal(activeContextStart(messages), 1);
-  assert.equal(messages[1]!.contextBoundary?.openingRescue, true);
-  assert.equal(messages[1]!.contextBoundary?.headTruncations, 0);
+  assert.equal(nth(messages, 1).contextBoundary?.openingRescue, true);
+  assert.equal(nth(messages, 1).contextBoundary?.headTruncations, 0);
   assert.deepEqual(messages[0], original[0]);
   assert.deepEqual(messages.slice(2), original.slice(1));
   const boundary = [user("x".repeat(320000)), assistant("reply"), user()];
@@ -313,9 +335,9 @@ test("opening rescue uses the70k margin before sacrificing a substantive first e
   );
 });
 
-test("a failed or unclosed opening-only result is discarded before head reduction", async (t) => {
+test("a failed or unclosed opening-only result is discarded before head reduction", async () => {
   for (const mode of ["open", "error"] as const) {
-    const f = await fixture(t, (_body, res, count) =>
+    const f = await fixture((_body, res, count) =>
       count === 1 && mode === "error"
         ? fail(res, 503)
         : respond(
@@ -336,15 +358,15 @@ test("a failed or unclosed opening-only result is discarded before head reductio
       true,
     );
     assert.equal(f.bodies.length, 2);
-    assert.ok(!JSON.stringify(f.bodies[1]).includes("O".repeat(1000)));
+    assert.ok(!JSON.stringify(f.body(1)).includes("O".repeat(1000)));
     assert.deepEqual(messages.slice(0, 2), original.slice(0, 2));
-    assert.equal(messages[2]!.contextBoundary?.headTruncations, 1);
-    assert.equal(messages[2]!.contextBoundary?.openingRescue, false);
+    assert.equal(nth(messages, 2).contextBoundary?.headTruncations, 1);
+    assert.equal(nth(messages, 2).contextBoundary?.openingRescue, false);
   }
 });
 
-test("a full-summary size refusal can rescue the opening alone without truncating it", async (t) => {
-  const f = await fixture(t, (_body, res, count) =>
+test("a full-summary size refusal can rescue the opening alone without truncating it", async () => {
+  const f = await fixture((_body, res, count) =>
     count === 1 ? fail(res) : respond(res, closed("opening facts")),
   );
   const messages = [user("O".repeat(360000)), assistant("tail"), user()];
@@ -359,23 +381,18 @@ test("a full-summary size refusal can rescue the opening alone without truncatin
     true,
   );
   assert.equal(f.bodies.length, 2);
-  assert.equal(f.bodies[1].messages.length, 1);
-  assert.equal(f.bodies[1].messages[0].role, "user");
-  assert.equal(f.bodies[1].messages[0].content.length, 2);
-  assert.equal(
-    f.bodies[1].messages[0].content[0].text,
-    "O".repeat(360000) + "\n",
-  );
+  assert.equal(f.body(1).messages.length, 1);
+  assert.equal(nth(f.body(1).messages, 0).role, "user");
+  assert.equal(nth(f.body(1).messages, 0).content.length, 2);
+  assert.equal(textAt(f.body(1), 0, 0), "O".repeat(360000) + "\n");
   assert.ok(
-    f.bodies[1].messages[0].content[1].text.startsWith(
-      "Create a continuation summary",
-    ),
+    textAt(f.body(1), 0, 1).startsWith("Create a continuation summary"),
   );
-  assert.equal(messages[1]!.contextBoundary?.openingRescue, true);
+  assert.equal(nth(messages, 1).contextBoundary?.openingRescue, true);
 });
 
-test("an optional retained-round summary combines the first summary and completed tail", async (t) => {
-  const f = await fixture(t, (_body, res, count) =>
+test("an optional retained-round summary combines the first summary and completed tail", async () => {
+  const f = await fixture((_body, res, count) =>
     respond(res, closed(count === 1 ? "first facts" : "combined facts")),
   );
   const messages = rows();
@@ -390,18 +407,18 @@ test("an optional retained-round summary combines the first summary and complete
     true,
   );
   assert.equal(f.bodies.length, 2);
-  assert.ok(JSON.stringify(f.bodies[1]).includes("first facts"));
-  assert.ok(JSON.stringify(f.bodies[1]).includes("latest answer"));
-  assert.ok(!JSON.stringify(f.bodies[1]).includes("older answer"));
+  assert.ok(JSON.stringify(f.body(1)).includes("first facts"));
+  assert.ok(JSON.stringify(f.body(1)).includes("latest answer"));
+  assert.ok(!JSON.stringify(f.body(1)).includes("older answer"));
   assert.equal(activeContextStart(messages), 4);
-  assert.equal(messages[4]!.contextBoundary?.secondarySummary, true);
-  assert.equal(messages[4]!.contextBoundary?.groupsPreserved, 0);
+  assert.equal(nth(messages, 4).contextBoundary?.secondarySummary, true);
+  assert.equal(nth(messages, 4).contextBoundary?.groupsPreserved, 0);
   assert.deepEqual(messages[5], user());
 });
 
-test("an unsuccessful optional second summary salvages the first valid result without a third plan", async (t) => {
+test("an unsuccessful optional second summary salvages the first valid result without a third plan", async () => {
   for (const mode of ["size", "open", "format", "exhausted"] as const) {
-    const f = await fixture(t, (_body, res, count) =>
+    const f = await fixture((_body, res, count) =>
       count === 2 && mode === "size"
         ? fail(res)
         : respond(
@@ -431,17 +448,17 @@ test("an unsuccessful optional second summary salvages the first valid result wi
       mode === "exhausted" ? 1 : mode === "format" ? 3 : 2,
     );
     assert.equal(activeContextStart(messages), 3);
-    assert.equal(messages[3]!.contextBoundary?.secondarySummary, false);
+    assert.equal(nth(messages, 3).contextBoundary?.secondarySummary, false);
     assert.equal(state.consecutiveFailures, 0);
     assert.ok(JSON.stringify(messages[3]).includes("first facts"));
-    assert.equal(messages[4]!.content[0]!.type, "text");
+    assert.equal(nth(nth(messages, 4).content, 0).type, "text");
   }
 });
 
-test("cancellation during a repair or secondary summary prevents salvage and preserves history", async (t) => {
+test("cancellation during a repair or secondary summary prevents salvage and preserves history", async () => {
   for (const secondary of [false, true]) {
     const controller = new AbortController(),
-      f = await fixture(t, (_body, res, count) => {
+      f = await fixture((_body, res, count) => {
         if (count === 1) respond(res, secondary ? closed("first") : "plain");
         else {
           res.writeHead(200, { "content-type": "text/event-stream" });
@@ -468,9 +485,9 @@ test("cancellation during a repair or secondary summary prevents salvage and pre
   }
 });
 
-test("manual compaction summarizes all active messages, bypasses automatic breakers and permits one user", async (t) => {
+test("manual compaction summarizes all active messages, bypasses automatic breakers and permits one user", async () => {
   for (const messages of [rows(), [user("unfinished request")]]) {
-    const f = await fixture(t, (_body, res) =>
+    const f = await fixture((_body, res) =>
         respond(res, "manual plain summary"),
       ),
       original = structuredClone(messages);
@@ -491,16 +508,20 @@ test("manual compaction summarizes all active messages, bypasses automatic break
       true,
     );
     assert.equal(f.bodies.length, 1);
-    assert.equal(f.bodies[0].messages.length, original.length);
-    assert.deepEqual(f.bodies[0].messages.slice(0, -1), original.slice(0, -1));
-    const tail = f.bodies[0].messages.at(-1);
+    assert.equal(f.body(0).messages.length, original.length);
+    assert.deepEqual(f.body(0).messages.slice(0, -1), original.slice(0, -1));
+    const tail = lastOf(f.body(0).messages);
     assert.equal(tail.role, "user");
     assert.equal(tail.content.length, 2);
+    const originalTail = original.at(-1)?.content[0];
+    assert.ok(originalTail?.type === "text");
     assert.deepEqual(tail.content[0], {
       type: "text",
-      text: (original.at(-1)!.content[0] as { text: string }).text + "\n",
+      text: originalTail.text + "\n",
     });
-    assert.ok(tail.content[1].text.startsWith("Create a continuation summary"));
+    assert.ok(
+      nth(tail.content, 1).text.startsWith("Create a continuation summary"),
+    );
     assert.deepEqual(messages.slice(0, original.length), original);
     assert.equal(activeContextStart(messages), original.length);
     assert.equal(messages.length, original.length + 1);
@@ -508,11 +529,11 @@ test("manual compaction summarizes all active messages, bypasses automatic break
   }
 });
 
-test("manual summary size retries drop whole groups at most three times and charge shared admission", async (t) => {
+test("manual summary size retries drop whole groups at most three times and charge shared admission", async () => {
   const messages = [user()];
   for (let n = 0; n < 10; n++) messages.push(assistant(`reply${n}`), user());
   const original = structuredClone(messages),
-    f = await fixture(t, (_body, res) =>
+    f = await fixture((_body, res) =>
       fail(res, 400, "context_length_exceeded"),
     ),
     budget = new ApiAttemptBudget(5);
@@ -532,8 +553,8 @@ test("manual summary size retries drop whole groups at most three times and char
   assert.deepEqual(messages, original);
 });
 
-test("caller exhaustion before a format retry cannot create an extra dispatch", async (t) => {
-  const f = await fixture(t, (_body, res) => respond(res, "usable first text")),
+test("caller exhaustion before a format retry cannot create an extra dispatch", async () => {
+  const f = await fixture((_body, res) => respond(res, "usable first text")),
     messages = rows(),
     budget = new ApiAttemptBudget(1);
   assert.equal(
@@ -554,10 +575,8 @@ test("caller exhaustion before a format retry cannot create an extra dispatch", 
   );
 });
 
-test("an unusable opening cannot consume another dispatch after global exhaustion", async (t) => {
-  const f = await fixture(t, (_body, res) =>
-      respond(res, "<summary>unfinished"),
-    ),
+test("an unusable opening cannot consume another dispatch after global exhaustion", async () => {
+  const f = await fixture((_body, res) => respond(res, "<summary>unfinished")),
     messages = [user("O".repeat(360000)), assistant("tail"), user()];
   const original = structuredClone(messages),
     state = freshCompactionState();
@@ -576,8 +595,8 @@ test("an unusable opening cannot consume another dispatch after global exhaustio
   assert.equal(state.consecutiveFailures, 0);
 });
 
-test("an observer failure in the optional summary is not swallowed as a model failure to salvage", async (t) => {
-  const f = await fixture(t, (_body, res) => respond(res, closed("facts"))),
+test("an observer failure in the optional summary is not swallowed as a model failure to salvage", async () => {
+  const f = await fixture((_body, res) => respond(res, closed("facts"))),
     messages = rows(),
     original = structuredClone(messages);
   let usages = 0;

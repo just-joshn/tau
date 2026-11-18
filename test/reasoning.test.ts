@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { test } from "node:test";
+import { test, onTestFinished } from "bun:test";
+import { z } from "zod";
 import { modelFacts } from "../src/model-facts.js";
 import {
   defaultOutputTokens,
@@ -10,6 +11,18 @@ import {
 import { parseOptions } from "../src/options.js";
 import { AnthropicProvider } from "../src/provider.js";
 import { fixtureSse } from "./sse-fixture.js";
+
+const requestBody = z.looseObject({
+  model: z.string(),
+  max_tokens: z.number(),
+  thinking: z.unknown().optional(),
+});
+
+function testSignal() {
+  const controller = new AbortController();
+  onTestFinished(() => controller.abort());
+  return controller.signal;
+}
 
 test("pinned first-party model facts resolve catalog aliases, dated IDs and output defaults", () => {
   assert.equal(modelFacts("sonnet").canonical, "claude-sonnet-5-5");
@@ -211,13 +224,12 @@ test("CLI reasoning modes/legacy budget are strict and expose model-specific tok
     assert.throws(() => parseOptions(args));
 });
 
-test("real HTTP requests recompute model ID, output limit and reasoning after model fallback", async (t) => {
-  const bodies: any[] = [];
+test("real HTTP requests recompute model ID, output limit and reasoning after model fallback", async () => {
+  const bodies: Array<z.infer<typeof requestBody>> = [];
   const server = createServer(async (req, res) => {
     let raw = "";
     for await (const chunk of req) raw += chunk;
-    const body = JSON.parse(raw);
-    bodies.push(body);
+    bodies.push(requestBody.parse(JSON.parse(raw)));
     res.writeHead(200, { "content-type": "text/event-stream" });
     const begin = {
       type: "message_start",
@@ -266,7 +278,7 @@ test("real HTTP requests recompute model ID, output limit and reasoning after mo
     );
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  t.after(async () => {
+  onTestFinished(async () => {
     server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
@@ -285,7 +297,7 @@ test("real HTTP requests recompute model ID, output limit and reasoning after mo
     tools: [],
     maxTokens: 32000,
     useModelTokenDefaults: true,
-    signal: t.signal,
+    signal: testSignal(),
     onText: () => {},
   });
   assert.deepEqual(

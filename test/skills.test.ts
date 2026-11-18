@@ -1,4 +1,4 @@
-import test from "node:test";
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, writeFile, symlink, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -113,10 +113,8 @@ test("managed, user, and nearest project ordering retains the first command of a
       ).text,
       /managed$/,
     );
-    registry = await createLocalSkillRegistry({
-      ...f.options,
-      managedRoot: undefined,
-    } as unknown as SkillRegistryOptions);
+    const { managedRoot: _managedRoot, ...withoutManaged } = f.options;
+    registry = await createLocalSkillRegistry(withoutManaged);
     assert.equal(registry.catalog()[0]?.source, "userSettings");
     registry = await createLocalSkillRegistry({
       cwd: f.project,
@@ -232,7 +230,8 @@ test("literal name is the directory, description falls back to first nonblank bo
       "---\nname: display-only\ndescription: [invalid]\n---\n\n# First heading\nrest",
     );
     const registry = await createLocalSkillRegistry(f.options),
-      info = registry.catalog()[0]!;
+      [info] = registry.catalog();
+    assert.ok(info);
     assert.equal(info.name, "directory-name");
     assert.equal(info.displayName, "display-only");
     assert.equal(info.description, "First heading");

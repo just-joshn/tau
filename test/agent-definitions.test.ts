@@ -10,20 +10,26 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import test from "node:test";
+import { test, onTestFinished } from "bun:test";
 import {
   AGENT_DEFINITION_MAX_BYTES,
   agentDefinitionLocations,
   createLocalAgentRegistry,
   type AgentDefinitionLocation,
   type LocalAgentDefinition,
+  type LocalAgentRegistry,
 } from "../src/agent-definitions.js";
 
-async function fixture(t: any) {
+async function resolved(registry: LocalAgentRegistry, name: string) {
+  const definition = await registry.resolve(name);
+  assert.ok(definition);
+  return definition;
+}
+async function fixture() {
   const root = await realpath(
     await mkdtemp(join(tmpdir(), "tau-agent-definitions-")),
   );
-  t.after(() => rm(root, { recursive: true, force: true }));
+  onTestFinished(() => rm(root, { recursive: true, force: true }));
   const locations = agentDefinitionLocations({
     managedRoot: join(root, "managed"),
     userConfigDir: join(root, "user"),
@@ -48,14 +54,17 @@ async function fixture(t: any) {
     source: AgentDefinitionLocation["source"],
     additional = false,
     nested = false,
-  ) =>
-    locations.find(
+  ) => {
+    const found = locations.find(
       (l) =>
         l.source === source &&
         !!l.fromAdditionalDirectory === additional &&
         (source !== "projectSettings" ||
           l.directory.includes("nested") === nested),
-    )!;
+    );
+    assert.ok(found);
+    return found;
+  };
   return { root, locations, put, location };
 }
 const supplied = (
@@ -69,8 +78,8 @@ const supplied = (
   skills: [],
 });
 
-test("local agent precedence keeps complete definitions and exposes progressive metadata without prompt bodies", async (t) => {
-  const f = await fixture(t);
+test("local agent precedence keeps complete definitions and exposes progressive metadata without prompt bodies", async () => {
+  const f = await fixture();
   for (const [index, l] of f.locations.entries())
     await f.put(
       l.directory,
@@ -87,11 +96,13 @@ test("local agent precedence keeps complete definitions and exposes progressive 
     ],
   });
   assert.equal(registry.allDefinitions.length, 8);
-  assert.equal((await registry.resolve("review"))!.source, "policySettings");
+  assert.equal((await resolved(registry, "review")).source, "policySettings");
   assert.equal(await registry.prompt("review"), "owned body 0");
   const catalog = await registry.catalog();
   assert.equal(catalog.length, 1);
-  assert.equal("prompt" in catalog[0]!, false);
+  const [entry] = catalog;
+  assert.ok(entry);
+  assert.equal("prompt" in entry, false);
   const withoutPolicy = await createLocalAgentRegistry({
     locations: f.locations,
     sources: { policy: false },
@@ -101,19 +112,22 @@ test("local agent precedence keeps complete definitions and exposes progressive 
       supplied("flagSettings"),
     ],
   });
-  assert.equal((await withoutPolicy.resolve("review"))!.source, "flagSettings");
+  assert.equal(
+    (await resolved(withoutPolicy, "review")).source,
+    "flagSettings",
+  );
   const local = await createLocalAgentRegistry({
     locations: [...f.locations].reverse(),
     sources: { policy: false },
   });
   assert.equal(
-    (await local.resolve("review"))!.baseDir,
+    (await resolved(local, "review")).baseDir,
     f.location("projectSettings", false, true).directory,
   );
 });
 
-test("required identity uses literal agent names, exact case and NFKC namespace guard without invented filename aliases", async (t) => {
-  const f = await fixture(t),
+test("required identity uses literal agent names, exact case and NFKC namespace guard without invented filename aliases", async () => {
+  const f = await fixture(),
     location = f.location("userSettings");
   for (const [index, name] of [
     "-bad",
@@ -143,7 +157,7 @@ test("required identity uses literal agent names, exact case and NFKC namespace 
   assert.equal(await registry.resolve("filename"), undefined);
   assert.equal(await registry.resolve("REVIEW"), undefined);
   assert.equal(
-    (await registry.resolve("Review"))!.whenToUse,
+    (await resolved(registry, "Review")).whenToUse,
     "Review\ncarefully",
   );
   assert.equal(await registry.prompt("Review"), "Owned prompt.");
@@ -153,8 +167,8 @@ test("required identity uses literal agent names, exact case and NFKC namespace 
   );
 });
 
-test("frontmatter retains declared runtime metadata, input-mode normalization and ignores unsupported fields", async (t) => {
-  const f = await fixture(t),
+test("frontmatter retains declared runtime metadata, input-mode normalization and ignores unsupported fields", async () => {
+  const f = await fixture(),
     location = f.location("userSettings");
   await f.put(
     location.directory,
@@ -162,7 +176,7 @@ test("frontmatter retains declared runtime metadata, input-mode normalization an
     `name: metadata\ndescription: Own metadata\nmodel: " INHERIT "\neffort: 17\npermissionMode: manual\nmaxTurns: "12suffix"\nautoCompactWindow: "100_000"\nexperimental:\n  cache-ttl: 1h\nskills: "owned-first, owned-second"\nbackground: "true"\nomitClaudeMd: true\nmemory: local\nisolation: remote\ncolor: purple\ninitialPrompt: "  own first message  "\nobserver: " own-observer "\nobserverMessage: "  owned observer body "\nobserveSubagents: "false"\ncontext: fork\ndisable-model-invocation: true`,
   );
   const registry = await createLocalAgentRegistry({ locations: [location] }),
-    agent = (await registry.resolve("metadata"))!;
+    agent = await resolved(registry, "metadata");
   assert.equal(agent.model, "inherit");
   assert.equal(agent.permissionMode, "default");
   assert.equal(agent.effort, 17);
@@ -179,15 +193,16 @@ test("frontmatter retains declared runtime metadata, input-mode normalization an
   assert.equal(agent.initialPrompt, "  own first message  ");
   assert.equal("context" in agent, false);
   assert.equal("disableModelInvocation" in agent, false);
-  const catalog = (await registry.catalog())[0]!;
+  const [catalog] = await registry.catalog();
+  assert.ok(catalog);
   assert.equal("initialPrompt" in catalog, false);
   assert.equal("observerMessage" in catalog, false);
   assert.ok(Object.isFrozen(agent));
   assert.ok(Object.isFrozen(agent.skills));
 });
 
-test("tools preserve parenthesized grammar and wildcard inheritance; memory tool extension requires host feature admission", async (t) => {
-  const f = await fixture(t),
+test("tools preserve parenthesized grammar and wildcard inheritance; memory tool extension requires host feature admission", async () => {
+  const f = await fixture(),
     location = f.location("userSettings");
   await f.put(
     location.directory,
@@ -205,28 +220,28 @@ test("tools preserve parenthesized grammar and wildcard inheritance; memory tool
     "name: empty\ndescription: empty\ntools: null\nmemory: project",
   );
   const off = await createLocalAgentRegistry({ locations: [location] });
-  assert.deepEqual((await off.resolve("bounded"))!.tools, [
+  assert.deepEqual((await resolved(off, "bounded")).tools, [
     "Read",
     "Bash(git log:*)",
     "Write",
   ]);
-  assert.deepEqual((await off.resolve("bounded"))!.disallowedTools, [
+  assert.deepEqual((await resolved(off, "bounded")).disallowedTools, [
     "Bash(rm *)",
     "Edit",
   ]);
-  assert.equal((await off.resolve("inherited"))!.tools, undefined);
-  assert.equal((await off.resolve("inherited"))!.disallowedTools, undefined);
-  assert.deepEqual((await off.resolve("empty"))!.tools, []);
+  assert.equal((await resolved(off, "inherited")).tools, undefined);
+  assert.equal((await resolved(off, "inherited")).disallowedTools, undefined);
+  assert.deepEqual((await resolved(off, "empty")).tools, []);
   const on = await createLocalAgentRegistry({
     locations: [location],
     memoryEnabled: true,
   });
-  assert.deepEqual((await on.resolve("empty"))!.tools, [
+  assert.deepEqual((await resolved(on, "empty")).tools, [
     "Write",
     "Edit",
     "Read",
   ]);
-  assert.deepEqual((await on.resolve("bounded"))!.tools, [
+  assert.deepEqual((await resolved(on, "bounded")).tools, [
     "Read",
     "Bash(git log:*)",
     "Write",
@@ -251,8 +266,8 @@ test("tools preserve parenthesized grammar and wildcard inheritance; memory tool
   assert.equal(calls, 1);
 });
 
-test("eligibility applies after winner selection and source trust prevents loading before parse", async (t) => {
-  const f = await fixture(t),
+test("eligibility applies after winner selection and source trust prevents loading before parse", async () => {
+  const f = await fixture(),
     user = f.location("userSettings"),
     project = f.location("projectSettings");
   await f.put(
@@ -284,11 +299,11 @@ test("eligibility applies after winner selection and source trust prevents loadi
       location.source !== "projectSettings" || "owned trust restriction",
   });
   assert.equal(await trusted.prompt("chosen"), "user prompt");
-  assert.equal(trusted.diagnostics[0]!.reason, "source");
+  assert.equal(trusted.diagnostics[0]?.reason, "source");
 });
 
-test("recursive scans dedupe hardlinks, stop directory cycles and preserve canonical path metadata", async (t) => {
-  const f = await fixture(t),
+test("recursive scans dedupe hardlinks, stop directory cycles and preserve canonical path metadata", async () => {
+  const f = await fixture(),
     location = f.location("userSettings");
   const path = await f.put(
     location.directory,
@@ -309,15 +324,15 @@ test("recursive scans dedupe hardlinks, stop directory cycles and preserve canon
   );
   const registry = await createLocalAgentRegistry({ locations: [location] });
   assert.equal(registry.activeDefinitions.length, 2);
-  assert.equal((await registry.resolve("linked"))!.canonicalPath, path);
+  assert.equal((await resolved(registry, "linked")).canonicalPath, path);
   assert.equal(
     registry.diagnostics.filter((d) => d.reason === "duplicate-file").length,
     1,
   );
 });
 
-test("additional canonical roots already present in ordinary project sources retain ordinary provenance", async (t) => {
-  const f = await fixture(t),
+test("additional canonical roots already present in ordinary project sources retain ordinary provenance", async () => {
+  const f = await fixture(),
     project = f.location("projectSettings");
   await f.put(project.directory, "owned.md", "name: owned\ndescription: owned");
   const alias = join(f.root, "project-alias");
@@ -334,13 +349,13 @@ test("additional canonical roots already present in ordinary project sources ret
   });
   assert.equal(registry.allDefinitions.length, 1);
   assert.equal(
-    (await registry.resolve("owned"))!.fromAdditionalDirectory,
+    (await resolved(registry, "owned")).fromAdditionalDirectory,
     undefined,
   );
 });
 
-test("bounded reads, external link policy and explicit admission protect the registry resource boundary", async (t) => {
-  const f = await fixture(t),
+test("bounded reads, external link policy and explicit admission protect the registry resource boundary", async () => {
+  const f = await fixture(),
     location = f.location("userSettings"),
     outside = join(f.root, "outside");
   const external = await f.put(
@@ -371,7 +386,7 @@ test("bounded reads, external link policy and explicit admission protect the reg
     locations: [location],
     allowExternalLinks: true,
   });
-  assert.equal((await allowed.resolve("external"))!.canonicalPath, external);
+  assert.equal((await resolved(allowed, "external")).canonicalPath, external);
   await assert.rejects(
     createLocalAgentRegistry({
       locations: [{ directory: "relative", source: "userSettings" }],
@@ -380,8 +395,8 @@ test("bounded reads, external link policy and explicit admission protect the reg
   );
 });
 
-test("malformed hooks or misplaced guards withhold an agent; inline MCP stays a host validation seam", async (t) => {
-  const f = await fixture(t),
+test("malformed hooks or misplaced guards withhold an agent; inline MCP stays a host validation seam", async () => {
+  const f = await fixture(),
     location = f.location("userSettings");
   await f.put(
     location.directory,
@@ -411,7 +426,8 @@ test("malformed hooks or misplaced guards withhold an agent; inline MCP stays a 
   assert.equal(admitted.activeDefinitions.length, 1);
   assert.equal(hooks, 1);
   assert.equal(servers, 1);
-  const catalog = (await admitted.catalog())[0]!;
+  const [catalog] = await admitted.catalog();
+  assert.ok(catalog);
   assert.equal(catalog.hasHooks, true);
   assert.equal(catalog.mcpServerCount, 2);
   assert.equal("hooks" in catalog, false);
@@ -419,8 +435,8 @@ test("malformed hooks or misplaced guards withhold an agent; inline MCP stays a 
   assert.ok(admitted.diagnostics.some((d) => d.reason === "mcpServers"));
 });
 
-test("invalid optional scalars are ignored without erasing valid declaration data", async (t) => {
-  const f = await fixture(t),
+test("invalid optional scalars are ignored without erasing valid declaration data", async () => {
+  const f = await fixture(),
     location = f.location("userSettings");
   await f.put(
     location.directory,
@@ -428,7 +444,7 @@ test("invalid optional scalars are ignored without erasing valid declaration dat
     'name: invalid\ndescription: valid\nmodel: " sonnet "\neffort: nonsense\npermissionMode: imaginary\nmaxTurns: 0\nautoCompactWindow: 99999\nmemory: elsewhere\nisolation: fork\nbackground: yes\ncolor: invented',
   );
   const registry = await createLocalAgentRegistry({ locations: [location] }),
-    definition = (await registry.resolve("invalid"))!;
+    definition = await resolved(registry, "invalid");
   assert.equal(definition.model, "sonnet");
   for (const key of [
     "effort",
@@ -451,12 +467,12 @@ test("invalid optional scalars are ignored without erasing valid declaration dat
     locations: [location],
     memoryEnabled: true,
   });
-  assert.equal((await arrays.resolve("array-memory"))!.memory, undefined);
-  assert.deepEqual((await arrays.resolve("array-memory"))!.tools, []);
+  assert.equal((await resolved(arrays, "array-memory")).memory, undefined);
+  assert.deepEqual((await resolved(arrays, "array-memory")).tools, []);
 });
 
-test("numeric scalar repairs preserve scientific/grouped forms and source integer fallback", async (t) => {
-  const f = await fixture(t),
+test("numeric scalar repairs preserve scientific/grouped forms and source integer fallback", async () => {
+  const f = await fixture(),
     location = f.location("userSettings");
   await f.put(
     location.directory,
@@ -474,13 +490,13 @@ test("numeric scalar repairs preserve scientific/grouped forms and source intege
     'name: prefix\ndescription: prefix\nmaxTurns: "1__2"\nautoCompactWindow: "100001suffix"',
   );
   const registry = await createLocalAgentRegistry({ locations: [location] });
-  assert.equal((await registry.resolve("scientific"))!.maxTurns, 5);
+  assert.equal((await resolved(registry, "scientific")).maxTurns, 5);
   assert.equal(
-    (await registry.resolve("scientific"))!.autoCompactWindow,
+    (await resolved(registry, "scientific")).autoCompactWindow,
     1000000,
   );
-  assert.equal((await registry.resolve("grouped"))!.maxTurns, 1000);
-  assert.equal((await registry.resolve("grouped"))!.autoCompactWindow, 100000);
-  assert.equal((await registry.resolve("prefix"))!.maxTurns, 1);
-  assert.equal((await registry.resolve("prefix"))!.autoCompactWindow, 100001);
+  assert.equal((await resolved(registry, "grouped")).maxTurns, 1000);
+  assert.equal((await resolved(registry, "grouped")).autoCompactWindow, 100000);
+  assert.equal((await resolved(registry, "prefix")).maxTurns, 1);
+  assert.equal((await resolved(registry, "prefix")).autoCompactWindow, 100001);
 });

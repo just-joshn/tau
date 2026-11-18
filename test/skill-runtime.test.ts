@@ -9,7 +9,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test, onTestFinished } from "bun:test";
 import {
   createLocalSkillRegistry,
   type SkillRegistryOptions,
@@ -31,6 +31,12 @@ import { newSession, SessionStore } from "../src/session.js";
 import { projectMessages } from "../src/thinking-history.js";
 import type { Message, Provider, ToolExecutor, ToolUse } from "../src/types.js";
 
+function at<T>(items: readonly T[], index: number): T {
+  const item = items.at(index);
+  if (item === undefined) assert.fail(`no item at index ${String(index)}`);
+  return item;
+}
+
 const signal = () => new AbortController().signal;
 const call = (skill: string, args?: string): ToolUse => ({
   type: "tool_use",
@@ -44,15 +50,15 @@ const emptyTools: ToolExecutor = {
     throw new Error("Unexpected tool");
   },
 };
-const pre = () => ({
-  additionalContext: [] as string[],
-  preventContinuation: false,
-});
-async function fixture(t: any) {
+const pre = () => {
+  const additionalContext: string[] = [];
+  return { additionalContext, preventContinuation: false };
+};
+async function fixture() {
   const root = await realpath(
     await mkdtemp(join(tmpdir(), "tau-skill-runtime-")),
   );
-  t.after(() => rm(root, { recursive: true, force: true }));
+  onTestFinished(() => rm(root, { recursive: true, force: true }));
   async function skill(name: string, body: string) {
     const directory = join(root, ".claude", "skills", name);
     await mkdir(directory, { recursive: true });
@@ -82,8 +88,8 @@ async function fixture(t: any) {
   return { root, skill, registry, runtime };
 }
 
-test("tool inventory remains metadata only; explicit user and consent paths preserve invocation flags", async (t) => {
-  const f = await fixture(t);
+test("tool inventory remains metadata only; explicit user and consent paths preserve invocation flags", async () => {
+  const f = await fixture();
   const dir = await f.skill(
     "manual",
     "---\ndescription: Manual operation\ndisable-model-invocation: true\nuser-invocable: false\n---\nSECRET_INSTRUCTIONS $ARGUMENTS",
@@ -102,7 +108,7 @@ test("tool inventory remains metadata only; explicit user and consent paths pres
     });
   const runtime = await f.runtime({ registry });
   assert.match(
-    runtime.definitions[0]!.description,
+    at(runtime.definitions, 0).description,
     /available skills listed in the conversation/,
   );
   assert.deepEqual(
@@ -112,7 +118,7 @@ test("tool inventory remains metadata only; explicit user and consent paths pres
     ["offered: Offered summary"],
   );
   assert.doesNotMatch(
-    runtime.definitions[0]!.description,
+    at(runtime.definitions, 0).description,
     /SECRET_INSTRUCTIONS|BODY_ONLY|manual:|NEVER_EAGER/,
   );
   assert.deepEqual(
@@ -124,10 +130,9 @@ test("tool inventory remains metadata only; explicit user and consent paths pres
     /explicit user/,
   );
   const invoked = await runtime.invokeUser(" /manual ", "argument", signal());
+  const block = at(at(invoked.newMessages, 0).content, 0);
   assert.match(
-    invoked.newMessages[0]!.content[0]!.type === "text"
-      ? invoked.newMessages[0]!.content[0]!.text
-      : "",
+    block.type === "text" ? block.text : "",
     /SECRET_INSTRUCTIONS argument/,
   );
   assert.equal(invoked.effects.invocation, "user");
@@ -145,8 +150,8 @@ test("tool inventory remains metadata only; explicit user and consent paths pres
   );
 });
 
-test("real agent commits tool results before skill instructions and subsequent builtins use only current query grants", async (t) => {
-  const f = await fixture(t);
+test("real agent commits tool results before skill instructions and subsequent builtins use only current query grants", async () => {
+  const f = await fixture();
   await f.skill(
     "write",
     "---\ndescription: Write owned artifact\nallowed-tools: Write\ndisallowed-tools: Bash\nmodel: sonnet\neffort: high\n---\nWrite $ARGUMENTS. Full skill instruction context.",
@@ -232,7 +237,7 @@ test("real agent commits tool results before skill instructions and subsequent b
   });
   assert.equal(await readFile(join(f.root, "new.txt"), "utf8"), "owned\n");
   await assert.rejects(readFile(join(f.root, "forbidden")), { code: "ENOENT" });
-  const next = snapshots[1]!,
+  const next = at(snapshots, 1),
     resultIndex = next.findIndex((m) =>
       m.content.some(
         (b) => b.type === "tool_result" && b.tool_use_id === "skill-call",
@@ -244,7 +249,7 @@ test("real agent commits tool results before skill instructions and subsequent b
     ),
   );
   assert.ok(resultIndex >= 0 && instructionIndex > resultIndex);
-  assert.equal(effects[0]!.skill.source, "projectSettings");
+  assert.equal(at(effects, 0).skill.source, "projectSettings");
   assert.deepEqual(runtime.queryContext.layers, [
     { kind: "allowed_tools", allowedTools: ["Write"] },
     { kind: "model", mainLoopModel: "resolved-sonnet" },
@@ -283,8 +288,8 @@ test("real agent commits tool results before skill instructions and subsequent b
   );
 });
 
-test("source eligibility and fork validation precede hooks, authorization, shell substitution and effects", async (t) => {
-  const f = await fixture(t);
+test("source eligibility and fork validation precede hooks, authorization, shell substitution and effects", async () => {
+  const f = await fixture();
   await f.skill(
     "fork",
     "---\ncontext: fork\nagent: Explore\nbackground: true\n---\n!`must-not-run`",
@@ -333,8 +338,8 @@ test("source eligibility and fork validation precede hooks, authorization, shell
   assert.deepEqual(events, ["pre", "authorize", "effects", "post"]);
 });
 
-test("hook allow cannot bypass host refusal; invalid replacements cannot grant effects or execute shell blocks", async (t) => {
-  const f = await fixture(t);
+test("hook allow cannot bypass host refusal; invalid replacements cannot grant effects or execute shell blocks", async () => {
+  const f = await fixture();
   await f.skill("shell", "!`owned-substitution`");
   let effects = 0,
     shells = 0,
@@ -394,8 +399,8 @@ test("hook allow cannot bypass host refusal; invalid replacements cannot grant e
   });
 });
 
-test("session hooks register separately; withheld registration also withholds grants while temporary denies reset", async (t) => {
-  const f = await fixture(t);
+test("session hooks register separately; withheld registration also withholds grants while temporary denies reset", async () => {
+  const f = await fixture();
   await f.skill(
     "hooked",
     "---\nallowed-tools: Read\ndisallowed-tools: [Bash, 'Read(!secret)', 'Edit(./!secret)']\nhooks: {Stop: []}\n---\nbody",
@@ -408,12 +413,13 @@ test("session hooks register separately; withheld registration also withholds gr
     registry,
     onDiagnostic: (text) => warnings.push(text),
     applyEffects: (effect) => {
-      assert.equal(effect.sessionHooks!.sessionId, "owned-session");
+      assert.ok(effect.sessionHooks);
+      assert.equal(effect.sessionHooks.sessionId, "owned-session");
       assert.equal(
-        effect.sessionHooks!.skillRoot,
+        effect.sessionHooks.skillRoot,
         join(f.root, ".claude", "skills", "hooked"),
       );
-      if (register) registrations.push(effect.sessionHooks!.skillName);
+      if (register) registrations.push(effect.sessionHooks.skillName);
       return { allowedTools: effect.allowedTools, hooksRegistered: register };
     },
   });
@@ -434,8 +440,8 @@ test("session hooks register separately; withheld registration also withholds gr
   assert.deepEqual(runtime.queryContext.commandDisallowedTools, []);
 });
 
-test("validated hook rewrite retains original assistant input and post output cannot grant tools", async (t) => {
-  const f = await fixture(t);
+test("validated hook rewrite retains original assistant input and post output cannot grant tools", async () => {
+  const f = await fixture();
   await f.skill("first", "first");
   await f.skill(
     "second",
@@ -454,7 +460,8 @@ test("validated hook rewrite retains original assistant input and post output ca
         success: true,
         commandName: "second",
       });
-      return validate!(
+      assert.ok(validate);
+      return validate(
         { success: true, commandName: "second", allowedTools: ["Bash"] },
         result,
       );
@@ -484,8 +491,8 @@ test("validated hook rewrite retains original assistant input and post output ca
   );
 });
 
-test("hook stop is local, user context flush follows committed result, and reset refuses lost pending instructions", async (t) => {
-  const f = await fixture(t);
+test("hook stop is local, user context flush follows committed result, and reset refuses lost pending instructions", async () => {
+  const f = await fixture();
   await f.skill("owned", "owned instructions");
   const hooks: ToolHookRuntime = {
     async before() {
@@ -523,13 +530,13 @@ test("hook stop is local, user context flush follows committed result, and reset
   messages.push({ role: "user", content: [success] });
   runtime.resetQuery(messages);
   assert.equal(messages.length, 2);
-  assert.equal(messages[0]!.content[0]!.type, "tool_result");
+  assert.equal(at(at(messages, 0).content, 0).type, "tool_result");
   assert.match(JSON.stringify(messages[1]), /owned instructions/);
   assert.equal(normal.prepareCompaction, undefined);
 });
 
-test("render failure reaches failure adapter, cancellation and disabled tool cannot create effects", async (t) => {
-  const f = await fixture(t);
+test("render failure reaches failure adapter, cancellation and disabled tool cannot create effects", async () => {
+  const f = await fixture();
   await f.skill("shell", "!`owned`");
   const events: string[] = [],
     hooks: ToolHookRuntime = {

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "bun:test";
 import { parseOptions } from "../src/options.js";
 import { AnthropicProvider } from "../src/provider.js";
 import { retryDelay, retryableStatus } from "../src/retry.js";

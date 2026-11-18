@@ -12,15 +12,63 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import test from "node:test";
+import { onTestFinished, test } from "bun:test";
+import { z } from "zod";
 import { fixtureSse } from "./sse-fixture.js";
+
+const bodySchema = z.object({
+  messages: z.array(
+    z.object({ content: z.union([z.string(), z.array(z.unknown())]) }),
+  ),
+  tools: z.array(z.object({ name: z.string() })),
+});
+type Body = z.infer<typeof bodySchema>;
+const textBlockSchema = z.object({ type: z.literal("text"), text: z.string() });
+const toolResultSchema = z.object({
+  type: z.literal("tool_result"),
+  tool_use_id: z.string(),
+  is_error: z.boolean().optional(),
+  content: z.string(),
+});
+const printSchema = z.object({ session_id: z.string(), result: z.string() });
+const peerEventSchema = z.discriminatedUnion("event", [
+  z.object({
+    event: z.literal("decision"),
+    input: z.object({
+      tool_name: z.string(),
+      tool_use_id: z.string(),
+      input: z.object({ plan: z.string() }),
+    }),
+  }),
+  z.object({ event: z.enum(["start", "exit"]), pid: z.number() }),
+]);
+
+const blocks = (body: Body) =>
+  body.messages.flatMap((row) =>
+    typeof row.content === "string" ? [] : row.content,
+  );
+const toolResults = (body: Body) =>
+  blocks(body).flatMap((block) => {
+    const parsed = toolResultSchema.safeParse(block);
+    return parsed.success ? [parsed.data] : [];
+  });
+function toolResult(body: Body | undefined, id: string) {
+  const found = body && toolResults(body).find((r) => r.tool_use_id === id);
+  return found ?? assert.fail(`missing tool_result ${id}`);
+}
+const planNotice = (body: Body) =>
+  blocks(body)
+    .flatMap((block) => {
+      const parsed = textBlockSchema.safeParse(block);
+      return parsed.success ? [parsed.data.text] : [];
+    })
+    .findLast((text) => /Session plan file: /.test(text));
 
 test(
   "compiled plan mode writes its external designated file and resumes the same active plan",
-  { timeout: 12000 },
-  async (t) => {
+  async () => {
     const root = await realpath(await mkdtemp(join(tmpdir(), "tau-cli-plan-")));
-    t.after(() => rm(root, { recursive: true, force: true }));
+    onTestFinished(() => rm(root, { recursive: true, force: true }));
     const cwd = join(root, "project"),
       config = join(root, "config");
     for (const directory of [
@@ -30,20 +78,15 @@ test(
       join(root, "managed"),
     ])
       await mkdir(directory);
-    const bodies: any[] = [];
+    const bodies: Body[] = [];
     let planPath: string | undefined;
     const api = createServer(async (request, response) => {
       let raw = "";
       for await (const chunk of request) raw += chunk;
-      const body = JSON.parse(raw);
+      const body = bodySchema.parse(JSON.parse(raw));
       bodies.push(body);
-      const notice = body.messages
-        .flatMap((row: any) => row.content)
-        .findLast(
-          (block: any) =>
-            block.type === "text" && /Session plan file: /.test(block.text),
-        );
-      planPath = /Session plan file: ([^\n]+)/.exec(notice?.text ?? "")?.[1];
+      const notice = planNotice(body);
+      planPath = /Session plan file: ([^\n]+)/.exec(notice ?? "")?.[1];
       const index = bodies.length;
       const action =
         index === 1
@@ -89,7 +132,7 @@ test(
         ]),
       );
     });
-    t.after(
+    onTestFinished(
       () =>
         new Promise<void>((done) => {
           api.closeAllConnections();
@@ -105,7 +148,7 @@ test(
           const child = spawn(
             process.execPath,
             [
-              fileURLToPath(new URL("../src/cli.js", import.meta.url)),
+              fileURLToPath(new URL("../src/cli.ts", import.meta.url)),
               "--cwd",
               cwd,
               "-p",
@@ -140,19 +183,14 @@ test(
       );
     const first = await cli(["--permission-mode", "plan"]);
     assert.equal(first.code, 0, first.err);
-    const result = JSON.parse(first.out);
+    const result = printSchema.parse(JSON.parse(first.out));
     assert.equal(result.result, "Plan prepared.");
-    assert.ok(planPath?.startsWith(join(config, "plans") + "/"));
-    assert.equal(await readFile(planPath!, "utf8"), "# Reviewed plan\n");
+    const designated = planPath;
+    assert.ok(designated);
+    assert.ok(designated.startsWith(join(config, "plans") + "/"));
+    assert.equal(await readFile(designated, "utf8"), "# Reviewed plan\n");
     assert.ok(
-      bodies
-        .slice(1, 4)
-        .every(
-          (body) =>
-            !body.messages
-              .flatMap((row: any) => row.content)
-              .findLast((block: any) => block.type === "tool_result")?.is_error,
-        ),
+      bodies.slice(1, 4).every((body) => !toolResults(body).at(-1)?.is_error),
     );
     const before = planPath;
     const resumed = await cli(["--resume", result.session_id]);
@@ -161,29 +199,24 @@ test(
     assert.equal(bodies.length, 6);
     assert.ok(
       bodies.every((body) =>
-        body.tools.every((tool: any) =>
+        body.tools.every((tool) =>
           ["Read", "Write", "Edit"].includes(tool.name),
         ),
       ),
     );
-    const read = bodies[5].messages
-      .flatMap((row: any) => row.content)
-      .find(
-        (block: any) =>
-          block.type === "tool_result" && block.tool_use_id === "plan-5",
-      );
+    const read = toolResult(bodies[5], "plan-5");
     assert.match(read.content, /Reviewed plan/);
   },
+  { timeout: 12000 },
 );
 
 test(
   "compiled headless Plan approval uses a hidden MCP bridge, retains rejection, then exits",
-  { timeout: 18000 },
-  async (t) => {
+  async () => {
     const root = await realpath(
       await mkdtemp(join(tmpdir(), "tau-cli-plan-bridge-")),
     );
-    t.after(() => rm(root, { recursive: true, force: true }));
+    onTestFinished(() => rm(root, { recursive: true, force: true }));
     const cwd = join(root, "project"),
       config = join(root, "config"),
       peer = join(root, "peer.cjs"),
@@ -210,22 +243,17 @@ else if(m.method==='tools/call'){log({event:'decision',input:m.params.arguments}
 });
 `,
     );
-    const bodies: any[] = [];
+    const bodies: Body[] = [];
     let planPath: string | undefined;
     const api = createServer(async (request, response) => {
       let raw = "";
       for await (const chunk of request) raw += chunk;
-      const body = JSON.parse(raw);
+      const body = bodySchema.parse(JSON.parse(raw));
       bodies.push(body);
       const index = bodies.length;
-      const notice = body.messages
-        .flatMap((row: any) => row.content)
-        .findLast(
-          (block: any) =>
-            block.type === "text" && /Session plan file: /.test(block.text),
-        );
+      const notice = planNotice(body);
       planPath =
-        /Session plan file: ([^\n]+)/.exec(notice?.text ?? "")?.[1] ?? planPath;
+        /Session plan file: ([^\n]+)/.exec(notice ?? "")?.[1] ?? planPath;
       const action =
         index === 1
           ? { name: "EnterPlanMode", input: {} }
@@ -274,7 +302,7 @@ else if(m.method==='tools/call'){log({event:'decision',input:m.params.arguments}
         ]),
       );
     });
-    t.after(
+    onTestFinished(
       () =>
         new Promise<void>((done) => {
           api.closeAllConnections();
@@ -292,7 +320,7 @@ else if(m.method==='tools/call'){log({event:'decision',input:m.params.arguments}
       const child = spawn(
         process.execPath,
         [
-          fileURLToPath(new URL("../src/cli.js", import.meta.url)),
+          fileURLToPath(new URL("../src/cli.ts", import.meta.url)),
           "--cwd",
           cwd,
           "-p",
@@ -335,57 +363,48 @@ else if(m.method==='tools/call'){log({event:'decision',input:m.params.arguments}
       child.on("close", (code) => done({ code, out, err }));
     });
     assert.equal(output.code, 0, output.err);
-    assert.equal(JSON.parse(output.out).result, "Plan approved.");
+    assert.equal(
+      printSchema.parse(JSON.parse(output.out)).result,
+      "Plan approved.",
+    );
     assert.equal(bodies.length, 8);
     assert.ok(
       bodies.every(
         (body) =>
-          !body.tools.some(
-            (tool: any) => tool.name === "mcp__ownedplans__decide",
-          ),
+          !body.tools.some((tool) => tool.name === "mcp__ownedplans__decide"),
       ),
     );
-    const denied = bodies[3].messages
-      .flatMap((row: any) => row.content)
-      .find(
-        (block: any) =>
-          block.type === "tool_result" && block.tool_use_id === "owned-3",
-      );
+    const denied = toolResult(bodies[3], "owned-3");
     assert.equal(denied.is_error, true);
     assert.match(denied.content, /OWNED_PLAN_REJECTION/);
-    const outside = bodies[7].messages
-      .flatMap((row: any) => row.content)
-      .find(
-        (block: any) =>
-          block.type === "tool_result" && block.tool_use_id === "owned-7",
-      );
+    const outside = toolResult(bodies[7], "owned-7");
     assert.equal(outside.is_error, true);
     assert.match(outside.content, /Enter plan mode/);
-    assert.equal(await readFile(planPath!, "utf8"), "# Reviewed plan\n");
+    assert.ok(planPath);
+    assert.equal(await readFile(planPath, "utf8"), "# Reviewed plan\n");
     const events = (await readFile(log, "utf8"))
       .trim()
       .split("\n")
-      .map((line) => JSON.parse(line));
-    const decisions = events.filter((event) => event.event === "decision");
+      .map((line) => peerEventSchema.parse(JSON.parse(line)));
+    const decisions = events.flatMap((event) =>
+      event.event === "decision" ? [event.input] : [],
+    );
+    const pids = (kind: "start" | "exit") =>
+      events.flatMap((event) =>
+        event.event === kind && "pid" in event ? [event.pid] : [],
+      );
     assert.deepEqual(
-      decisions.map((event) => [
-        event.input.tool_name,
-        event.input.tool_use_id,
-      ]),
+      decisions.map((input) => [input.tool_name, input.tool_use_id]),
       [
         ["ExitPlanMode", "owned-3"],
         ["ExitPlanMode", "owned-6"],
       ],
     );
-    assert.equal(decisions[0].input.input.plan, "# Owned plan\n");
-    assert.equal(decisions[1].input.input.plan, "# Reviewed plan\n");
     assert.deepEqual(
-      events
-        .filter((event) => event.event === "exit")
-        .map((event) => event.pid),
-      events
-        .filter((event) => event.event === "start")
-        .map((event) => event.pid),
+      decisions.map((input) => input.input.plan),
+      ["# Owned plan\n", "# Reviewed plan\n"],
     );
+    assert.deepEqual(pids("exit"), pids("start"));
   },
+  { timeout: 18000 },
 );

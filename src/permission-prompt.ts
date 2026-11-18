@@ -182,7 +182,7 @@ async function abortable<T>(
 export function createMcpPermissionPrompt(options: {
   toolName: string;
   registry: ExternalToolRegistry;
-  onDiagnostic?(message: string): void;
+  onDiagnostic?: (message: string) => void;
   /** Host owns provider/provenance/connection-floor checks absent from basic MCP metadata. */
   eligible?(
     metadata: NonNullable<ReturnType<ExternalToolRegistry["lookup"]>>,

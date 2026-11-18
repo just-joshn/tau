@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test } from "bun:test";
 import {
   enterpriseMcpConfigUsesEnvironment,
   extractMcpGlobalScopeValues,
@@ -266,14 +266,15 @@ test("enterprise presence excludes ordinary scopes, and enterprise overrides man
 });
 test("valid enterprise file refuses strict/ordinary explicit; missing enterprise file does neither", () => {
   const enterprise = { present: true, valid: true, servers: {} };
-  assert.match(
-    resolveMcpScopes({ enterprise, strict: true }).refusal!,
-    /strict-mcp-config/,
-  );
-  assert.match(
-    resolveMcpScopes({ enterprise, explicit: [document("dynamic")] }).refusal!,
-    /dynamically configure/,
-  );
+  const strictRefusal = resolveMcpScopes({ enterprise, strict: true }).refusal;
+  assert.ok(strictRefusal);
+  assert.match(strictRefusal, /strict-mcp-config/);
+  const explicitRefusal = resolveMcpScopes({
+    enterprise,
+    explicit: [document("dynamic")],
+  }).refusal;
+  assert.ok(explicitRefusal);
+  assert.match(explicitRefusal, /dynamically configure/);
   assert.equal(
     resolveMcpScopes({
       enterprise: { ...enterprise, present: false },
@@ -361,14 +362,12 @@ test("enterprise environment origin detects command/args/url/headers before expa
     }),
     true,
   );
-  assert.equal(
-    enterpriseMcpConfigUsesEnvironment({
-      command: "node",
-      args: ["$SERVER", "${1INVALID}"],
-      env: { TOKEN: "${TOKEN}" },
-    } as McpScopeConfig),
-    false,
-  );
+  const withEnv = {
+    command: "node",
+    args: ["$SERVER", "${1INVALID}"],
+    env: { TOKEN: "${TOKEN}" },
+  };
+  assert.equal(enterpriseMcpConfigUsesEnvironment(withEnv), false);
   assert.equal(
     enterpriseMcpConfigUsesEnvironment({
       type: "http",
@@ -547,9 +546,10 @@ test("URL matcher handles hostname wildcards, ports, trailing dots, paths, query
     );
 });
 test("URL allow rule variants must all match; unrelated command rules do not suppress URL name fallback", () => {
+  const url = "https://api.fixture.invalid/v1";
   const item: McpSelectedServer = {
     scope: "user",
-    config: { type: "http", url: "https://api.fixture.invalid/v1" },
+    config: { type: "http", url },
   };
   assert.equal(
     mcpServerPolicyAllows("sample", item, [
@@ -571,7 +571,7 @@ test("URL allow rule variants must all match; unrelated command rules do not sup
       item,
       [{ serverUrl: "https://api.fixture.invalid" }],
       [],
-      { allowUrls: [item.config.url!, "https://other.invalid"] },
+      { allowUrls: [url, "https://other.invalid"] },
     ),
     false,
   );

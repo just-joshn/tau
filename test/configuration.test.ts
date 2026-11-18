@@ -1,4 +1,4 @@
-import test from "node:test";
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, writeFile, rm, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -384,18 +384,18 @@ test("read policy and safe merging resist special keys without changing process 
   const f = await fixture();
   try {
     await f.write(join(f.user, "settings.json"), { forbidden: true });
+    const inline: unknown = JSON.parse(
+      '{"__proto__":{"polluted":true},"constructor":{"data":"preserved"}}',
+    );
     const result = await resolveConfiguration({
       ...f.options,
       readPolicy: (path) => (path.startsWith(f.user) ? "fixture policy" : true),
-      flag: {
-        inline: JSON.parse(
-          '{"__proto__":{"polluted":true},"constructor":{"data":"preserved"}}',
-        ) as unknown,
-      },
+      flag: { inline },
     });
     assert.equal(result.effective.forbidden, undefined);
     assert.equal(Object.getPrototypeOf(result.effective), Object.prototype);
-    assert.equal(({} as Record<string, unknown>).polluted, undefined);
+    const plain: Record<string, unknown> = {};
+    assert.equal(plain.polluted, undefined);
     assert.deepEqual(
       Object.getOwnPropertyDescriptor(result.effective, "__proto__")?.value,
       { polluted: true },

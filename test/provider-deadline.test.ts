@@ -2,7 +2,7 @@ import { fixtureSse } from "./sse-fixture.js";
 import assert from "node:assert/strict";
 import { createServer, type ServerResponse } from "node:http";
 import { setTimeout as pause } from "node:timers/promises";
-import { test, type TestContext } from "node:test";
+import { test, onTestFinished } from "bun:test";
 import { AnthropicProvider } from "../src/provider.js";
 import { ApiAttemptBudget } from "../src/attempt-ledger.js";
 import { TransportTimeoutError } from "../src/deadline.js";
@@ -48,7 +48,6 @@ async function until(predicate: () => boolean): Promise<void> {
   assert.fail("local fixture did not reach expected state");
 }
 async function fixture(
-  t: TestContext,
   handler: (res: ServerResponse, index: number) => void,
   clock: ManualClock,
   policy: TimeoutPolicy,
@@ -66,7 +65,7 @@ async function fixture(
     handler(res, calls);
   });
   await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve));
-  t.after(async () => {
+  onTestFinished(async () => {
     http.closeAllConnections();
     await new Promise<void>((resolve) => http.close(() => resolve()));
   });
@@ -89,11 +88,9 @@ async function fixture(
 
 test(
   "a pending-header deadline aborts the actual connection with a sanitized error",
-  { timeout: 5000 },
-  async (t) => {
+  async () => {
     const clock = new ManualClock();
     const f = await fixture(
-      t,
       () => {},
       clock,
       resolveTimeoutPolicy({
@@ -116,12 +113,12 @@ test(
     assert.equal(clock.pending, 0);
     assert.equal(f.calls(), 1);
   },
+  { timeout: 5000 },
 );
 
 test(
   "first-header retries escalate the window and consume the shared attempt allowance",
-  { timeout: 5000 },
-  async (t) => {
+  async () => {
     const clock = new ManualClock(),
       budget = new ApiAttemptBudget(2);
     const policy = resolveTimeoutPolicy({
@@ -130,7 +127,7 @@ test(
         CLAUDE_STREAM_FIRST_BYTE_TIMEOUT_MS: "10000",
       },
     });
-    const f = await fixture(t, () => {}, clock, policy, { maxRetries: 1 });
+    const f = await fixture(() => {}, clock, policy, { maxRetries: 1 });
     const result = f.provider.complete(request({ attemptBudget: budget }));
     const rejection = assert.rejects(
       result,
@@ -150,12 +147,12 @@ test(
     assert.equal(f.calls(), 2);
     assert.equal(clock.pending, 0);
   },
+  { timeout: 5000 },
 );
 
 test(
   "accepted SSE outlives its header timeout but a body stall aborts without replay",
-  { timeout: 5000 },
-  async (t) => {
+  async () => {
     const clock = new ManualClock();
     let text = "";
     const policy = resolveTimeoutPolicy({
@@ -166,7 +163,6 @@ test(
       baseUrl: "http://localhost",
     });
     const f = await fixture(
-      t,
       (res) => {
         res.writeHead(200, { "content-type": "text/event-stream" });
         res.write(sse(start) + sse(block));
@@ -197,12 +193,12 @@ test(
     assert.equal(f.calls(), 1);
     assert.equal(clock.pending, 0);
   },
+  { timeout: 5000 },
 );
 
 test(
   "byte and event watchdogs can both be disabled while cancellation still closes SSE",
-  { timeout: 5000 },
-  async (t) => {
+  async () => {
     const clock = new ManualClock(),
       abort = new AbortController();
     let text = "";
@@ -214,7 +210,6 @@ test(
       },
     });
     const f = await fixture(
-      t,
       (res) => {
         res.writeHead(200, { "content-type": "text/event-stream" });
         res.write(sse(start) + sse(block));
@@ -239,12 +234,12 @@ test(
     await until(() => f.closed() === 1);
     assert.equal(clock.pending, 0);
   },
+  { timeout: 5000 },
 );
 
 test(
   "fallback deadline covers the whole JSON body even after headers and partial bytes",
-  { timeout: 5000 },
-  async (t) => {
+  async () => {
     const clock = new ManualClock();
     let text = "";
     const policy = resolveTimeoutPolicy({
@@ -252,7 +247,6 @@ test(
       baseUrl: "http://localhost",
     });
     const f = await fixture(
-      t,
       (res, index) => {
         if (index === 1) {
           res.writeHead(404);
@@ -286,16 +280,15 @@ test(
     assert.equal(text, "");
     assert.equal(clock.pending, 0);
   },
+  { timeout: 5000 },
 );
 
 test(
   "cancelling from the final JSON text callback cannot commit a successful completion",
-  { timeout: 5000 },
-  async (t) => {
+  async () => {
     const clock = new ManualClock(),
       abort = new AbortController();
     const f = await fixture(
-      t,
       (res, index) => {
         if (index === 1) {
           res.writeHead(404);
@@ -325,12 +318,12 @@ test(
     );
     assert.equal(clock.pending, 0);
   },
+  { timeout: 5000 },
 );
 
 test(
   "ignored HTTP pings feed only thirty raw-byte heartbeats before event progress expires",
-  { timeout: 5000 },
-  async (t) => {
+  async () => {
     const clock = new ManualClock();
     let output: ServerResponse | undefined,
       text = "";
@@ -339,7 +332,6 @@ test(
       baseUrl: "http://localhost",
     });
     const f = await fixture(
-      t,
       (res) => {
         output = res;
         res.writeHead(200, { "content-type": "text/event-stream" });
@@ -380,17 +372,16 @@ test(
     assert.equal(f.calls(), 1);
     assert.equal(clock.pending, 0);
   },
+  { timeout: 5000 },
 );
 
 test(
   "successful SSE completion disposes request, idle and heartbeat timers",
-  { timeout: 5000 },
-  async (t) => {
+  async () => {
     const clock = new ManualClock();
     let output: ServerResponse | undefined,
       text = "";
     const f = await fixture(
-      t,
       (res) => {
         output = res;
         res.writeHead(200, { "content-type": "text/event-stream" });
@@ -425,16 +416,15 @@ test(
     clock.advance(10000000);
     assert.equal(clock.pending, 0);
   },
+  { timeout: 5000 },
 );
 
 test(
   "ordinary retry capacity cannot bypass the independent first-header cap",
-  { timeout: 5000 },
-  async (t) => {
+  async () => {
     const clock = new ManualClock(),
       budget = new ApiAttemptBudget(10);
     const f = await fixture(
-      t,
       () => {},
       clock,
       resolveTimeoutPolicy({
@@ -462,15 +452,14 @@ test(
     assert.equal(budget.remaining, 8);
     assert.equal(clock.pending, 0);
   },
+  { timeout: 5000 },
 );
 
 test(
   "header suspension leaves the first-header escalation and ordinary retry allowance untouched",
-  { timeout: 5000 },
-  async (t) => {
+  async () => {
     const clock = new ManualClock();
     const f = await fixture(
-      t,
       () => {},
       clock,
       resolveTimeoutPolicy({
@@ -499,16 +488,15 @@ test(
     assert.equal(f.calls(), 3);
     assert.equal(clock.pending, 0);
   },
+  { timeout: 5000 },
 );
 
 test(
   "persistent capacity can retry429 at zero ordinary budget, while background529 fails",
-  { timeout: 5000 },
-  async (t) => {
+  async () => {
     const clock = new ManualClock(),
       policy = resolveTimeoutPolicy({ env: {} });
     const f = await fixture(
-      t,
       (res, index) => {
         if (index === 1) {
           res.writeHead(429);
@@ -537,7 +525,6 @@ test(
     assert.equal(f.calls(), 2);
     assert.equal(clock.pending, 0);
     const background = await fixture(
-      t,
       (res) => {
         res.writeHead(529);
         res.end();
@@ -553,4 +540,5 @@ test(
     assert.equal(background.calls(), 1);
     assert.equal(clock.pending, 0);
   },
+  { timeout: 5000 },
 );

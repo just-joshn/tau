@@ -1,13 +1,20 @@
 import { fixtureSse } from "./sse-fixture.js";
 import assert from "node:assert/strict";
 import { createServer, type ServerResponse } from "node:http";
-import { test, type TestContext } from "node:test";
+import { test, onTestFinished } from "bun:test";
+import { z } from "zod";
 import { AnthropicProvider } from "../src/provider.js";
 import { ApiAttemptBudget } from "../src/attempt-ledger.js";
 import { OutputLimitRepair } from "../src/output-limit.js";
 import { thinkingRequest, usesAssumedOutputLimit } from "../src/reasoning.js";
 import type { CompletionRequest } from "../src/types.js";
 
+const bodySchema = z.object({
+  max_tokens: z.number(),
+  stream: z.boolean(),
+  thinking: z.object({ budget_tokens: z.number().optional() }).optional(),
+});
+type Body = z.infer<typeof bodySchema>;
 const model = "claude-sonnet-4-5";
 function fail(
   res: ServerResponse,
@@ -49,20 +56,21 @@ function success(res: ServerResponse) {
   );
 }
 async function fixture(
-  t: TestContext,
-  handler: (body: any, res: ServerResponse, count: number) => void,
+  handler: (body: Body, res: ServerResponse, count: number) => void,
   options: Partial<ConstructorParameters<typeof AnthropicProvider>[0]> = {},
 ) {
-  const bodies: any[] = [];
+  const controller = new AbortController();
+  onTestFinished(() => controller.abort());
+  const bodies: Body[] = [];
   const server = createServer(async (req, res) => {
     let raw = "";
     for await (const chunk of req) raw += chunk;
-    const body = JSON.parse(raw);
+    const body = bodySchema.parse(JSON.parse(raw));
     bodies.push(body);
     handler(body, res, bodies.length);
   });
   await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
-  t.after(async () => {
+  onTestFinished(async () => {
     server.closeAllConnections();
     await new Promise<void>((done) => server.close(() => done()));
   });
@@ -83,16 +91,15 @@ async function fixture(
     messages: [{ role: "user", content: [{ type: "text", text: "hello" }] }],
     tools: [],
     maxTokens: 64000,
-    signal: t.signal,
+    signal: controller.signal,
     onText: () => {},
     ...extra,
   });
   return { bodies, provider, request };
 }
 
-test("explicit server output cap retries once, recomputes thinking, learns on message start and resets", async (t) => {
+test("explicit server output cap retries once, recomputes thinking, learns on message start and resets", async () => {
   const f = await fixture(
-    t,
     (_body, res, count) =>
       count === 1 ? fail(res, 402, capMessage()) : success(res),
     { thinking: { mode: "enabled" } },
@@ -103,19 +110,19 @@ test("explicit server output cap retries once, recomputes thinking, learns on me
     f.bodies.map((body) => body.max_tokens),
     [64000, 8192],
   );
-  assert.equal(f.bodies[1].thinking.budget_tokens, 8191);
+  assert.equal(f.bodies[1]?.thinking?.budget_tokens, 8191);
   assert.equal(f.provider.outputTokenLimit(model), 8192);
   await f.provider.complete(f.request({ model: "claude-sonnet-4-5-20250929" }));
-  assert.equal(f.bodies[2].max_tokens, 8192);
+  assert.equal(f.bodies[2]?.max_tokens, 8192);
   f.provider.resetRequestLimits();
   await f.provider.complete(f.request());
-  assert.equal(f.bodies[3].max_tokens, 64000);
+  assert.equal(f.bodies[3]?.max_tokens, 64000);
   assert.ok(!JSON.stringify(f.bodies).includes("requestedModel"));
 });
 
-test("headers and malformed message starts cannot prove a tentative output cap", async (t) => {
+test("headers and malformed message starts cannot prove a tentative output cap", async () => {
   for (const malformed of [false, true]) {
-    const f = await fixture(t, (_body, res, count) => {
+    const f = await fixture((_body, res, count) => {
       if (count === 1) fail(res, 400, capMessage());
       else if (count === 2) {
         res.writeHead(200, {
@@ -138,8 +145,8 @@ test("headers and malformed message starts cannot prove a tentative output cap",
   }
 });
 
-test("a second eligible rejection spends the repair and cancels pending learning", async (t) => {
-  const f = await fixture(t, (_body, res, count) =>
+test("a second eligible rejection spends the repair and cancels pending learning", async () => {
+  const f = await fixture((_body, res, count) =>
     count <= 2
       ? fail(res, 400, capMessage(count === 1 ? 8192 : 4096))
       : success(res),
@@ -148,11 +155,11 @@ test("a second eligible rejection spends the repair and cancels pending learning
   assert.equal(f.bodies.length, 2);
   assert.equal(f.provider.outputTokenLimit(model), Infinity);
   await f.provider.complete(f.request());
-  assert.equal(f.bodies[2].max_tokens, 64000);
+  assert.equal(f.bodies[2]?.max_tokens, 64000);
 });
 
-test("output repair uses the caller allowance even with ordinary retries disabled", async (t) => {
-  const f = await fixture(t, (_body, res) => fail(res, 422, capMessage()));
+test("output repair uses the caller allowance even with ordinary retries disabled", async () => {
+  const f = await fixture((_body, res) => fail(res, 422, capMessage()));
   await assert.rejects(
     f.provider.complete(f.request({ attemptBudget: new ApiAttemptBudget(1) })),
     { name: "ApiAttemptBudgetExhausted" },
@@ -161,9 +168,8 @@ test("output repair uses the caller allowance even with ordinary retries disable
   assert.equal(f.provider.outputTokenLimit(model), Infinity);
 });
 
-test("a validated JSON fallback proves an output cap without enabling another stream fallback", async (t) => {
+test("a validated JSON fallback proves an output cap without enabling another stream fallback", async () => {
   const f = await fixture(
-    t,
     (_body, res, count) => {
       if (count === 1) {
         res.writeHead(404);
@@ -200,13 +206,13 @@ test("a validated JSON fallback proves an output cap without enabling another st
   assert.equal(f.provider.outputTokenLimit(model), 8192);
 });
 
-test("unknown output defaults can try32k for generic or combined errors but preserve specialized failures", async (t) => {
+test("unknown output defaults can try32k for generic or combined errors but preserve specialized failures", async () => {
   for (const message of [
     "unrecognized request option",
     "input length and `max_tokens` exceed context limit",
     "capability_rejected: max_tokens_context_overflow",
   ]) {
-    const f = await fixture(t, (_body, res, count) =>
+    const f = await fixture((_body, res, count) =>
       count === 1 ? fail(res, 413, message) : success(res),
     );
     await f.provider.complete(f.request({ model: "custom-model" }));
@@ -221,7 +227,7 @@ test("unknown output defaults can try32k for generic or combined errors but pres
     "capability_rejected: prompt_too_long",
     "dlp_request_denied",
   ]) {
-    const f = await fixture(t, (_body, res) => fail(res, 400, message));
+    const f = await fixture((_body, res) => fail(res, 400, message));
     await assert.rejects(
       f.provider.complete(f.request({ model: "custom-model" })),
     );

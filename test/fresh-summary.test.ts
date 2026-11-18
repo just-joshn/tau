@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createServer, type ServerResponse } from "node:http";
-import { test, type TestContext } from "node:test";
+import { test, onTestFinished } from "bun:test";
+import { z } from "zod";
 import { fixtureSse } from "./sse-fixture.js";
 import { ApiAttemptBudget } from "../src/attempt-ledger.js";
 import {
@@ -18,6 +19,37 @@ import type {
   ToolDefinition,
 } from "../src/types.js";
 
+const requestBodySchema = z.looseObject({
+  model: z.string(),
+  system: z.unknown().optional(),
+  thinking: z.unknown().optional(),
+  messages: z.array(
+    z.looseObject({
+      content: z.array(
+        z.looseObject({
+          cache_control: z.unknown().optional(),
+          input: z.unknown().optional(),
+        }),
+      ),
+    }),
+  ),
+  tools: z
+    .array(
+      z.looseObject({
+        name: z.string(),
+        cache_control: z.unknown().optional(),
+      }),
+    )
+    .optional(),
+});
+type RequestBody = z.infer<typeof requestBodySchema>;
+function present<T>(value: T | null | undefined): T {
+  assert.ok(value !== null && value !== undefined);
+  return value;
+}
+function firstBlock(body: RequestBody, message: number) {
+  return present(present(body.messages[message]).content[0]);
+}
 const user = (text = "pending"): Message => ({
   role: "user",
   content: [{ type: "text", text }],
@@ -32,7 +64,7 @@ function respond(
   text = "<summary>Facts for continuation</summary>",
   tool = false,
 ) {
-  const events: any[] = [
+  const events: unknown[] = [
     {
       type: "message_start",
       message: {
@@ -82,24 +114,29 @@ function fail(res: ServerResponse, status: number, message = "failure") {
     JSON.stringify({ error: { type: "invalid_request_error", message } }),
   );
 }
+function controllerSignal(): AbortSignal {
+  const controller = new AbortController();
+  onTestFinished(() => controller.abort());
+  return controller.signal;
+}
 async function fixture(
-  t: TestContext,
-  handler: (body: any, res: ServerResponse, count: number) => void,
+  handler: (body: RequestBody, res: ServerResponse, count: number) => void,
   options: Partial<ConstructorParameters<typeof AnthropicProvider>[0]> = {},
 ) {
-  const bodies: any[] = [];
+  const bodies: RequestBody[] = [];
   const server = createServer(async (req, res) => {
     let raw = "";
     for await (const chunk of req) raw += chunk;
-    const body = JSON.parse(raw);
+    const body = requestBodySchema.parse(JSON.parse(raw));
     bodies.push(body);
     handler(body, res, bodies.length);
   });
   await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
-  t.after(async () => {
+  onTestFinished(async () => {
     server.closeAllConnections();
     await new Promise<void>((done) => server.close(() => done()));
   });
+  const signal = controllerSignal();
   const address = server.address();
   assert.ok(address && typeof address !== "string");
   const provider = new AnthropicProvider({
@@ -118,7 +155,7 @@ async function fixture(
     messages,
     tools: toolDefinitions(["Read", "Write", "Bash"]),
     maxTokens: 32000,
-    signal: t.signal,
+    signal,
     onText: () => {
       throw new Error("Summary leaked");
     },
@@ -127,8 +164,8 @@ async function fixture(
   return { provider, request, bodies };
 }
 
-test("an empty cached summary uses a distinct fresh body under the same caller allowance", async (t) => {
-  const f = await fixture(t, (_body, res, count) =>
+test("an empty cached summary uses a distinct fresh body under the same caller allowance", async () => {
+  const f = await fixture((_body, res, count) =>
     respond(res, count === 1 ? "" : "<summary>fresh facts</summary>"),
   );
   const messages = rows(),
@@ -150,18 +187,24 @@ test("an empty cached summary uses a distinct fresh body under the same caller a
   );
   assert.equal(f.bodies.length, 2);
   assert.equal(budget.remaining, 0);
-  assert.equal(f.bodies[0].system, "Parent project system");
-  assert.notEqual(f.bodies[1].system, f.bodies[0].system);
-  assert.deepEqual(f.bodies[0].messages, f.bodies[1].messages);
-  assert.deepEqual(f.bodies[1].tools, toolDefinitions(["Read"]));
-  assert.deepEqual(f.bodies[1].thinking, f.bodies[0].thinking);
+  assert.equal(present(f.bodies[0]).system, "Parent project system");
+  assert.notEqual(present(f.bodies[1]).system, present(f.bodies[0]).system);
+  assert.deepEqual(
+    present(f.bodies[0]).messages,
+    present(f.bodies[1]).messages,
+  );
+  assert.deepEqual(present(f.bodies[1]).tools, toolDefinitions(["Read"]));
+  assert.deepEqual(
+    present(f.bodies[1]).thinking,
+    present(f.bodies[0]).thinking,
+  );
   assert.deepEqual(messages.slice(0, original.length), original);
-  assert.equal(messages[3]!.contextBoundary?.freshRequests, 1);
+  assert.equal(present(messages[3]).contextBoundary?.freshRequests, 1);
   assert.equal(events.filter((event) => event.type === "usage").length, 2);
 });
 
-test("a cached size refusal tries the fresh body before truncating messages", async (t) => {
-  const f = await fixture(t, (_body, res, count) =>
+test("a cached size refusal tries the fresh body before truncating messages", async () => {
+  const f = await fixture((_body, res, count) =>
     count === 1
       ? fail(res, 400, "prompt is too long: 201000 tokens > 200000")
       : respond(res),
@@ -178,12 +221,15 @@ test("a cached size refusal tries the fresh body before truncating messages", as
     true,
   );
   assert.equal(f.bodies.length, 2);
-  assert.deepEqual(f.bodies[0].messages, f.bodies[1].messages);
-  assert.equal(messages[3]!.contextBoundary?.headTruncations, 0);
+  assert.deepEqual(
+    present(f.bodies[0]).messages,
+    present(f.bodies[1]).messages,
+  );
+  assert.equal(present(messages[3]).contextBoundary?.headTruncations, 0);
 });
 
-test("cached errors can fall back once and a fresh tool call never executes or commits", async (t) => {
-  const f = await fixture(t, (_body, res, count) =>
+test("cached errors can fall back once and a fresh tool call never executes or commits", async () => {
+  const f = await fixture((_body, res, count) =>
     count === 1 ? fail(res, 503) : respond(res, "", true),
   );
   const messages = rows(),
@@ -202,8 +248,8 @@ test("cached errors can fall back once and a fresh tool call never executes or c
   assert.deepEqual(messages, original);
 });
 
-test("cache-prefix assignment can start fresh and explicitly supplied extra tools are deduplicated", async (t) => {
-  const f = await fixture(t, (_body, res) => respond(res));
+test("cache-prefix assignment can start fresh and explicitly supplied extra tools are deduplicated", async () => {
+  const f = await fixture((_body, res) => respond(res));
   const extra: ToolDefinition[] = [
     ...toolDefinitions(["Read"]),
     {
@@ -231,14 +277,14 @@ test("cache-prefix assignment can start fresh and explicitly supplied extra tool
   );
   assert.equal(f.bodies.length, 1);
   assert.deepEqual(
-    f.bodies[0].tools.map((tool: any) => tool.name),
+    present(f.bodies[0]).tools?.map((tool) => tool.name),
     ["Read", "ToolSearch", "mcp__fixture__query"],
   );
-  assert.equal(messages[3]!.contextBoundary?.freshRequests, 1);
+  assert.equal(present(messages[3]).contextBoundary?.freshRequests, 1);
 });
 
-test("fresh serialization removes protocol cache markers without removing nested user input", async (t) => {
-  const f = await fixture(t, (_body, res, count) =>
+test("fresh serialization removes protocol cache markers without removing nested user input", async () => {
+  const f = await fixture((_body, res, count) =>
     respond(res, count === 1 ? "" : "<summary>facts</summary>"),
   );
   const marker = { type: "ephemeral" };
@@ -261,8 +307,14 @@ test("fresh serialization removes protocol cache markers without removing nested
     },
     user(),
   ];
-  (messages[0]!.content[0] as any).cache_control = marker;
-  const tools = [{ ...toolDefinitions(["Write"])[0]!, cache_control: marker }];
+  Reflect.set(
+    present(present(messages[0]).content[0]),
+    "cache_control",
+    marker,
+  );
+  const tools = [
+    { ...present(toolDefinitions(["Write"])[0]), cache_control: marker },
+  ];
   assert.equal(
     await compactContext({
       provider: f.provider,
@@ -273,18 +325,20 @@ test("fresh serialization removes protocol cache markers without removing nested
     }),
     true,
   );
-  assert.deepEqual(f.bodies[0].messages[0].content[0].cache_control, marker);
-  assert.equal(f.bodies[1].messages[0].content[0].cache_control, undefined);
-  assert.deepEqual(f.bodies[1].messages[1].content[0].input, {
+  assert.deepEqual(firstBlock(present(f.bodies[0]), 0).cache_control, marker);
+  assert.equal(firstBlock(present(f.bodies[1]), 0).cache_control, undefined);
+  assert.deepEqual(firstBlock(present(f.bodies[1]), 1).input, {
     cache_control: "literal data",
   });
-  assert.equal(f.bodies[1].tools[0].cache_control, undefined);
-  assert.ok(!Object.hasOwn(f.bodies[1], "disablePromptCaching"));
+  assert.equal(
+    present(present(f.bodies[1]).tools?.[0]).cache_control,
+    undefined,
+  );
+  assert.ok(!Object.hasOwn(present(f.bodies[1]), "disablePromptCaching"));
 });
 
-test("fresh model fallback uses a finite configured chain and preserves global admission", async (t) => {
+test("fresh model fallback uses a finite configured chain and preserves global admission", async () => {
   const f = await fixture(
-    t,
     (body, res, count) =>
       count === 1
         ? respond(res, "")
@@ -314,25 +368,28 @@ test("fresh model fallback uses a finite configured chain and preserves global a
     ],
   );
   assert.equal(budget.remaining, 0);
-  assert.equal(messages[3]!.contextBoundary?.summaryModel, "claude-haiku-4-5");
+  assert.equal(
+    present(messages[3]).contextBoundary?.summaryModel,
+    "claude-haiku-4-5",
+  );
   assert.ok(
     f.bodies
       .slice(1)
       .every(
-        (body) => body.tools.length === 1 && body.tools[0].name === "Read",
+        (body) => body.tools?.length === 1 && body.tools[0]?.name === "Read",
       ),
   );
 });
 
-test("declared unavailable models are skipped without dispatch and no-fallback collapses the chain", async (t) => {
+test("declared unavailable models are skipped without dispatch and no-fallback collapses the chain", async () => {
   const previous = process.env.CLAUDE_CODE_NO_MODEL_FALLBACK;
-  t.after(() => {
+  onTestFinished(() => {
     if (previous === undefined)
       delete process.env.CLAUDE_CODE_NO_MODEL_FALLBACK;
     else process.env.CLAUDE_CODE_NO_MODEL_FALLBACK = previous;
   });
   delete process.env.CLAUDE_CODE_NO_MODEL_FALLBACK;
-  const f = await fixture(t, (_body, res) => respond(res), {
+  const f = await fixture((_body, res) => respond(res), {
     fallbackModel: "claude-haiku-4-5",
     modelAvailable: (model) => !model.includes("sonnet"),
   });
@@ -344,8 +401,8 @@ test("declared unavailable models are skipped without dispatch and no-fallback c
   assert.equal(f.bodies.length, 1);
   assert.equal(budget.remaining, 0);
   const messages = rows();
-  messages[1]!.usage = { input_tokens: 250000, output_tokens: 10 };
-  messages[1]!.requestedModel = "claude-opus-5-5";
+  present(messages[1]).usage = { input_tokens: 250000, output_tokens: 10 };
+  present(messages[1]).requestedModel = "claude-opus-5-5";
   const preferred = {
     provider: f.provider,
     messages,
@@ -363,7 +420,6 @@ test("declared unavailable models are skipped without dispatch and no-fallback c
   );
   assert.equal(f.bodies.length, 1);
   const capped = await fixture(
-    t,
     (_body, res, count) => (count === 1 ? respond(res, "") : fail(res, 529)),
     { fallbackModel: "claude-haiku-4-5", recoveryPolicy: { maxOverloaded: 1 } },
   );
@@ -381,9 +437,9 @@ test("declared unavailable models are skipped without dispatch and no-fallback c
   assert.ok(capped.bodies.every((body) => body.model.includes("sonnet")));
 });
 
-test("caller and one-attempt child allowances prevent a hidden fresh dispatch", async (t) => {
+test("caller and one-attempt child allowances prevent a hidden fresh dispatch", async () => {
   for (const child of [false, true]) {
-    const f = await fixture(t, (_body, res) => respond(res, "")),
+    const f = await fixture((_body, res) => respond(res, "")),
       messages = rows(),
       original = structuredClone(messages),
       state = freshCompactionState(),
@@ -408,10 +464,10 @@ test("caller and one-attempt child allowances prevent a hidden fresh dispatch", 
   }
 });
 
-test("an observer or cancellation after the cached response cannot trigger a fresh request", async (t) => {
+test("an observer or cancellation after the cached response cannot trigger a fresh request", async () => {
   for (const abort of [false, true]) {
     const controller = new AbortController(),
-      f = await fixture(t, (_body, res) => respond(res, "")),
+      f = await fixture((_body, res) => respond(res, "")),
       messages = rows(),
       original = structuredClone(messages);
     const options = {
@@ -434,9 +490,9 @@ test("an observer or cancellation after the cached response cannot trigger a fre
   }
 });
 
-test("fresh cancellation is terminal and preserves the original active transcript", async (t) => {
+test("fresh cancellation is terminal and preserves the original active transcript", async () => {
   const controller = new AbortController(),
-    f = await fixture(t, (_body, res, count) => {
+    f = await fixture((_body, res, count) => {
       if (count === 1) respond(res, "");
       else {
         res.writeHead(200, { "content-type": "text/event-stream" });
@@ -462,8 +518,8 @@ test("fresh cancellation is terminal and preserves the original active transcrip
   assert.equal(state.consecutiveFailures, 0);
 });
 
-test("manual size retries recreate the cached/fresh pair but remain bounded to four plans", async (t) => {
-  const f = await fixture(t, (_body, res) =>
+test("manual size retries recreate the cached/fresh pair but remain bounded to four plans", async () => {
+  const f = await fixture((_body, res) =>
     fail(res, 400, "context_length_exceeded"),
   );
   const messages = [user()];
@@ -488,11 +544,14 @@ test("manual size retries recreate the cached/fresh pair but remain bounded to f
   assert.equal(budget.remaining, 1);
   assert.deepEqual(messages, original);
   for (let n = 0; n < 8; n += 2)
-    assert.deepEqual(f.bodies[n].messages, f.bodies[n + 1].messages);
+    assert.deepEqual(
+      present(f.bodies[n]).messages,
+      present(f.bodies[n + 1]).messages,
+    );
 });
 
-test("reactive prefix failure does not invent the full/manual fresh fallback", async (t) => {
-  const f = await fixture(t, (_body, res) => respond(res, "")),
+test("reactive prefix failure does not invent the full/manual fresh fallback", async () => {
+  const f = await fixture((_body, res) => respond(res, "")),
     messages = rows();
   assert.equal(
     await compactContext({

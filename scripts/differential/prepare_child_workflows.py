@@ -68,12 +68,21 @@ def recipe(root,node,case):
             'expected_hook_children':0 if case=='builtin-default' else 1,'task_list_env':'absent; record inherited resolved default namespace','task_owner':'ordinary Create owner absent'}
 
 
+def direct_user_texts(body):
+    texts=[]
+    for row in body.get('messages',[]):
+        if row.get('role')!='user':continue
+        content=row.get('content',[])
+        if isinstance(content,str):texts.append(content)
+        elif isinstance(content,list):texts.extend(b.get('text','')for b in content if isinstance(b,dict)and b.get('type')=='text')
+    return texts
+
+
 class ChildWorkflowMock(AgentMock):
     def __init__(self,case):
         super().__init__(case);self.message_cap=4 if case=='builtin-default' else 11
     def scope(self,body):
-        texts=[b.get('text','')for row in body.get('messages',[])if row.get('role')=='user'for b in row.get('content',[])if isinstance(b,dict)and b.get('type')=='text']
-        return'child'if any(DELEGATION in text for text in texts)else'parent'
+        return'child'if any(DELEGATION in text for text in direct_user_texts(body))else'parent'
     def response(self,scope,generation):
         action=None
         if scope=='parent'and generation==1:

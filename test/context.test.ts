@@ -1,7 +1,8 @@
 import { fixtureSse } from "./sse-fixture.js";
 import assert from "node:assert/strict";
 import { createServer, type ServerResponse } from "node:http";
-import { test, type TestContext } from "node:test";
+import { test, onTestFinished } from "bun:test";
+import { z } from "zod";
 import { runAgent } from "../src/agent.js";
 import { ApiAttemptBudget } from "../src/attempt-ledger.js";
 import {
@@ -19,7 +20,6 @@ import {
   activeContextStart,
   clearedInputTokens,
   contextTokens,
-  contextUsage,
   estimateContextTokens,
   estimateMessageTokens,
 } from "../src/context-usage.js";
@@ -38,6 +38,50 @@ import type {
   Usage,
 } from "../src/types.js";
 
+function at<T>(items: readonly T[], index: number): T {
+  const item = items.at(index);
+  if (item === undefined) assert.fail(`no item at index ${String(index)}`);
+  return item;
+}
+
+const wireMessage = z.looseObject({
+  role: z.string(),
+  content: z.array(
+    z.looseObject({
+      type: z.string(),
+      text: z.string().optional(),
+      id: z.string().optional(),
+      tool_use_id: z.string().optional(),
+    }),
+  ),
+});
+const wireBody = z.looseObject({
+  model: z.string(),
+  system: z.unknown().optional(),
+  tools: z.unknown().optional(),
+  thinking: z.unknown().optional(),
+  messages: z.array(wireMessage),
+});
+type WireMessage = z.infer<typeof wireMessage>;
+type WireBody = z.infer<typeof wireBody>;
+const firstBlock = (message: WireMessage) => at(message.content, 0);
+const lastMessage = (body: WireBody) => at(body.messages, -1);
+function firstText(message: WireMessage): string {
+  const { text } = firstBlock(message);
+  assert.ok(text !== undefined);
+  return text;
+}
+function usageOf(message: Message) {
+  assert.ok(message.usage);
+  return message.usage;
+}
+
+function testSignal() {
+  const controller = new AbortController();
+  onTestFinished(() => controller.abort());
+  return controller.signal;
+}
+
 const text = (value: string) => ({ type: "text" as const, text: value });
 const user = (value = "next"): Message => ({
   role: "user",
@@ -50,7 +94,6 @@ const thought = (signature: string) => ({
 });
 const model = "claude-sonnet-4-5-20250929";
 const request = (
-  t: TestContext,
   extra: Partial<CompletionRequest> = {},
 ): CompletionRequest => ({
   model,
@@ -58,7 +101,7 @@ const request = (
   messages: [user()],
   tools: [],
   maxTokens: 32000,
-  signal: t.signal,
+  signal: testSignal(),
   onText: () => {},
   ...extra,
 });
@@ -129,28 +172,28 @@ function send(
   res.end(fixtureSse(events));
 }
 async function fixture(
-  t: TestContext,
   handler: (
-    body: any,
+    body: WireBody,
     res: ServerResponse,
     count: number,
     beta: string | undefined,
   ) => void,
   options: Partial<ConstructorParameters<typeof AnthropicProvider>[0]> = {},
 ) {
-  const bodies: any[] = [],
+  const bodies: WireBody[] = [],
     betas: Array<string | undefined> = [];
   const server = createServer(async (req, res) => {
     let raw = "";
     for await (const chunk of req) raw += chunk;
-    const body = JSON.parse(raw);
+    const body = wireBody.parse(JSON.parse(raw));
     bodies.push(body);
-    const beta = req.headers["anthropic-beta"] as string | undefined;
+    const header = req.headers["anthropic-beta"];
+    const beta = typeof header === "string" ? header : undefined;
     betas.push(beta);
     handler(body, res, bodies.length, beta);
   });
   await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
-  t.after(async () => {
+  onTestFinished(async () => {
     server.closeAllConnections();
     await new Promise<void>((done) => server.close(() => done()));
   });
@@ -266,10 +309,10 @@ test("exchange grouping respects response ids, resumption and active boundaries"
   assert.equal(contextExchangeCount(messages), 1);
 });
 
-test("default historical windows defer estimate compaction and blocking to the API", async (t) => {
-  const f = await fixture(t, (_body, res) => send(res));
+test("default historical windows defer estimate compaction and blocking to the API", async () => {
+  const f = await fixture((_body, res) => send(res));
   const messages = seeded();
-  messages[1]!.usage!.input_tokens = 220000;
+  usageOf(at(messages, 1)).input_tokens = 220000;
   const sizing = compactionStatus(220000, 200000, 32000, model, {}, {});
   assert.equal(sizing.source, "auto");
   assert.equal(sizing.deferToServer, true);
@@ -281,7 +324,7 @@ test("default historical windows defer estimate compaction and blocking to the A
     system: "",
     maxTokens: 32000,
     maxTurns: 1,
-    signal: t.signal,
+    signal: testSignal(),
     onEvent: () => {},
   });
   assert.equal(f.bodies.length, 1);
@@ -312,8 +355,8 @@ test("default historical windows defer estimate compaction and blocking to the A
   );
 });
 
-test("server context rejection compacts once and retries without spending a completed round", async (t) => {
-  const f = await fixture(t, (_body, res, count) =>
+test("server context rejection compacts once and retries without spending a completed round", async () => {
+  const f = await fixture((_body, res, count) =>
     count === 1
       ? rejectContext(res)
       : send(res, count === 2 ? summary : "Done"),
@@ -329,13 +372,13 @@ test("server context rejection compacts once and retries without spending a comp
     maxTokens: 32000,
     maxTurns: 1,
     maxApiAttempts: 3,
-    signal: t.signal,
+    signal: testSignal(),
     onEvent: (event) => events.push(event),
   });
   assert.equal(result.turns, 1);
   assert.equal(f.bodies.length, 3);
   assert.equal(activeContextStart(messages), 2);
-  assert.equal(messages[2]!.contextBoundary?.reason, "reactive");
+  assert.equal(at(messages, 2).contextBoundary?.reason, "reactive");
   assert.ok(!JSON.stringify(f.bodies[2]).includes("Original answer"));
   assert.ok(f.bodies.every((body) => body.model === model));
   assert.equal(result.usage.input_tokens, 20);
@@ -347,8 +390,8 @@ test("server context rejection compacts once and retries without spending a comp
   );
 });
 
-test("reactive compaction keeps closed tool calls paired and executes each only once", async (t) => {
-  const f = await fixture(t, (_body, res, count) =>
+test("reactive compaction keeps closed tool calls paired and executes each only once", async () => {
+  const f = await fixture((_body, res, count) =>
     count === 1
       ? send(res, "", { tool: true })
       : count === 2
@@ -377,26 +420,26 @@ test("reactive compaction keeps closed tool calls paired and executes each only 
     maxTokens: 32000,
     maxTurns: 2,
     maxApiAttempts: 4,
-    signal: t.signal,
+    signal: testSignal(),
     onEvent: () => {},
   });
   assert.equal(executed, 1);
   assert.equal(result.turns, 2);
   assert.equal(f.bodies.length, 4);
-  const tail = f.bodies[3].messages;
-  assert.equal(tail[1].content[0].type, "tool_use");
-  assert.equal(tail[2].content[0].type, "tool_result");
-  assert.equal(tail[1].content[0].id, tail[2].content[0].tool_use_id);
+  const tail = at(f.bodies, 3).messages;
+  assert.equal(firstBlock(at(tail, 1)).type, "tool_use");
+  assert.equal(firstBlock(at(tail, 2)).type, "tool_result");
+  assert.equal(firstBlock(at(tail, 1)).id, firstBlock(at(tail, 2)).tool_use_id);
 });
 
-test("repeated context rejection, one exchange and disabled compaction stop without a loop", async (t) => {
+test("repeated context rejection, one exchange and disabled compaction stop without a loop", async () => {
   for (const mode of [
     "again",
     "single",
     "disabled",
     "invalid-summary",
   ] as const) {
-    const f = await fixture(t, (_body, res, count) =>
+    const f = await fixture((_body, res, count) =>
       count === 2 && mode !== "invalid-summary"
         ? send(res, summary)
         : rejectContext(res),
@@ -412,7 +455,7 @@ test("repeated context rejection, one exchange and disabled compaction stop with
         maxTokens: 32000,
         maxTurns: 1,
         ...(mode === "disabled" ? { autoCompact: false } : {}),
-        signal: t.signal,
+        signal: testSignal(),
         onEvent: () => {},
       }),
       ProviderHttpError,
@@ -424,9 +467,9 @@ test("repeated context rejection, one exchange and disabled compaction stop with
   }
 });
 
-test("reactive summaries share admission and abort before retrying an accepted summary", async (t) => {
+test("reactive summaries share admission and abort before retrying an accepted summary", async () => {
   for (const allowance of [1, 2]) {
-    const f = await fixture(t, (_body, res, count) =>
+    const f = await fixture((_body, res, count) =>
       count === 1 ? rejectContext(res) : send(res, summary),
     );
     const messages = seeded();
@@ -440,7 +483,7 @@ test("reactive summaries share admission and abort before retrying an accepted s
         maxTokens: 32000,
         maxTurns: 1,
         maxApiAttempts: allowance,
-        signal: t.signal,
+        signal: testSignal(),
         onEvent: () => {},
       }),
       { name: "ApiAttemptBudgetExhausted" },
@@ -448,7 +491,7 @@ test("reactive summaries share admission and abort before retrying an accepted s
     assert.equal(f.bodies.length, allowance);
     assert.equal(activeContextStart(messages), allowance === 2 ? 2 : 0);
   }
-  const f = await fixture(t, (_body, res, count) =>
+  const f = await fixture((_body, res, count) =>
       count === 1 ? rejectContext(res) : send(res, summary),
     ),
     controller = new AbortController();
@@ -472,13 +515,13 @@ test("reactive summaries share admission and abort before retrying an accepted s
   assert.equal(f.bodies.length, 2);
 });
 
-test("a blocked conversation can summarize on the last requested larger model before default deferral", async (t) => {
+test("a blocked conversation can summarize on the last requested larger model before default deferral", async () => {
   const larger = "claude-opus-5-5",
     messages = seeded();
-  messages[1]!.usage!.input_tokens = 250000;
-  messages[1]!.requestedModel = larger;
-  messages[1]!.responseModel = "unrelated-served-label";
-  const f = await fixture(t, (_body, res, count) =>
+  usageOf(at(messages, 1)).input_tokens = 250000;
+  at(messages, 1).requestedModel = larger;
+  at(messages, 1).responseModel = "unrelated-served-label";
+  const f = await fixture((_body, res, count) =>
     send(res, count === 1 ? summary : "Done"),
   );
   await runAgent({
@@ -490,7 +533,7 @@ test("a blocked conversation can summarize on the last requested larger model be
     maxTokens: 32000,
     maxTurns: 1,
     maxApiAttempts: 2,
-    signal: t.signal,
+    signal: testSignal(),
     onEvent: () => {},
   });
   assert.deepEqual(
@@ -499,16 +542,15 @@ test("a blocked conversation can summarize on the last requested larger model be
   );
   assert.equal(activeContextStart(messages), 2);
   assert.ok(!JSON.stringify(f.bodies[1]).includes("Original answer"));
-  assert.equal(messages.at(-1)!.requestedModel, model);
+  assert.equal(at(messages, -1).requestedModel, model);
 });
 
-test("larger-model summary has one dispatch then falls back under configured proactive policy", async (t) => {
+test("larger-model summary has one dispatch then falls back under configured proactive policy", async () => {
   const messages = seeded(),
     state = freshCompactionState();
-  messages[1]!.usage!.input_tokens = 250000;
-  messages[1]!.requestedModel = "claude-opus-5-5";
+  usageOf(at(messages, 1)).input_tokens = 250000;
+  at(messages, 1).requestedModel = "claude-opus-5-5";
   const f = await fixture(
-    t,
     (_body, res, count) => {
       if (count === 1) {
         res.writeHead(503);
@@ -528,7 +570,7 @@ test("larger-model summary has one dispatch then falls back under configured pro
     maxTurns: 1,
     maxApiAttempts: 3,
     compactionState: state,
-    signal: t.signal,
+    signal: testSignal(),
     onEvent: () => {},
   });
   assert.deepEqual(
@@ -537,20 +579,19 @@ test("larger-model summary has one dispatch then falls back under configured pro
   );
   assert.equal(state.consecutiveFailures, 0);
   assert.ok(
-    f.bodies[1].messages
-      .at(-1)
-      .content[0].text.includes("Create a continuation summary"),
+    firstText(lastMessage(at(f.bodies, 1))).includes(
+      "Create a continuation summary",
+    ),
   );
 });
 
-test("exhausting the caller during a larger summary is terminal and preserves the original context", async (t) => {
+test("exhausting the caller during a larger summary is terminal and preserves the original context", async () => {
   const messages = seeded(),
     state = freshCompactionState();
-  messages[1]!.usage!.input_tokens = 250000;
-  messages[1]!.requestedModel = "claude-opus-5-5";
+  usageOf(at(messages, 1)).input_tokens = 250000;
+  at(messages, 1).requestedModel = "claude-opus-5-5";
   const before = structuredClone(messages),
     f = await fixture(
-      t,
       (_body, res) => {
         res.writeHead(503);
         res.end();
@@ -568,7 +609,7 @@ test("exhausting the caller during a larger summary is terminal and preserves th
       maxTurns: 1,
       maxApiAttempts: 1,
       compactionState: state,
-      signal: t.signal,
+      signal: testSignal(),
       onEvent: () => {},
     }),
     { name: "ApiAttemptBudgetExhausted" },
@@ -578,12 +619,11 @@ test("exhausting the caller during a larger summary is terminal and preserves th
   assert.equal(state.consecutiveFailures, 0);
 });
 
-test("a failed larger-model fork returns a default-window request to API admission", async (t) => {
+test("a failed larger-model fork returns a default-window request to API admission", async () => {
   const messages = seeded();
-  messages[1]!.usage!.input_tokens = 250000;
-  messages[1]!.requestedModel = "claude-opus-5-5";
+  usageOf(at(messages, 1)).input_tokens = 250000;
+  at(messages, 1).requestedModel = "claude-opus-5-5";
   const f = await fixture(
-    t,
     (_body, res, count) => {
       if (count === 1) {
         res.writeHead(503);
@@ -601,12 +641,12 @@ test("a failed larger-model fork returns a default-window request to API admissi
     maxTokens: 32000,
     maxTurns: 1,
     maxApiAttempts: 2,
-    signal: t.signal,
+    signal: testSignal(),
     onEvent: () => {},
   });
   assert.equal(f.bodies.length, 2);
   assert.equal(activeContextStart(messages), 0);
-  assert.equal(f.bodies[1].messages.at(-1).content[0].text, "next");
+  assert.equal(firstText(lastMessage(at(f.bodies, 1))), "next");
 });
 
 test("larger-model selection needs a usage anchor, recognition, permission and more usable capacity", () => {
@@ -617,8 +657,8 @@ test("larger-model selection needs a usage anchor, recognition, permission and m
       },
     },
     state = freshCompactionState();
-  messages[1]!.usage!.input_tokens = 250000;
-  messages[1]!.requestedModel = "claude-opus-5-5";
+  usageOf(at(messages, 1)).input_tokens = 250000;
+  at(messages, 1).requestedModel = "claude-opus-5-5";
   const options = {
     provider,
     messages,
@@ -653,19 +693,19 @@ test("larger-model selection needs a usage anchor, recognition, permission and m
     }),
     undefined,
   );
-  messages[1]!.requestedModel = "unknown";
+  at(messages, 1).requestedModel = "unknown";
   assert.equal(largerCompactionModel(options), undefined);
-  messages[1]!.requestedModel = model;
+  at(messages, 1).requestedModel = model;
   assert.equal(largerCompactionModel(options), undefined);
-  messages[1]!.requestedModel = "claude-opus-5-5";
-  messages[1]!.usage!.input_tokens = 1000;
+  at(messages, 1).requestedModel = "claude-opus-5-5";
+  usageOf(at(messages, 1)).input_tokens = 1000;
   assert.equal(largerCompactionModel(options), undefined);
-  messages[1]!.usage!.input_tokens = 0;
-  messages[1]!.usage!.output_tokens = 250000;
+  usageOf(at(messages, 1)).input_tokens = 0;
+  usageOf(at(messages, 1)).output_tokens = 250000;
   assert.equal(largerCompactionModel(options), undefined);
 });
 
-test("blocking after summary commit uses the reset output limit for the retained tail", async (t) => {
+test("blocking after summary commit uses the reset output limit for the retained tail", async () => {
   let limit = 8192,
     calls = 0;
   const provider: Provider = {
@@ -683,7 +723,7 @@ test("blocking after summary commit uses the reset output limit for the retained
     },
   };
   const messages = seeded();
-  messages.at(-1)!.content = [text("x".repeat(720000))];
+  at(messages, -1).content = [text("x".repeat(720000))];
   await assert.rejects(
     runAgent({
       provider,
@@ -694,7 +734,7 @@ test("blocking after summary commit uses the reset output limit for the retained
       maxTokens: 32000,
       autoCompactWindow: "200k",
       maxTurns: 1,
-      signal: t.signal,
+      signal: testSignal(),
       onEvent: () => {},
     }),
     /Context is full/,
@@ -704,13 +744,11 @@ test("blocking after summary commit uses the reset output limit for the retained
   assert.equal(limit, Infinity);
 });
 
-test("proactive prefix summaries skip a two-group nonblocking request, while a first rapid refill summarizes all", async (t) => {
-  const f = await fixture(t, (body, res) =>
+test("proactive prefix summaries skip a two-group nonblocking request, while a first rapid refill summarizes all", async () => {
+  const f = await fixture((body, res) =>
     send(
       res,
-      body.messages
-        .at(-1)
-        .content[0].text.includes("Create a continuation summary")
+      firstText(lastMessage(body)).includes("Create a continuation summary")
         ? summary
         : "Done",
     ),
@@ -724,7 +762,7 @@ test("proactive prefix summaries skip a two-group nonblocking request, while a f
     maxTokens: 32000,
     maxTurns: 1,
     autoCompactWindow: "200k",
-    signal: t.signal,
+    signal: testSignal(),
     onEvent: () => {},
   });
   assert.equal(f.bodies.length, 1);
@@ -743,15 +781,15 @@ test("proactive prefix summaries skip a two-group nonblocking request, while a f
     maxTurns: 1,
     autoCompactWindow: "200k",
     compactionState: state,
-    signal: t.signal,
+    signal: testSignal(),
     onEvent: () => {},
   });
   assert.equal(f.bodies.length, 3);
   assert.equal(state.consecutiveRapidRefills, 1);
-  assert.equal(messages[2]!.contextBoundary?.groupsPreserved, 0);
+  assert.equal(at(messages, 2).contextBoundary?.groupsPreserved, 0);
 });
 
-test("HTTP prefix summary excludes the retained reply and persists its old usage as ineligible", async (t) => {
+test("HTTP prefix summary excludes the retained reply and persists its old usage as ineligible", async () => {
   const messages: Message[] = [
     user("opening"),
     { role: "assistant", responseId: "old", content: [text("OLD-ONLY")] },
@@ -764,7 +802,7 @@ test("HTTP prefix summary excludes the retained reply and persists its old usage
     },
     user("pending"),
   ];
-  const f = await fixture(t, (_body, res, count) =>
+  const f = await fixture((_body, res, count) =>
     send(res, count === 1 ? summary : "Done"),
   );
   await runAgent({
@@ -776,7 +814,7 @@ test("HTTP prefix summary excludes the retained reply and persists its old usage
     maxTokens: 32000,
     maxTurns: 1,
     autoCompactWindow: "200k",
-    signal: t.signal,
+    signal: testSignal(),
     onEvent: () => {},
   });
   assert.equal(f.bodies.length, 2);
@@ -785,19 +823,19 @@ test("HTTP prefix summary excludes the retained reply and persists its old usage
   assert.ok(JSON.stringify(f.bodies[1]).includes("KEEP-THIS"));
   assert.ok(!JSON.stringify(f.bodies[1]).includes("OLD-ONLY"));
   assert.equal(activeContextStart(messages), 3);
-  assert.equal(messages[3]!.contextBoundary?.groupsPreserved, 1);
-  assert.equal(messages[4]!.contextUsageDiscarded, true);
-  assert.equal(messages[4]!.usage!.input_tokens, 170000);
+  assert.equal(at(messages, 3).contextBoundary?.groupsPreserved, 1);
+  assert.equal(at(messages, 4).contextUsageDiscarded, true);
+  assert.equal(usageOf(at(messages, 4)).input_tokens, 170000);
 });
 
-test("a summary size failure retains more groups, enables one deeper reactive pass and keeps the round count", async (t) => {
+test("a summary size failure retains more groups, enables one deeper reactive pass and keeps the round count", async () => {
   const messages: Message[] = [user("opening")];
   for (const id of ["a", "b", "c", "d"])
     messages.push(
       { role: "assistant", responseId: id, content: [text(id.repeat(4000))] },
       user(`after-${id}`),
     );
-  const f = await fixture(t, (_body, res, count) =>
+  const f = await fixture((_body, res, count) =>
     [1, 2, 4].includes(count)
       ? rejectContext(res, "context_length_exceeded")
       : send(res, count === 6 ? "Done" : `<summary>Summary${count}</summary>`),
@@ -814,12 +852,12 @@ test("a summary size failure retains more groups, enables one deeper reactive pa
     maxTurns: 1,
     maxApiAttempts: 6,
     compactionState: state,
-    signal: t.signal,
+    signal: testSignal(),
     onEvent: (event) => events.push(event),
   });
   assert.equal(result.turns, 1);
   assert.equal(f.bodies.length, 6);
-  assert.ok(f.bodies[3].messages.length > f.bodies[5].messages.length);
+  assert.ok(at(f.bodies, 3).messages.length > at(f.bodies, 5).messages.length);
   assert.equal(
     events.filter(
       (event) => event.type === "compaction" && event.stage === "complete",
@@ -832,14 +870,14 @@ test("a summary size failure retains more groups, enables one deeper reactive pa
   assert.ok(!JSON.stringify(f.bodies[5]).includes("Summary3"));
 });
 
-test("a third reactive refusal cannot create another deeper summary", async (t) => {
+test("a third reactive refusal cannot create another deeper summary", async () => {
   const messages: Message[] = [user()];
   for (const id of ["a", "b", "c", "d", "e"])
     messages.push(
       { role: "assistant", responseId: id, content: [text(id.repeat(4000))] },
       user(),
     );
-  const f = await fixture(t, (_body, res, count) =>
+  const f = await fixture((_body, res, count) =>
     [4, 7].includes(count)
       ? send(res, summary)
       : rejectContext(res, "context_length_exceeded"),
@@ -853,7 +891,7 @@ test("a third reactive refusal cannot create another deeper summary", async (t) 
       system: "",
       maxTokens: 32000,
       maxTurns: 1,
-      signal: t.signal,
+      signal: testSignal(),
       onEvent: () => {},
     }),
     ProviderHttpError,
@@ -862,14 +900,14 @@ test("a third reactive refusal cannot create another deeper summary", async (t) 
   assert.equal(contextExchangeCount(messages), 3);
 });
 
-test("a completed tool round ends the immediate deeper-recovery opportunity", async (t) => {
+test("a completed tool round ends the immediate deeper-recovery opportunity", async () => {
   const messages: Message[] = [user()];
   for (const id of ["a", "b", "c", "d"])
     messages.push(
       { role: "assistant", responseId: id, content: [text(id.repeat(4000))] },
       user(),
     );
-  const f = await fixture(t, (_body, res, count) =>
+  const f = await fixture((_body, res, count) =>
     count === 3
       ? send(res, summary)
       : count === 4
@@ -896,7 +934,7 @@ test("a completed tool round ends the immediate deeper-recovery opportunity", as
       system: "",
       maxTokens: 32000,
       maxTurns: 2,
-      signal: t.signal,
+      signal: testSignal(),
       onEvent: () => {},
     }),
     ProviderHttpError,
@@ -905,7 +943,7 @@ test("a completed tool round ends the immediate deeper-recovery opportunity", as
   assert.equal(executed, 1);
 });
 
-test("summary head reduction stops after three passes and global exhaustion never commits scratch context", async (t) => {
+test("summary head reduction stops after three passes and global exhaustion never commits scratch context", async () => {
   for (const allowance of [undefined, 2]) {
     const messages: Message[] = [user()];
     for (let index = 0; index < 10; index++)
@@ -919,12 +957,12 @@ test("summary head reduction stops after three passes and global exhaustion neve
       );
     const before = structuredClone(messages),
       state = freshCompactionState(),
-      f = await fixture(t, (_body, res) =>
+      f = await fixture((_body, res) =>
         rejectContext(res, "context_length_exceeded"),
       );
     const options = {
       provider: f.provider,
-      request: request(t, {
+      request: request({
         messages,
         ...(allowance === undefined
           ? {}
@@ -946,7 +984,7 @@ test("summary head reduction stops after three passes and global exhaustion neve
   }
 });
 
-test("tool-result omission stays in a summary scratch request and cannot leak after an invalid summary", async (t) => {
+test("tool-result omission stays in a summary scratch request and cannot leak after an invalid summary", async () => {
   const messages: Message[] = [
     user(),
     {
@@ -961,11 +999,11 @@ test("tool-result omission stays in a summary scratch request and cannot leak af
     },
   ];
   const before = structuredClone(messages),
-    f = await fixture(t, (_body, res) => send(res, "", { tool: true }));
+    f = await fixture((_body, res) => send(res, "", { tool: true }));
   assert.equal(
     await compactContext({
       provider: f.provider,
-      request: request(t, { messages }),
+      request: request({ messages }),
       state: freshCompactionState(),
       planning: { omitLargeToolResults: true, keepNoRound: true },
       inputError: { kind: "prompt", gap: 100 },
@@ -978,7 +1016,7 @@ test("tool-result omission stays in a summary scratch request and cannot leak af
   assert.deepEqual(messages, before);
 });
 
-test("later summary cancellation and one-child admission preserve raw context", async (t) => {
+test("later summary cancellation and one-child admission preserve raw context", async () => {
   for (const mode of ["abort", "child"] as const) {
     const messages: Message[] = [user()];
     for (const id of ["a", "b", "c"])
@@ -990,7 +1028,7 @@ test("later summary cancellation and one-child admission preserve raw context", 
       controller = new AbortController(),
       state = freshCompactionState(),
       budget = new ApiAttemptBudget(3);
-    const f = await fixture(t, (_body, res, count) => {
+    const f = await fixture((_body, res, count) => {
       if (count === 1) rejectContext(res, "context_length_exceeded");
       else {
         res.writeHead(200, { "content-type": "text/event-stream" });
@@ -1000,7 +1038,7 @@ test("later summary cancellation and one-child admission preserve raw context", 
     });
     const options = {
       provider: f.provider,
-      request: request(t, {
+      request: request({
         messages,
         signal: controller.signal,
         attemptBudget: budget,
@@ -1224,7 +1262,7 @@ test("context usage selects the last eligible message iteration without changing
   assert.equal(
     contextTokens({
       ...usage,
-      iterations: [...usage.iterations!, { type: "invalid" }],
+      iterations: [...(usage.iterations ?? []), { type: "invalid" }],
     }),
     1300,
   );
@@ -1262,7 +1300,7 @@ test("token estimates use per-block UTF16 rounding and the latest usable API anc
     user("tailtailtail"),
   ];
   assert.equal(estimateContextTokens(rows), 153);
-  rows[1]!.usage = { input_tokens: 0, output_tokens: 100 };
+  at(rows, 1).usage = { input_tokens: 0, output_tokens: 100 };
   assert.equal(estimateContextTokens(rows), 30);
 });
 
@@ -1404,10 +1442,9 @@ test("size settings preserve suffix grammar, environment clamps and auto-compact
   );
 });
 
-test("native1m resumption uses recovered model capacity beyond the former200k adapter", async (t) => {
+test("native1m resumption uses recovered model capacity beyond the former200k adapter", async () => {
   const native = "claude-opus-5-5";
   const f = await fixture(
-    t,
     (_body, res, count) =>
       send(
         res,
@@ -1432,25 +1469,23 @@ test("native1m resumption uses recovered model capacity beyond the former200k ad
     system: "",
     maxTokens: 32000,
     maxTurns: 3,
-    signal: t.signal,
+    signal: testSignal(),
     onEvent: () => {},
   });
   assert.equal(f.bodies.length, 2);
-  assert.equal(f.bodies[1].messages.at(-1).role, "assistant");
+  assert.equal(lastMessage(at(f.bodies, 1)).role, "assistant");
   assert.ok(f.betas.every((beta) => !beta?.includes(LONG_CONTEXT_BETA)));
 });
 
-test("automatic HTTP compaction preserves archived history and sends only summary plus paired tail", async (t) => {
-  const f = await fixture(t, (body, res) =>
+test("automatic HTTP compaction preserves archived history and sends only summary plus paired tail", async () => {
+  const f = await fixture((body, res) =>
     send(
       res,
-      body.messages
-        .at(-1)
-        .content.some(
-          (block: any) =>
-            block.type === "text" &&
-            block.text.includes("Create a continuation summary"),
-        )
+      lastMessage(body).content.some(
+        (block) =>
+          block.type === "text" &&
+          block.text?.includes("Create a continuation summary"),
+      )
         ? summary
         : "Done",
     ),
@@ -1470,24 +1505,22 @@ test("automatic HTTP compaction preserves archived history and sends only summar
     maxTurns: 2,
     maxApiAttempts: 2,
     compactionState: state,
-    signal: t.signal,
+    signal: testSignal(),
     onEvent: (event) => events.push(event),
   });
   assert.equal(f.bodies.length, 2);
   assert.equal(result.turns, 1);
   assert.equal(activeContextStart(messages), 2);
   assert.deepEqual(messages.slice(0, 2), old.slice(0, 2));
-  assert.equal(f.bodies[1].messages.length, 1);
-  assert.equal(f.bodies[1].messages[0].role, "user");
-  assert.equal(f.bodies[1].messages[0].content.length, 2);
-  assert.match(
-    f.bodies[1].messages[0].content[0].text,
-    /Continue editing a\.ts\.[\s\S]*\n$/,
-  );
-  assert.deepEqual(f.bodies[1].messages[0].content[1], text("next"));
+  assert.equal(at(f.bodies, 1).messages.length, 1);
+  const rebuilt = at(at(f.bodies, 1).messages, 0);
+  assert.equal(rebuilt.role, "user");
+  assert.equal(rebuilt.content.length, 2);
+  assert.match(firstText(rebuilt), /Continue editing a\.ts\.[\s\S]*\n$/);
+  assert.deepEqual(rebuilt.content[1], text("next"));
   assert.ok(!JSON.stringify(f.bodies[1]).includes("Original answer"));
-  assert.deepEqual(f.bodies[0].thinking, f.bodies[1].thinking);
-  assert.equal(f.bodies[0].system, "Project instructions");
+  assert.deepEqual(at(f.bodies, 0).thinking, at(f.bodies, 1).thinking);
+  assert.equal(at(f.bodies, 0).system, "Project instructions");
   assert.ok(
     events.some(
       (event) => event.type === "compaction" && event.stage === "complete",
@@ -1501,15 +1534,15 @@ test("automatic HTTP compaction preserves archived history and sends only summar
   );
   assert.ok(
     f.bodies.every((body) =>
-      body.messages.every((message: any) => Object.keys(message).length === 2),
+      body.messages.every((message) => Object.keys(message).length === 2),
     ),
   );
   assert.equal(state.turnCounter, 1);
 });
 
-test("compaction cannot execute returned tools and keeps original context after an invalid summary", async (t) => {
+test("compaction cannot execute returned tools and keeps original context after an invalid summary", async () => {
   let called = 0;
-  const f = await fixture(t, (_body, res, count) =>
+  const f = await fixture((_body, res, count) =>
     count === 1 ? send(res, "", { tool: true }) : send(res),
   );
   const messages: Message[] = [
@@ -1534,7 +1567,7 @@ test("compaction cannot execute returned tools and keeps original context after 
     autoCompactWindow: "200k",
     maxTurns: 1,
     compactionState: state,
-    signal: t.signal,
+    signal: testSignal(),
     onEvent: () => {},
   });
   assert.equal(called, 0);
@@ -1543,8 +1576,8 @@ test("compaction cannot execute returned tools and keeps original context after 
   assert.ok(JSON.stringify(f.bodies[1]).includes("Original answer"));
 });
 
-test("summary forks preserve parent tool schemas/system/thinking while refusing tool execution", async (t) => {
-  const f = await fixture(t, (_body, res) => send(res, "", { tool: true }), {
+test("summary forks preserve parent tool schemas/system/thinking while refusing tool execution", async () => {
+  const f = await fixture((_body, res) => send(res, "", { tool: true }), {
     thinking: { mode: "disabled" },
   });
   const definitions = [
@@ -1559,7 +1592,7 @@ test("summary forks preserve parent tool schemas/system/thinking while refusing 
   assert.equal(
     await compactContext({
       provider: f.provider,
-      request: request(t, {
+      request: request({
         messages,
         system: "Parent project instructions",
         tools: definitions,
@@ -1569,15 +1602,15 @@ test("summary forks preserve parent tool schemas/system/thinking while refusing 
     }),
     false,
   );
-  assert.deepEqual(f.bodies[0].tools, definitions);
-  assert.equal(f.bodies[0].system, "Parent project instructions");
-  assert.deepEqual(f.bodies[0].thinking, { type: "disabled" });
+  assert.deepEqual(at(f.bodies, 0).tools, definitions);
+  assert.equal(at(f.bodies, 0).system, "Parent project instructions");
+  assert.deepEqual(at(f.bodies, 0).thinking, { type: "disabled" });
   assert.deepEqual(messages, original);
 });
 
-test("summary cancellation leaves history and failure counts unchanged", async (t) => {
+test("summary cancellation leaves history and failure counts unchanged", async () => {
   const controller = new AbortController();
-  const f = await fixture(t, (_body, res) => {
+  const f = await fixture((_body, res) => {
     res.writeHead(200, { "content-type": "text/event-stream" });
     res.write('data: {"type":"ping"}\n\n');
     setTimeout(() => controller.abort(), 20);
@@ -1588,7 +1621,7 @@ test("summary cancellation leaves history and failure counts unchanged", async (
   await assert.rejects(
     compactContext({
       provider: f.provider,
-      request: request(t, { messages, signal: controller.signal }),
+      request: request({ messages, signal: controller.signal }),
       state,
       onEvent: () => {},
     }),
@@ -1599,7 +1632,7 @@ test("summary cancellation leaves history and failure counts unchanged", async (
   assert.equal(f.bodies.length, 1);
 });
 
-test("compaction failure and rapid-refill breakers prevent further summary dispatch", async (t) => {
+test("compaction failure and rapid-refill breakers prevent further summary dispatch", async () => {
   let calls = 0;
   const provider: Provider = {
     async complete() {
@@ -1612,7 +1645,7 @@ test("compaction failure and rapid-refill breakers prevent further summary dispa
   for (let i = 0; i < 4; i++)
     await compactContext({
       provider,
-      request: request(t, { messages }),
+      request: request({ messages }),
       state,
       onEvent: () => {},
     });
@@ -1627,14 +1660,14 @@ test("compaction failure and rapid-refill breakers prevent further summary dispa
   };
   await compactContext({
     provider,
-    request: request(t, { messages }),
+    request: request({ messages }),
     state: rapid,
     onEvent: () => {},
   });
   assert.equal(calls, 3);
 });
 
-test("retained tool tails stay paired and old usage cannot defeat the new boundary", async (t) => {
+test("retained tool tails stay paired and old usage cannot defeat the new boundary", async () => {
   const messages: Message[] = [
     user("old"),
     {
@@ -1660,11 +1693,11 @@ test("retained tool tails stay paired and old usage cannot defeat the new bounda
       content: [{ type: "tool_result", tool_use_id: "read", content: "file" }],
     },
   ];
-  const f = await fixture(t, (_body, res) => send(res, summary));
+  const f = await fixture((_body, res) => send(res, summary));
   assert.equal(
     await compactContext({
       provider: f.provider,
-      request: request(t, { messages }),
+      request: request({ messages }),
       state: freshCompactionState(),
       onEvent: () => {},
     }),
@@ -1678,8 +1711,8 @@ test("retained tool tails stay paired and old usage cannot defeat the new bounda
   assert.equal(projected[2]?.content[0]?.type, "tool_result");
 });
 
-test("summary dispatch shares API admission and disabled compaction makes no hidden model call", async (t) => {
-  const f = await fixture(t, (_body, res) => send(res, summary));
+test("summary dispatch shares API admission and disabled compaction makes no hidden model call", async () => {
+  const f = await fixture((_body, res) => send(res, summary));
   const messages = seeded(190000);
   await assert.rejects(
     runAgent({
@@ -1692,14 +1725,14 @@ test("summary dispatch shares API admission and disabled compaction makes no hid
       autoCompactWindow: "200k",
       maxTurns: 1,
       maxApiAttempts: 1,
-      signal: t.signal,
+      signal: testSignal(),
       onEvent: () => {},
     }),
     /attempt budget/,
   );
   assert.equal(f.bodies.length, 1);
   assert.equal(activeContextStart(messages), 2);
-  const disabled = await fixture(t, (_body, res) => send(res));
+  const disabled = await fixture((_body, res) => send(res));
   await runAgent({
     provider: disabled.provider,
     tools,
@@ -1710,17 +1743,16 @@ test("summary dispatch shares API admission and disabled compaction makes no hid
     autoCompactWindow: "200k",
     maxTurns: 1,
     autoCompact: false,
-    signal: t.signal,
+    signal: testSignal(),
     onEvent: () => {},
   });
   assert.equal(disabled.bodies.length, 1);
   assert.ok(JSON.stringify(disabled.bodies[0]).includes("Original answer"));
 });
 
-test("budget exhaustion before or during a summary is terminal without failure-count or history changes", async (t) => {
+test("budget exhaustion before or during a summary is terminal without failure-count or history changes", async () => {
   for (const allowance of [0, 1]) {
     const f = await fixture(
-      t,
       (_body, res) => {
         res.writeHead(503);
         res.end();
@@ -1730,8 +1762,8 @@ test("budget exhaustion before or during a summary is terminal without failure-c
     const messages = seeded(),
       before = structuredClone(messages),
       state = freshCompactionState();
-    messages[1]!.usage!.input_tokens = 190000;
-    before[1]!.usage!.input_tokens = 190000;
+    usageOf(at(messages, 1)).input_tokens = 190000;
+    usageOf(at(before, 1)).input_tokens = 190000;
     await assert.rejects(
       runAgent({
         provider: f.provider,
@@ -1744,7 +1776,7 @@ test("budget exhaustion before or during a summary is terminal without failure-c
         maxTurns: 1,
         maxApiAttempts: allowance,
         compactionState: state,
-        signal: t.signal,
+        signal: testSignal(),
         onEvent: () => {},
       }),
       { name: "ApiAttemptBudgetExhausted" },
@@ -1755,14 +1787,14 @@ test("budget exhaustion before or during a summary is terminal without failure-c
   }
 });
 
-test("an observer error after summary commit does not count the accepted summary as a failure", async (t) => {
-  const f = await fixture(t, (_body, res) => send(res, summary));
+test("an observer error after summary commit does not count the accepted summary as a failure", async () => {
+  const f = await fixture((_body, res) => send(res, summary));
   const messages = seeded(),
     state = freshCompactionState();
   await assert.rejects(
     compactContext({
       provider: f.provider,
-      request: request(t, { messages }),
+      request: request({ messages }),
       state,
       onEvent: (event) => {
         if (event.type === "compaction" && event.stage === "complete")
@@ -1776,8 +1808,8 @@ test("an observer error after summary commit does not count the accepted summary
 });
 
 // Last tests exercise the process-wide long-context refusal state.
-test("a failed no-beta resend does not prove rejection or suppress the next query", async (t) => {
-  const f = await fixture(t, (_body, res, count) => {
+test("a failed no-beta resend does not prove rejection or suppress the next query", async () => {
+  const f = await fixture((_body, res, count) => {
     if (count <= 2) {
       res.writeHead(400, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: { message: "invalid beta flag" } }));
@@ -1785,19 +1817,19 @@ test("a failed no-beta resend does not prove rejection or suppress the next quer
   });
   const tagged = "claude-sonnet-4-5[1m]";
   await assert.rejects(
-    f.provider.complete(request(t, { model: tagged })),
+    f.provider.complete(request({ model: tagged })),
     /HTTP error400|HTTP error 400/,
   );
-  await f.provider.complete(request(t, { model: tagged }));
+  await f.provider.complete(request({ model: tagged }));
   assert.ok(f.betas[0]?.includes(LONG_CONTEXT_BETA));
   assert.equal(f.betas[1], undefined);
   assert.ok(f.betas[2]?.includes(LONG_CONTEXT_BETA));
   assert.equal(f.provider.contextWindowTokens(tagged), 1000000);
-  assert.equal(f.bodies[0].model, model);
+  assert.equal(at(f.bodies, 0).model, model);
 });
 
-test("successful message-start after no-beta resend latches the model and shrinks future windows", async (t) => {
-  const f = await fixture(t, (_body, res, count) => {
+test("successful message-start after no-beta resend latches the model and shrinks future windows", async () => {
+  const f = await fixture((_body, res, count) => {
     if (count === 1) {
       res.writeHead(400, { "content-type": "application/json" });
       res.end(
@@ -1808,10 +1840,10 @@ test("successful message-start after no-beta resend latches the model and shrink
     } else send(res);
   });
   const tagged = "claude-sonnet-4-5[1m]";
-  await f.provider.complete(request(t, { model: tagged }));
+  await f.provider.complete(request({ model: tagged }));
   assert.equal(f.provider.contextWindowTokens(tagged), 200000);
   const next = new AnthropicProvider({ apiKey: "not-used" });
   assert.equal(next.contextWindowTokens(tagged), 200000);
-  await f.provider.complete(request(t, { model: tagged }));
+  await f.provider.complete(request({ model: tagged }));
   assert.equal(f.betas[2], undefined);
 });

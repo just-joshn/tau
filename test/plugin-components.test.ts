@@ -1,4 +1,4 @@
-import test from "node:test";
+import { onTestFinished, test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   mkdir,
@@ -21,14 +21,14 @@ import {
   selectOrdinaryPluginPrecedence,
 } from "../src/plugin-components.js";
 
-async function fixture(
-  t: test.TestContext,
-  manifest: Record<string, unknown> = { name: "owned" },
-) {
+const present = <T>(value: T | undefined): T =>
+  value ?? assert.fail("missing value");
+
+async function fixture(manifest: Record<string, unknown> = { name: "owned" }) {
   const workspace = await mkdtemp(join(tmpdir(), "tau-plugin-components-")),
     root = join(workspace, "plugin");
   await mkdir(root);
-  t.after(() => rm(workspace, { recursive: true, force: true }));
+  onTestFinished(() => rm(workspace, { recursive: true, force: true }));
   const put = async (
     path: string,
     data: string | object = "Owned document",
@@ -53,8 +53,8 @@ async function fixture(
 const markdown = (fields: string, body = "Owned test body") =>
   `---\n${fields}\n---\n${body}`;
 
-test("recursive plugin command namespaces and SKILL.md dominance preserve authored bodies without execution", async (t) => {
-  const f = await fixture(t);
+test("recursive plugin command namespaces and SKILL.md dominance preserve authored bodies without execution", async () => {
+  const f = await fixture();
   await f.put("commands/outer/normal.md", "Owned regular");
   await f.put(
     "commands/outer/skill/SKILL.md",
@@ -76,20 +76,23 @@ test("recursive plugin command namespaces and SKILL.md dominance preserve author
     ],
   );
   assert.equal(
-    result.prompts[1]!.body,
+    present(result.prompts[1]).body,
     "Owned $ARGUMENTS ${CLAUDE_PLUGIN_ROOT}",
   );
-  assert.equal(result.prompts[1]!.info.displayName, "owned:outer:display");
-  assert.deepEqual(result.prompts[1]!.info.pluginSource.provenance, {
+  assert.equal(
+    present(result.prompts[1]).info.displayName,
+    "owned:outer:display",
+  );
+  assert.deepEqual(present(result.prompts[1]).info.pluginSource.provenance, {
     authored: "owned test fixture",
   });
-  assert.ok(Object.isFrozen(result.prompts[1]!.info));
-  assert.ok(Object.isFrozen(result.prompts[1]!.frontmatter));
+  assert.ok(Object.isFrozen(present(result.prompts[1]).info));
+  assert.ok(Object.isFrozen(present(result.prompts[1]).frontmatter));
   assert.deepEqual(result.diagnostics, []);
 });
 
-test("manifest named source/inline command overrides win over frontmatter in the source order", async (t) => {
-  const f = await fixture(t, {
+test("manifest named source/inline command overrides win over frontmatter in the source order", async () => {
+  const f = await fixture({
     name: "owned",
     commands: {
       named: {
@@ -131,14 +134,14 @@ test("manifest named source/inline command overrides win over frontmatter in the
       ["owned:inline", "Inline manifest description", ["Edit"]],
     ],
   );
-  assert.equal(result.prompts[0]!.info.argumentHint, "[owned]");
-  assert.equal(result.prompts[0]!.info.model, "mapped-sonnet");
-  assert.deepEqual(result.prompts[0]!.info.disallowedTools, ["Write"]);
-  assert.equal(result.prompts[1]!.info.baseDir, f.root);
+  assert.equal(present(result.prompts[0]).info.argumentHint, "[owned]");
+  assert.equal(present(result.prompts[0]).info.model, "mapped-sonnet");
+  assert.deepEqual(present(result.prompts[0]).info.disallowedTools, ["Write"]);
+  assert.equal(present(result.prompts[1]).info.baseDir, f.root);
 });
 
-test("direct skill names use declared name while a skill container uses sanitized child directory identity", async (t) => {
-  const f = await fixture(t, { name: "owned", skills: ["./direct"] });
+test("direct skill names use declared name while a skill container uses sanitized child directory identity", async () => {
+  const f = await fixture({ name: "owned", skills: ["./direct"] });
   await f.put(
     "direct/SKILL.md",
     markdown(
@@ -162,16 +165,16 @@ test("direct skill names use declared name while a skill container uses sanitize
     ["owned:child-space", "owned:direct-declared"],
   );
   assert.equal(
-    result.prompts[0]!.info.displayName,
+    present(result.prompts[0]).info.displayName,
     "owned:frontmatter-display",
   );
-  assert.equal(result.prompts[1]!.info.userInvocable, false);
-  assert.equal(result.prompts[1]!.info.disableModelInvocation, true);
+  assert.equal(present(result.prompts[1]).info.userInvocable, false);
+  assert.equal(present(result.prompts[1]).info.disableModelInvocation, true);
   assert.equal(result.prompts.length, 2);
 });
 
-test("plugin agent parsing preserves plugin namespace and metadata while ignoring stronger ordinary-agent fields", async (t) => {
-  const f = await fixture(t);
+test("plugin agent parsing preserves plugin namespace and metadata while ignoring stronger ordinary-agent fields", async () => {
+  const f = await fixture();
   await f.put(
     "agents/group/a.md",
     markdown(
@@ -189,7 +192,7 @@ test("plugin agent parsing preserves plugin namespace and metadata while ignorin
     result.agents.map((d) => d.agentType),
     ["owned:group:Named", "owned:unnamed"],
   );
-  const a = result.agents[0]!;
+  const a = present(result.agents[0]);
   assert.deepEqual(a.tools, ["Read", "Write", "Edit"]);
   assert.deepEqual(a.disallowedTools, ["Bash"]);
   assert.deepEqual(a.skills, ["owned:helper"]);
@@ -212,8 +215,8 @@ test("plugin agent parsing preserves plugin namespace and metadata while ignorin
   );
 });
 
-test("plugin agent optional leaf names coerce scalars and bound the leaf rather than the composed namespace", async (t) => {
-  const f = await fixture(t);
+test("plugin agent optional leaf names coerce scalars and bound the leaf rather than the composed namespace", async () => {
+  const f = await fixture();
   await f.put("agents/a.md", markdown("name: 42", "Owned scalar name"));
   await f.put(
     "agents/b.md",
@@ -232,8 +235,8 @@ test("plugin agent optional leaf names coerce scalars and bound the leaf rather 
   );
 });
 
-test("invalid skill hooks strip hooks and grants together while retaining body and declared denies", async (t) => {
-  const f = await fixture(t);
+test("invalid skill hooks strip hooks and grants together while retaining body and declared denies", async () => {
+  const f = await fixture();
   await f.put(
     "skills/a/SKILL.md",
     markdown(
@@ -248,10 +251,10 @@ test("invalid skill hooks strip hooks and grants together while retaining body a
         throw new Error("Owned invalid guard");
       },
     });
-  assert.equal(result.prompts[0]!.body, "Owned surviving body");
-  assert.deepEqual(result.prompts[0]!.info.allowedTools, []);
-  assert.deepEqual(result.prompts[0]!.info.disallowedTools, ["Bash"]);
-  assert.equal(result.prompts[0]!.info.hooks, undefined);
+  assert.equal(present(result.prompts[0]).body, "Owned surviving body");
+  assert.deepEqual(present(result.prompts[0]).info.allowedTools, []);
+  assert.deepEqual(present(result.prompts[0]).info.disallowedTools, ["Bash"]);
+  assert.equal(present(result.prompts[0]).info.hooks, undefined);
   const refused = await loadPluginComponentDefinitions({
     plugins,
     rejectInvalidHooks: true,
@@ -259,8 +262,8 @@ test("invalid skill hooks strip hooks and grants together while retaining body a
   assert.deepEqual(refused.prompts, []);
 });
 
-test("legacy command hooks cannot gain skill hooks; guarded legacy hooks lose grants while SKILL commands validate", async (t) => {
-  const f = await fixture(t);
+test("legacy command hooks cannot gain skill hooks; guarded legacy hooks lose grants while SKILL commands validate", async () => {
+  const f = await fixture();
   await f.put(
     "commands/legacy.md",
     markdown("allowed-tools: Read\nhooks: {Stop: []}", "Owned legacy"),
@@ -284,9 +287,13 @@ test("legacy command hooks cannot gain skill hooks; guarded legacy hooks lose gr
       return value;
     },
   });
-  const legacy = result.prompts.find((d) => d.info.name === "owned:legacy")!,
-    guarded = result.prompts.find((d) => d.info.name === "owned:guarded")!,
-    skill = result.prompts.find((d) => d.info.name === "owned:skill")!;
+  const legacy = present(
+      result.prompts.find((d) => d.info.name === "owned:legacy"),
+    ),
+    guarded = present(
+      result.prompts.find((d) => d.info.name === "owned:guarded"),
+    ),
+    skill = present(result.prompts.find((d) => d.info.name === "owned:skill"));
   assert.deepEqual(legacy.info.allowedTools, ["Read"]);
   assert.equal(legacy.info.hooks, undefined);
   assert.deepEqual(guarded.info.allowedTools, []);
@@ -295,8 +302,8 @@ test("legacy command hooks cannot gain skill hooks; guarded legacy hooks lose gr
   assert.equal(validations, 1);
 });
 
-test("descendant confinement excludes exterior links, recursive command links and reserved cache aliases", async (t) => {
-  const f = await fixture(t);
+test("descendant confinement excludes exterior links, recursive command links and reserved cache aliases", async () => {
+  const f = await fixture();
   await f.put("commands/a.md", "Owned command");
   await f.put("skills/good/SKILL.md", "Owned skill");
   await f.put(".mcpb-cache/skill/SKILL.md", "Owned excluded cache");
@@ -323,8 +330,8 @@ test("descendant confinement excludes exterior links, recursive command links an
   );
 });
 
-test("post-catalog component swaps are refused before reading changed roots", async (t) => {
-  const f = await fixture(t);
+test("post-catalog component swaps are refused before reading changed roots", async () => {
+  const f = await fixture();
   await f.put("commands/a.md", "Owned before swap");
   const plugins = await f.catalog();
   const outside = join(f.workspace, "outside");
@@ -337,9 +344,9 @@ test("post-catalog component swaps are refused before reading changed roots", as
   assert.ok(result.diagnostics.some((d) => d.reason === "path-changed"));
 });
 
-test("ordinary admitted inline plugins override exact installed names and installed names override skills-dir", async (t) => {
-  const f = await fixture(t);
-  const base = (await f.catalog())[0]!;
+test("ordinary admitted inline plugins override exact installed names and installed names override skills-dir", async () => {
+  const f = await fixture();
+  const base = present((await f.catalog())[0]);
   const installed: CatalogPlugin = {
       ...base,
       source: "owned@market",
@@ -372,8 +379,8 @@ test("ordinary admitted inline plugins override exact installed names and instal
   );
 });
 
-test("read bounds, malformed deny lists and host admission remain effective without executing source", async (t) => {
-  const f = await fixture(t);
+test("read bounds, malformed deny lists and host admission remain effective without executing source", async () => {
+  const f = await fixture();
   await f.put("commands/large.md", "x".repeat(PLUGIN_DOCUMENT_MAX_BYTES + 1));
   await f.put(
     "commands/invalid.md",
@@ -390,8 +397,8 @@ test("read bounds, malformed deny lists and host admission remain effective with
   assert.ok(result.diagnostics.some((d) => d.reason === "withheld"));
 });
 
-test("cancellation during host file policy rejects the registration snapshot", async (t) => {
-  const f = await fixture(t);
+test("cancellation during host file policy rejects the registration snapshot", async () => {
+  const f = await fixture();
   await f.put("commands/a.md", "Owned cancellation");
   const controller = new AbortController();
   await assert.rejects(

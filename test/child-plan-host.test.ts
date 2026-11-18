@@ -1,5 +1,6 @@
-import test, { type TestContext } from "node:test";
+import { test, onTestFinished } from "bun:test";
 import assert from "node:assert/strict";
+import { z } from "zod";
 import {
   mkdtemp,
   mkdir,
@@ -23,8 +24,16 @@ import {
 import { createTools } from "../src/tools.js";
 import { ReadState } from "../src/read-state.js";
 import type { ToolPolicy } from "../src/tool-policy.js";
-import type { ToolHookRuntime } from "../src/tool-hook-runtime.js";
-import type { PermissionMode, ToolExecutor, ToolUse } from "../src/types.js";
+import type {
+  ToolHookRuntime,
+  PreToolHookResult,
+} from "../src/tool-hook-runtime.js";
+import type {
+  PermissionMode,
+  ToolExecutor,
+  ToolResult,
+  ToolUse,
+} from "../src/types.js";
 const signal = () => new AbortController().signal;
 const call = (name = "ExitPlanMode", input: unknown = {}): ToolUse => ({
   type: "tool_use",
@@ -32,10 +41,30 @@ const call = (name = "ExitPlanMode", input: unknown = {}): ToolUse => ({
   name,
   input,
 });
-const pre = () => ({
-  additionalContext: [] as string[],
+const pre = (): PreToolHookResult => ({
+  additionalContext: [],
   preventContinuation: false,
 });
+function location(host: ReturnType<typeof createChildPlanHost>): string {
+  const value = host.location();
+  if (value === undefined)
+    throw Error("Expected a designated child plan location");
+  return value;
+}
+function builtinMode(value: string): PermissionMode {
+  switch (value) {
+    case "default":
+    case "acceptEdits":
+    case "plan":
+    case "bypassPermissions":
+      return value;
+    default:
+      throw Error("Fixture mode is outside builtin subset");
+  }
+}
+function data(result: ToolResult): Record<string, unknown> {
+  return z.record(z.string(), z.unknown()).parse(result.hookResponse);
+}
 const base: ToolExecutor = {
   definitions: [],
   async execute(tool) {
@@ -46,9 +75,9 @@ const base: ToolExecutor = {
     };
   },
 };
-async function fixture(t: TestContext) {
+async function fixture() {
   const root = await realpath(await mkdtemp(join(tmpdir(), "tau-child-plan-")));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  onTestFinished(() => rm(root, { recursive: true, force: true }));
   const cwd = join(root, "workspace"),
     plans = join(root, "owned-config", "plans");
   await mkdir(cwd);
@@ -103,7 +132,12 @@ async function fixture(t: TestContext) {
         try {
           return await readFile(context.canonicalPath, "utf8");
         } catch (error) {
-          if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+          if (
+            error instanceof Error &&
+            "code" in error &&
+            error.code === "ENOENT"
+          )
+            return null;
           throw error;
         }
       },
@@ -171,8 +205,8 @@ async function fixture(t: TestContext) {
   };
 }
 
-test("child designated files share session slug and use exact actor suffix without changing main designation", async (t) => {
-  const f = await fixture(t),
+test("child designated files share session slug and use exact actor suffix without changing main designation", async () => {
+  const f = await fixture(),
     main = f.files.path("owned-session"),
     first = f.host(),
     second = f.host({ actor: { agentId: "sibling" } });
@@ -188,15 +222,15 @@ test("child designated files share session slug and use exact actor suffix witho
   assert.equal(f.files.path("owned-session"), main);
   assert.equal(first.sessionId, "owned-session");
 });
-test("coherent child Write→Read→Edit designated plan outside workspace→Exit asks and restores shared mode", async (t) => {
-  const f = await fixture(t),
+test("coherent child Write→Read→Edit designated plan outside workspace→Exit asks and restores shared mode", async () => {
+  const f = await fixture(),
     host = f.host(),
-    target = host.location()!,
+    target = location(host),
     state = new ReadState();
   const tools = host.wrap(() =>
     createTools({
       cwd: f.cwd,
-      mode: f.state().mode as PermissionMode,
+      mode: builtinMode(f.state().mode),
       policy: f.policy(),
       readState: state,
       ...host.fileAccess,
@@ -240,14 +274,14 @@ test("coherent child Write→Read→Edit designated plan outside workspace→Exi
   assert.equal(result.is_error, undefined);
   assert.equal(f.state().mode, "acceptEdits");
   assert.equal(f.counts().approvals, 1);
-  assert.equal((result.hookResponse as any).isAgent, true);
-  assert.equal((result.hookResponse as any).filePath, target);
-  assert.equal((result.hookResponse as any).plan, "Owned plan beta\n");
+  assert.equal(data(result).isAgent, true);
+  assert.equal(data(result).filePath, target);
+  assert.equal(data(result).plan, "Owned plan beta\n");
   assert.deepEqual(model.input, {});
   assert.equal(await readFile(target, "utf8"), "Owned plan beta\n");
 });
-test("Enter child guard rejects before hooks, storage, permissions and approvals", async (t) => {
-  const f = await fixture(t),
+test("Enter child guard rejects before hooks, storage, permissions and approvals", async () => {
+  const f = await fixture(),
     tools = f.host().wrap(base);
   for (const input of [{}, { unexpected: true }]) {
     const result = await tools.execute(call("EnterPlanMode", input), signal());
@@ -262,10 +296,10 @@ test("Enter child guard rejects before hooks, storage, permissions and approvals
   });
   assert.equal(f.state().mode, "plan");
 });
-test("hook allow without update still asks; validated full update+allow satisfies interaction only after full host allow", async (t) => {
-  const f = await fixture(t),
+test("hook allow without update still asks; validated full update+allow satisfies interaction only after full host allow", async () => {
+  const f = await fixture(),
     host = f.host(),
-    target = host.location()!;
+    target = location(host);
   await writeFile(target, "disk");
   f.setBefore(async () => ({ ...pre(), permission: "allow" }));
   f.setApproval({ approved: false, reason: "Owned reject" });
@@ -296,8 +330,8 @@ test("hook allow without update still asks; validated full update+allow satisfie
   await assert.rejects(readFile(join(f.cwd, "forged")), { code: "ENOENT" });
   await assert.rejects(readFile(join(f.cwd, "model")), { code: "ENOENT" });
 });
-test("explicit parent ask/deny and protected full-host denial survive validated hook interaction exception", async (t) => {
-  const f = await fixture(t);
+test("explicit parent ask/deny and protected full-host denial survive validated hook interaction exception", async () => {
+  const f = await fixture();
   f.setBefore(async (_tool, _signal, validate) => ({
     ...pre(),
     permission: "allow",
@@ -334,8 +368,8 @@ test("explicit parent ask/deny and protected full-host denial survive validated 
   assert.equal(f.state().mode, "plan");
   assert.equal(f.counts().saves, 0);
 });
-test("parent denial installed during actual approval prevents plan persistence and mode transition", async (t) => {
-  const f = await fixture(t),
+test("parent denial installed during actual approval prevents plan persistence and mode transition", async () => {
+  const f = await fixture(),
     host = f.host({
       async approve() {
         f.setPolicy({ allowedTools: [], disallowedTools: ["ExitPlanMode"] });
@@ -348,8 +382,8 @@ test("parent denial installed during actual approval prevents plan persistence a
   assert.equal(f.counts().saves, 0);
   assert.equal(f.counts().setters, 0);
 });
-test("approved ordinary async Exit uses explicit bridge but never invokes shared session setter", async (t) => {
-  const f = await fixture(t);
+test("approved ordinary async Exit uses explicit bridge but never invokes shared session setter", async () => {
+  const f = await fixture();
   let approvals = 0;
   const host = f.host({
     isAsync: true,
@@ -364,7 +398,7 @@ test("approved ordinary async Exit uses explicit bridge but never invokes shared
   });
   const result = await host.wrap(base).execute(call(), signal());
   assert.equal(result.is_error, undefined);
-  assert.equal((result.hookResponse as any).isAgent, true);
+  assert.equal(data(result).isAgent, true);
   assert.equal(f.state().mode, "plan");
   assert.equal(approvals, 1);
   assert.equal(
@@ -372,8 +406,8 @@ test("approved ordinary async Exit uses explicit bridge but never invokes shared
     false,
   );
 });
-test("approval empty replacement rereads fresh designated file; an approval UI mode change is preserved", async (t) => {
-  const f = await fixture(t);
+test("approval empty replacement rereads fresh designated file; an approval UI mode change is preserved", async () => {
+  const f = await fixture();
   let target = "";
   const host = f.host({
     async approve() {
@@ -385,25 +419,25 @@ test("approval empty replacement rereads fresh designated file; an approval UI m
       return { approved: true, updatedInput: {} };
     },
   });
-  target = host.location()!;
+  target = location(host);
   await writeFile(target, "old snapshot");
   const result = await host.wrap(base).execute(call(), signal());
   assert.equal(result.is_error, undefined);
-  assert.equal((result.hookResponse as any).plan, "fresh after approval");
-  assert.equal((result.hookResponse as any).planWasEdited, undefined);
+  assert.equal(data(result).plan, "fresh after approval");
+  assert.equal(data(result).planWasEdited, undefined);
   assert.equal(f.state().mode, "bypassPermissions");
   assert.equal(f.counts().saves, 0);
   assert.equal(f.counts().setters, 0);
 });
-test("session change during approval and public file admission prevents cross-session effects", async (t) => {
-  const f = await fixture(t),
+test("session change during approval and public file admission prevents cross-session effects", async () => {
+  const f = await fixture(),
     host = f.host({
       async approve() {
         f.setSession("different");
         return { approved: true, updatedInput: { plan: "no" } };
       },
     }),
-    target = host.location()!;
+    target = location(host);
   const result = await host.wrap(base).execute(call(), signal());
   assert.equal(result.inputRejected, true);
   assert.equal(f.counts().saves, 0);
@@ -417,8 +451,8 @@ test("session change during approval and public file admission prevents cross-se
     /different active session/,
   );
 });
-test("fork, team, Doc and invalid actor metadata refuse this specific adapter", async (t) => {
-  const f = await fixture(t);
+test("fork, team, Doc and invalid actor metadata refuse this specific adapter", async () => {
+  const f = await fixture();
   for (const options of [
     { actor: { agentId: "owned-agent", builtInFork: true } },
     {
@@ -434,8 +468,8 @@ test("fork, team, Doc and invalid actor metadata refuse this specific adapter", 
   f.setState({ mode: "plan", planDoc: { id: "owned-doc" } });
   assert.throws(() => f.host(), /Doc/);
 });
-test("directory vetting refuses normalization storage and missing approval capability cannot fabricate approval", async (t) => {
-  const f = await fixture(t),
+test("directory vetting refuses normalization storage and missing approval capability cannot fabricate approval", async () => {
+  const f = await fixture(),
     denied = f.host({ vetDirectory: () => false });
   assert.equal(
     (await denied.wrap(base).execute(call(), signal())).inputRejected,
@@ -448,18 +482,32 @@ test("directory vetting refuses normalization storage and missing approval capab
   assert.equal(result.inputRejected, true);
   assert.equal(f.counts().approvals, 0);
   assert.equal(f.state().mode, "plan");
+  f.setReady(true);
+  const malformed = f.host({
+    async approve() {
+      const reply = { approved: true };
+      Object.defineProperty(reply, "approved", { value: "yes" });
+      return reply;
+    },
+  });
+  assert.equal(
+    (await malformed.wrap(base).execute(call(), signal())).is_error,
+    true,
+  );
+  assert.equal(f.counts().saves, 0);
+  assert.equal(f.counts().setters, 0);
 });
-test("child save cannot adopt an alternate target or move shared session designation", async (t) => {
-  const f = await fixture(t),
+test("child save cannot adopt an alternate target or move shared session designation", async () => {
+  const f = await fixture(),
     host = f.host({
       storage: {
-        read: f.options.storage.read,
+        read: (...args) => f.options.storage.read(...args),
         async save() {
           return { savedPath: join(f.plans, "different.md") };
         },
       },
     }),
-    target = host.location()!;
+    target = location(host);
   f.setBefore(async (_call, _signal, validate) => ({
     ...pre(),
     permission: "allow",
@@ -467,8 +515,8 @@ test("child save cannot adopt an alternate target or move shared session designa
   }));
   const result = await host.wrap(base).execute(call(), signal());
   assert.equal(result.is_error, undefined);
-  assert.equal((result.hookResponse as any).plan, "approved effective text");
-  assert.equal((result.hookResponse as any).filePath, undefined);
+  assert.equal(data(result).plan, "approved effective text");
+  assert.equal(data(result).filePath, undefined);
   assert.ok(
     f.notices.some((message) =>
       message.includes("unsupported alternate target"),
@@ -481,11 +529,11 @@ test("child save cannot adopt an alternate target or move shared session designa
     join(f.plans, "owned-shared-plan.md"),
   );
 });
-test("save failure retains approved text and reports notice while cancellation prevents the call", async (t) => {
-  const f = await fixture(t),
+test("save failure retains approved text and reports notice while cancellation prevents the call", async () => {
+  const f = await fixture(),
     failed = f.host({
       storage: {
-        read: f.options.storage.read,
+        read: (...args) => f.options.storage.read(...args),
         async save() {
           throw Error("Owned save failure");
         },
@@ -498,7 +546,7 @@ test("save failure retains approved text and reports notice while cancellation p
   }));
   const result = await failed.wrap(base).execute(call(), signal());
   assert.equal(result.is_error, undefined);
-  assert.equal((result.hookResponse as any).plan, "kept approved text");
+  assert.equal(data(result).plan, "kept approved text");
   assert.ok(f.notices.includes("Owned save failure"));
   assert.equal(f.state().mode, "acceptEdits");
   f.setState({ mode: "plan" });
@@ -516,10 +564,10 @@ test("save failure retains approved text and reports notice while cancellation p
   );
   assert.equal(f.state().mode, "plan");
 });
-test("file eligibility never waives explicit Read deny/Write ask or a symlinked save target", async (t) => {
-  const f = await fixture(t),
+test("file eligibility never waives explicit Read deny/Write ask or a symlinked save target", async () => {
+  const f = await fixture(),
     host = f.host(),
-    target = host.location()!;
+    target = location(host);
   const denied = createTools({
     cwd: f.cwd,
     mode: "plan",
@@ -568,6 +616,6 @@ test("file eligibility never waives explicit Read deny/Write ask or a symlinked 
   }));
   const result = await host.wrap(base).execute(call(), signal());
   assert.equal(result.is_error, undefined);
-  assert.equal((result.hookResponse as any).filePath, undefined);
+  assert.equal(data(result).filePath, undefined);
   assert.equal(await readFile(other, "utf8"), "unchanged");
 });

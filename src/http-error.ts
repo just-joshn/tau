@@ -124,7 +124,8 @@ export async function readErrorMetadata(
     return;
   const declared = Number(response.headers.get("content-length"));
   if (Number.isFinite(declared) && declared > 65536) return;
-  const reader = response.body.getReader();
+  const body: ReadableStream<Uint8Array> = response.body,
+    reader = body.getReader();
   const chunks: Uint8Array[] = [];
   let bytes = 0,
     expired = false;

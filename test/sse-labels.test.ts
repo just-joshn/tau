@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { createServer, type ServerResponse } from "node:http";
 import { setTimeout as pause } from "node:timers/promises";
-import { test, type TestContext } from "node:test";
+import { onTestFinished, test } from "bun:test";
+import { z } from "zod";
 import { AnthropicProvider } from "../src/provider.js";
 import { TransportTimeoutError } from "../src/deadline.js";
 import { resolveTimeoutPolicy } from "../src/timeout-policy.js";
@@ -39,29 +40,30 @@ const jsonReply = {
   stop_reason: "end_turn",
   usage: { input_tokens: 10, output_tokens: 3 },
 };
-const request = (
-  t: TestContext,
-  extra: Partial<CompletionRequest> = {},
-): CompletionRequest => ({
-  model: "fixture",
-  system: "",
-  messages: [{ role: "user", content: [{ type: "text", text: "hello" }] }],
-  tools: [],
-  maxTokens: 100,
-  signal: t.signal,
-  onText: () => {},
-  ...extra,
-});
+const request = (extra: Partial<CompletionRequest> = {}): CompletionRequest => {
+  const controller = new AbortController();
+  onTestFinished(() => controller.abort());
+  return {
+    model: "fixture",
+    system: "",
+    messages: [{ role: "user", content: [{ type: "text", text: "hello" }] }],
+    tools: [],
+    maxTokens: 100,
+    signal: controller.signal,
+    onText: () => {},
+    ...extra,
+  };
+};
+const requestBody = z.object({ stream: z.boolean() });
 async function fixture(
-  t: TestContext,
   stream: string | ((res: ServerResponse) => void),
   options: Partial<ConstructorParameters<typeof AnthropicProvider>[0]> = {},
 ) {
-  const bodies: Array<{ stream: boolean }> = [];
+  const bodies: Array<z.infer<typeof requestBody>> = [];
   const http = createServer(async (req, res) => {
     let raw = "";
     for await (const chunk of req) raw += String(chunk);
-    const body = JSON.parse(raw) as { stream: boolean };
+    const body = requestBody.parse(JSON.parse(raw));
     bodies.push(body);
     if (body.stream) {
       res.writeHead(200, { "content-type": "text/event-stream" });
@@ -73,7 +75,7 @@ async function fixture(
     }
   });
   await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve));
-  t.after(async () => {
+  onTestFinished(async () => {
     http.closeAllConnections();
     await new Promise<void>((resolve) => http.close(() => resolve()));
   });
@@ -90,17 +92,17 @@ async function fixture(
   };
 }
 
-test("named SSE succeeds once while a data-only stream uses one JSON fallback at the default retry allowance", async (t) => {
+test("named SSE succeeds once while a data-only stream uses one JSON fallback at the default retry allowance", async () => {
   for (const named of [true, false]) {
     const wire = named
       ? fixtureSse(events)
       : fixtureEvents(events)
           .map((event) => `data: ${JSON.stringify(event)}\n\n`)
           .join("");
-    const f = await fixture(t, wire);
+    const f = await fixture(wire);
     const displayed: string[] = [];
     const result = await f.provider.complete(
-      request(t, { onText: (text) => displayed.push(text) }),
+      request({ onText: (text) => displayed.push(text) }),
     );
     assert.deepEqual(
       f.bodies.map((body) => body.stream),
@@ -111,7 +113,7 @@ test("named SSE succeeds once while a data-only stream uses one JSON fallback at
   }
 });
 
-test("unknown, absent, empty and ping labels ignore data before JSON parsing or semantic dispatch", async (t) => {
+test("unknown, absent, empty and ping labels ignore data before JSON parsing or semantic dispatch", async () => {
   const ignored = [
     "data: {not-json}\n\n",
     "event:\ndata: {not-json}\n\n",
@@ -120,8 +122,8 @@ test("unknown, absent, empty and ping labels ignore data before JSON parsing or 
     'event: ping\ndata: {"type":"message_stop"}\n\n',
     'event: unknown\ndata: {"type":"error","error":{"type":"overloaded_error","message":"ignored"}}\n\n',
   ].join("");
-  const f = await fixture(t, ignored + fixtureSse(events));
-  assert.deepEqual((await f.provider.complete(request(t))).content, [
+  const f = await fixture(ignored + fixtureSse(events));
+  assert.deepEqual((await f.provider.complete(request())).content, [
     { type: "text", text: "mock done" },
   ]);
   assert.deepEqual(
@@ -130,7 +132,7 @@ test("unknown, absent, empty and ping labels ignore data before JSON parsing or 
   );
 });
 
-test("recognized SSE labels dispatch by body.type rather than requiring matching labels", async (t) => {
+test("recognized SSE labels dispatch by body.type rather than requiring matching labels", async () => {
   for (const label of [
     "message",
     "completion",
@@ -140,15 +142,15 @@ test("recognized SSE labels dispatch by body.type rather than requiring matching
     const wire = fixtureEvents(events)
       .map((event) => `event: ${label}\ndata: ${JSON.stringify(event)}\n\n`)
       .join("");
-    const f = await fixture(t, wire);
-    assert.deepEqual((await f.provider.complete(request(t))).content, [
+    const f = await fixture(wire);
+    assert.deepEqual((await f.provider.complete(request())).content, [
       { type: "text", text: "mock done" },
     ]);
     assert.equal(f.bodies.length, 1);
   }
 });
 
-test("wire error labels always take the error path even for malformed or output-shaped data", async (t) => {
+test("wire error labels always take the error path even for malformed or output-shaped data", async () => {
   for (const data of [
     "{bad-json}",
     JSON.stringify(start),
@@ -157,15 +159,12 @@ test("wire error labels always take the error path even for malformed or output-
     }),
   ]) {
     const f = await fixture(
-      t,
       `event: error\ndata: ${data}\n\n` + fixtureSse(events),
       { allowNonStreamingFallback: false },
     );
     const displayed: string[] = [];
     await assert.rejects(
-      f.provider.complete(
-        request(t, { onText: (text) => displayed.push(text) }),
-      ),
+      f.provider.complete(request({ onText: (text) => displayed.push(text) })),
       /Messages API returned a streaming error/,
     );
     assert.deepEqual(displayed, []);
@@ -173,7 +172,7 @@ test("wire error labels always take the error path even for malformed or output-
   }
 });
 
-test("future object body types and missing types are ignored without hiding known malformed bodies", async (t) => {
+test("future object body types and missing types are ignored without hiding known malformed bodies", async () => {
   const unknown = [
     { type: "future_body", value: 1 },
     {},
@@ -185,34 +184,32 @@ test("future object body types and missing types are ignored without hiding know
   ]
     .map((body) => `event: message\ndata: ${JSON.stringify(body)}\n\n`)
     .join("");
-  const f = await fixture(t, unknown + fixtureSse(events));
-  assert.deepEqual((await f.provider.complete(request(t))).content, [
+  const f = await fixture(unknown + fixtureSse(events));
+  assert.deepEqual((await f.provider.complete(request())).content, [
     { type: "text", text: "mock done" },
   ]);
   assert.equal(f.bodies.length, 1);
   const malformed = await fixture(
-    t,
     'event: message\ndata: {"type":"message_start","message":5}\n\n',
     { allowNonStreamingFallback: false },
   );
-  await assert.rejects(malformed.provider.complete(request(t)), /protocol/);
+  await assert.rejects(malformed.provider.complete(request()), /protocol/);
   assert.equal(malformed.bodies.length, 1);
 });
 
-test("recognized labels parse empty data and null, while non-null primitives and arrays can precede valid output", async (t) => {
+test("recognized labels parse empty data and null, while non-null primitives and arrays can precede valid output", async () => {
   for (const data of ["", "null"]) {
-    const f = await fixture(t, `event: message\ndata: ${data}\n\n`, {
+    const f = await fixture(`event: message\ndata: ${data}\n\n`, {
       allowNonStreamingFallback: false,
     });
-    await assert.rejects(f.provider.complete(request(t)), /protocol/);
+    await assert.rejects(f.provider.complete(request()), /protocol/);
     assert.equal(f.bodies.length, 1);
   }
   for (const data of ["1", "false", '"text"', "[]"]) {
     const f = await fixture(
-      t,
       `event: message\ndata: ${data}\n\n` + fixtureSse(events),
     );
-    assert.deepEqual((await f.provider.complete(request(t))).content, [
+    assert.deepEqual((await f.provider.complete(request())).content, [
       { type: "text", text: "mock done" },
     ]);
     assert.equal(f.bodies.length, 1);
@@ -221,13 +218,11 @@ test("recognized labels parse empty data and null, while non-null primitives and
 
 test(
   "an unknown object from a recognized label renews semantic progress without replaying partial output",
-  { timeout: 5000 },
-  async (t) => {
+  async () => {
     const clock = new ManualClock();
     let output: ServerResponse | undefined,
       shown = "";
     const f = await fixture(
-      t,
       (res) => {
         output = res;
         res.write(fixtureSse(events.slice(0, 2)));
@@ -241,7 +236,7 @@ test(
       },
     );
     const pending = f.provider.complete(
-      request(t, {
+      request({
         onText: (text) => {
           shown += text;
         },
@@ -269,4 +264,5 @@ test(
     assert.equal(shown, "mock done");
     assert.equal(clock.pending, 0);
   },
+  { timeout: 5000 },
 );

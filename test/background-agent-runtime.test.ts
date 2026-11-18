@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "bun:test";
 import {
   createBackgroundAgentRuntime,
   ordinaryLocalAgentLaunchMode,
@@ -15,6 +15,11 @@ import type { Message, ToolResult, ToolUse } from "../src/types.js";
 import { runAgent } from "../src/agent.js";
 
 const signal = () => new AbortController().signal;
+const hasCode = (error: unknown, code: string) =>
+  typeof error === "object" &&
+  error !== null &&
+  "code" in error &&
+  error.code === code;
 function deferred<T>() {
   let resolve!: (value: T) => void, reject!: (reason?: unknown) => void;
   const promise = new Promise<T>((a, b) => {
@@ -129,6 +134,11 @@ function setup(patch: Partial<BackgroundAgentRuntimeOptions> = {}) {
     requests,
     order,
     diagnostics,
+    get request() {
+      const [first] = requests;
+      assert.ok(first);
+      return first;
+    },
     get executions() {
       return executions;
     },
@@ -194,11 +204,11 @@ test("launch persists before detached child start and parent-turn abort afterwar
   assert.equal(f.order[0], "persist:running");
   assert.equal(f.order[1], "run");
   parentTurn.abort();
-  assert.equal(f.requests[0]!.signal.aborted, false);
-  assert.equal(f.requests[0]!.isAsync, true);
-  assert.equal(f.requests[0]!.permissionPrompts, "avoid");
-  assert.equal(f.requests[0]!.plan.budget.ownership, "independent-query");
-  f.child.resolve({ messages: [...f.requests[0]!.messages, assistant()] });
+  assert.equal(f.request.signal.aborted, false);
+  assert.equal(f.request.isAsync, true);
+  assert.equal(f.request.permissionPrompts, "avoid");
+  assert.equal(f.request.plan.budget.ownership, "independent-query");
+  f.child.resolve({ messages: [...f.request.messages, assistant()] });
   await f.runtime.settled();
   assert.equal(f.runtime.get(p.agentId).status, "completed");
   assert.equal(f.notifications.length, 1);
@@ -218,26 +228,30 @@ test("immutable plan/progress/snapshots and fresh context never expose or mutate
     ownerAgentId: "owner",
     parentAgentId: "parent",
   });
-  (p.input as { prompt: string }).prompt = "MUTATED_AFTER_LAUNCH";
-  assert.equal(f.requests[0]!.plan.input.prompt, "OWNED_CHILD_REQUEST");
-  assert.ok(Object.isFrozen(f.requests[0]!.plan));
+  Reflect.set(p.input, "prompt", "MUTATED_AFTER_LAUNCH");
+  assert.equal(f.request.plan.input.prompt, "OWNED_CHILD_REQUEST");
+  assert.ok(Object.isFrozen(f.request.plan));
   const progress: Message[] = [
-    ...f.requests[0]!.messages,
+    ...f.request.messages,
     assistant("OWNED_PROGRESS"),
   ];
-  f.requests[0]!.onProgress({
+  f.request.onProgress({
     messages: progress,
     latestInputTokens: 10,
     cumulativeOutputTokens: 3,
   });
-  (progress[0]!.content[0] as { text: string }).text = "MUTATED_PROGRESS";
+  const [firstProgress] = progress;
+  assert.ok(firstProgress);
+  const [firstBlock] = firstProgress.content;
+  assert.ok(firstBlock);
+  Reflect.set(firstBlock, "text", "MUTATED_PROGRESS");
   const snapshot = f.runtime.get(p.agentId);
   assert.ok(Object.isFrozen(snapshot));
   assert.match(JSON.stringify(snapshot.messages), /OWNED_CHILD_REQUEST/);
   assert.throws(() => {
-    (snapshot.messages as Message[]).push(assistant());
+    Reflect.apply(Array.prototype.push, snapshot.messages, [assistant()]);
   }, TypeError);
-  f.child.resolve({ messages: [...f.requests[0]!.messages, assistant()] });
+  f.child.resolve({ messages: [...f.request.messages, assistant()] });
   await f.runtime.settled();
   assert.deepEqual(parent, before);
   assert.ok(!JSON.stringify(f.notifications).includes("PARENT_PRIVATE"));
@@ -249,7 +263,8 @@ test("live parent deny survives declared tool metadata and execution cannot muta
   const execute = deferred<void>();
   const f = setup({
     authorizeTool(call) {
-      (call.input as { path: string }).path = "AUTHORIZATION_MUST_NOT_REWRITE";
+      if (typeof call.input === "object" && call.input !== null)
+        Reflect.set(call.input, "path", "AUTHORIZATION_MUST_NOT_REWRITE");
       return denied ? "OWNED_LIVE_PARENT_DENY" : true;
     },
     async runChild(request) {
@@ -269,9 +284,9 @@ test("live parent deny survives declared tool metadata and execution cannot muta
   denied = true;
   execute.resolve();
   await f.runtime.settled();
-  assert.equal(executeResult!.permissionDenied, true);
+  assert.equal(executeResult?.permissionDenied, true);
   assert.equal(f.executions, 0);
-  assert.match(executeResult!.content, /OWNED_LIVE_PARENT_DENY/);
+  assert.match(executeResult?.content ?? "", /OWNED_LIVE_PARENT_DENY/);
 });
 
 test("TaskStop checks main-or-self ownership, awaits sweep but not child settlement, and retains retry handle", async () => {
@@ -290,7 +305,7 @@ test("TaskStop checks main-or-self ownership, awaits sweep but not child settlem
   });
   await assert.rejects(
     f.runtime.stop(p.agentId, { callerAgentId: "spawner" }),
-    (error) => (error as { code?: string }).code === "not_owner",
+    (error) => hasCode(error, "not_owner"),
   );
   let returned = false;
   const stopping = f.runtime
@@ -302,7 +317,7 @@ test("TaskStop checks main-or-self ownership, awaits sweep but not child settlem
   await Promise.resolve();
   assert.equal(returned, false);
   assert.equal(f.runtime.get(p.agentId).status, "killed");
-  assert.equal(f.requests[0]!.signal.aborted, true);
+  assert.equal(f.request.signal.aborted, true);
   sweep.resolve(2);
   assert.equal((await stopping).task_type, "local_agent");
   assert.equal(f.runtime.hasUnsettled, true);
@@ -312,15 +327,14 @@ test("TaskStop checks main-or-self ownership, awaits sweep but not child settlem
   );
   assert.equal(sweeps, 2);
   f.child.resolve({
-    messages: [...f.requests[0]!.messages, assistant("LATE_COMPLETION")],
+    messages: [...f.request.messages, assistant("LATE_COMPLETION")],
   });
   await f.runtime.settled();
   assert.equal(f.notifications.length, 1);
-  assert.equal(f.notifications[0]!.status, "killed");
+  assert.equal(f.notifications[0]?.status, "killed");
   assert.equal(f.runtime.get(p.agentId).result, undefined);
-  await assert.rejects(
-    f.runtime.stop(p.agentId),
-    (error) => (error as { code?: string }).code === "not_running",
+  await assert.rejects(f.runtime.stop(p.agentId), (error) =>
+    hasCode(error, "not_running"),
   );
 });
 
@@ -329,24 +343,34 @@ test("one child's completion/cancellation cannot settle or stop its sibling", as
     ["alpha", deferred<SubagentChildResult>()],
     ["beta", deferred<SubagentChildResult>()],
   ]);
+  const gate = (id: string) => {
+    const found = gates.get(id);
+    assert.ok(found);
+    return found;
+  };
   const f = setup({
-    runChild: (request) => gates.get(request.plan.agentId)!.promise,
+    runChild: (request) => gate(request.plan.agentId).promise,
   });
   await Promise.all([
     f.runtime.launch(plan("alpha"), { admissionSignal: signal() }),
     f.runtime.launch(plan("beta"), { admissionSignal: signal() }),
   ]);
   await f.runtime.stop("alpha");
-  gates.get("alpha")!.reject(new DOMException("stopped", "AbortError"));
+  gate("alpha").reject(new DOMException("stopped", "AbortError"));
   await f.runtime.settled("alpha");
   assert.equal(f.runtime.get("beta").status, "running");
   assert.equal(f.runtime.hasRunning, true);
-  gates.get("beta")!.resolve({ messages: [assistant("BETA_FINAL")] });
+  gate("beta").resolve({ messages: [assistant("BETA_FINAL")] });
   await f.runtime.settled();
-  assert.deepEqual(f.notifications.map((n) => [n.taskId, n.status]).sort(), [
-    ["alpha", "killed"],
-    ["beta", "completed"],
-  ]);
+  assert.deepEqual(
+    f.notifications
+      .map((n): [string, string] => [n.taskId, n.status])
+      .sort(([a], [b]) => a.localeCompare(b)),
+    [
+      ["alpha", "killed"],
+      ["beta", "completed"],
+    ],
+  );
 });
 
 test("notification enqueue failures are explicit and cannot rerun the child or claim another terminal notification", async () => {
@@ -430,7 +454,7 @@ test("admission abort during registration archives cancellation and never publis
     archived.map((value) => value.status),
     ["running", "killed"],
   );
-  assert.equal(archived[1]!.settled, true);
+  assert.equal(archived[1]?.settled, true);
   assert.equal(f.runtime.list().length, 0);
   assert.equal(f.requests.length, 0);
   assert.equal(f.notifications.length, 0);
@@ -463,7 +487,7 @@ test("host admission, isolation/metadata/prompt-policy guards and duplicate rese
   });
   await assert.rejects(
     duplicate.runtime.launch(plan(), { admissionSignal: signal() }),
-    (error) => (error as { code?: string }).code === "duplicate",
+    (error) => hasCode(error, "duplicate"),
   );
   registration.resolve();
   await launching;
@@ -479,7 +503,7 @@ test("required watchdog adapter receives progress and its timeout fails the task
     watchdog: {
       kind: "adapter",
       start: (request) => {
-        timeout = request.onTimeout;
+        timeout = (message) => request.onTimeout(message);
         return {
           progress: () => {
             progressSeen++;
@@ -492,14 +516,14 @@ test("required watchdog adapter receives progress and its timeout fails the task
     },
   });
   await f.runtime.launch(plan(), { admissionSignal: signal() });
-  f.requests[0]!.onProgress({ toolsInFlight: 1 });
+  f.request.onProgress({ toolsInFlight: 1 });
   assert.equal(progressSeen, 1);
   timeout("OWNED_STALL");
-  assert.equal(f.requests[0]!.signal.aborted, true);
+  assert.equal(f.request.signal.aborted, true);
   f.child.reject(new Error("abort surfaced"));
   await f.runtime.settled();
   assert.equal(f.runtime.get("owned-background").status, "failed");
-  assert.equal(f.notifications[0]!.error, "OWNED_STALL");
+  assert.equal(f.notifications[0]?.error, "OWNED_STALL");
   assert.equal(disposed, true);
 });
 
@@ -526,7 +550,10 @@ test("session close explicitly stops cooperative children and subscriptions expo
   await f.runtime.launch(plan("close-a"), { admissionSignal: signal() });
   await f.runtime.launch(plan("close-b"), { admissionSignal: signal() });
   await f.runtime.close();
-  assert.deepEqual(cleaned.sort(), ["close-a", "close-b"]);
+  assert.deepEqual(
+    cleaned.sort((a, b) => a.localeCompare(b)),
+    ["close-a", "close-b"],
+  );
   assert.equal(f.runtime.hasUnsettled, false);
   assert.ok(changes > 2);
   const before = changes;
@@ -535,7 +562,7 @@ test("session close explicitly stops cooperative children and subscriptions expo
   assert.equal(changes, before);
   await assert.rejects(
     f.runtime.launch(plan("after-close"), { admissionSignal: signal() }),
-    (error) => (error as { code?: string }).code === "closed",
+    (error) => hasCode(error, "closed"),
   );
 });
 
@@ -630,9 +657,9 @@ test("real child runAgent keeps report13, notification16 and cumulative child le
   await f.runtime.settled();
   assert.equal(requests, 2);
   assert.equal(f.executions, 1);
-  assert.equal(f.runtime.get("owned-background").result!.totalTokens, 13);
-  assert.equal(f.notifications[0]!.usage!.totalTokens, 16);
-  assert.equal(f.notifications[0]!.usage!.toolUses, 1);
+  assert.equal(f.runtime.get("owned-background").result?.totalTokens, 13);
+  assert.equal(f.notifications[0]?.usage?.totalTokens, 16);
+  assert.equal(f.notifications[0]?.usage?.toolUses, 1);
   assert.equal(cumulativeLedger, 26);
   assert.equal(childUsage, 26);
   assert.deepEqual(parent, before);

@@ -1,4 +1,4 @@
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 import type { LaunchConfiguration } from "./launch-configuration.js";
 import {
   createLocalSkillRegistry,
@@ -70,15 +70,15 @@ export interface SessionSkillHostOptions {
   launch: LaunchConfiguration;
   policy: ToolPolicy | (() => ToolPolicy);
   interactive: boolean;
-  sessionId(): string;
-  mode(): PermissionMode;
+  sessionId: () => string;
+  mode: () => PermissionMode;
   hooks: ToolHookRuntime;
-  model?(): string;
-  effortLevel?(): string | undefined;
-  approve(description: string): Promise<boolean>;
+  model?: () => string;
+  effortLevel?: () => string | undefined;
+  approve: (description: string) => Promise<boolean>;
   ignorePersistedTrust?: boolean;
   env?: NodeJS.ProcessEnv;
-  onDiagnostic?(message: string): void;
+  onDiagnostic?: (message: string) => void;
   registerHooks?(request: NonNullable<SkillEffectRequest["sessionHooks"]>): {
     registered: boolean;
     reason?: string;

@@ -70,7 +70,7 @@ function slashesBefore(text: string, at: number): number {
 
 function encodedMatch(text: string, requested: string): string | undefined {
   if (
-    !/[^\x00-\x7f]/.test(requested) ||
+    !/\P{ASCII}/u.test(requested) ||
     !text.includes("\\u") ||
     slashesBefore(requested, requested.length) % 2
   )
@@ -170,7 +170,7 @@ function matchText(text: string, requested: string): Match | undefined {
 function carryQuotes(replacement: string, matched: string): string {
   const double = /[“”]/.test(matched);
   const single = /[‘’]/.test(matched);
-  const characters = [...replacement];
+  const characters = Array.from(replacement);
   return characters
     .map((character, index) => {
       const before = characters[index - 1];

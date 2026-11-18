@@ -1,4 +1,4 @@
-import test from "node:test";
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   createPluginMcpDocument,
@@ -6,6 +6,9 @@ import {
 } from "../src/plugin-mcp.js";
 import type { CatalogPlugin, PluginComponent } from "../src/plugin-catalog.js";
 import { mcpServerPolicyAllows } from "../src/mcp-scopes.js";
+
+const present = <T>(value: T | undefined): T =>
+  value ?? assert.fail("missing value");
 
 const plugin = (
   components: PluginComponent[],
@@ -56,7 +59,7 @@ test("plugin MCP default file, additional file and inline sources merge in order
     "plugin:owned:shared",
     "plugin:owned:base",
   ]);
-  const shared = result.document.servers["plugin:owned:shared"]!;
+  const shared = present(result.document.servers["plugin:owned:shared"]);
   assert.equal(shared.command, "inline");
   assert.deepEqual(shared.args, ["owned"]);
   assert.equal(shared.scope, "dynamic");
@@ -93,7 +96,7 @@ test("plugin substitutions precede explicit env expansion while reserved authore
     pluginDataDirectory: data,
     projectDirectory: "/owned/project",
   });
-  const server = result.document.servers["plugin:owned:server"]!;
+  const server = present(result.document.servers["plugin:owned:server"]);
   assert.equal(server.command, "/owned/plugin/owned");
   assert.deepEqual(server.args, [
     "/owned/data/owned-inline",
@@ -115,7 +118,9 @@ test("plugin substitutions precede explicit env expansion while reserved authore
   });
   assert.ok(Object.isFrozen(server));
   assert.ok(
-    Object.isFrozen(result.origins["plugin:owned:server"]!.authoredConfig),
+    Object.isFrozen(
+      present(result.origins["plugin:owned:server"]).authoredConfig,
+    ),
   );
 });
 
@@ -140,7 +145,7 @@ test("source narrowing runs before data/context access and disabled plugins prod
   assert.deepEqual(Object.keys(result.document.servers), []);
   assert.equal(admissions, 1);
   assert.equal(directories, 0);
-  assert.equal(result.diagnostics[0]!.reason, "withheld");
+  assert.equal(present(result.diagnostics[0]).reason, "withheld");
 });
 
 test("native skip flags distinguish basename exceptions from full-ID stdio exceptions and project skills-dir provenance", async () => {
@@ -261,10 +266,10 @@ test("invalid later file entries are diagnosed before merging and do not erase a
     pluginDataDirectory: data,
   });
   assert.equal(
-    result.document.servers["plugin:owned:server"]!.command,
+    present(result.document.servers["plugin:owned:server"]).command,
     "valid",
   );
-  assert.equal(result.diagnostics[0]!.reason, "schema");
+  assert.equal(present(result.diagnostics[0]).reason, "schema");
 });
 
 test("data/project/user_config placeholders require explicit host context and missing ordinary env remains diagnostic", async () => {
@@ -288,9 +293,10 @@ test("data/project/user_config placeholders require explicit host context and mi
     ],
     env: {},
   });
-  assert.deepEqual(result.document.servers["plugin:owned:server"]!.args, [
-    "${NOT_PROVIDED}",
-  ]);
+  assert.deepEqual(
+    present(result.document.servers["plugin:owned:server"]).args,
+    ["${NOT_PROVIDED}"],
+  );
   assert.ok(result.diagnostics.some((d) => d.reason === "environment"));
   assert.ok(
     result.diagnostics.some((d) => d.reason === "plugin-data-unavailable"),
@@ -303,7 +309,7 @@ test("plugin provenance prevents managed allowlist bypass and names are qualifie
     env: {},
     pluginDataDirectory: data,
   });
-  const config = result.document.servers["plugin:owned:server"]!;
+  const config = present(result.document.servers["plugin:owned:server"]);
   assert.equal(
     mcpServerPolicyAllows(
       "plugin:owned:server",

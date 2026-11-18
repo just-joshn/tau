@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "bun:test";
 import {
   createSubagentLifecycle,
   renderSubagentHookAdditionalContext,
@@ -18,6 +18,12 @@ import type {
 } from "../src/subagent-runtime.js";
 import type { Message } from "../src/types.js";
 import { runAgent } from "../src/agent.js";
+
+function at<T>(items: readonly T[], index: number): T {
+  const item = items.at(index);
+  if (item === undefined) assert.fail(`no item at index ${String(index)}`);
+  return item;
+}
 
 const signal = () => new AbortController().signal;
 const plan = (agentId = "owned-child"): SubagentPlan => ({
@@ -166,7 +172,7 @@ test("Start uses owning-session registry/base metadata and projects only explici
   const f = setup(start),
     p = plan();
   const added = await f.lifecycle.start(p, signal());
-  assert.deepEqual(start.calls[0]!.input, {
+  assert.deepEqual(at(start.calls, 0).input, {
     hook_event_name: "SubagentStart",
     session_id: "owned-session",
     transcript_path: "/owned/session.json",
@@ -201,7 +207,7 @@ test("Stop keeps session transcript and supplies child archive, current mode/eff
     (await f.lifecycle.stop(p, event(false, messages))).continue,
     false,
   );
-  const input = f.stop.calls[0]!.input;
+  const input = at(f.stop.calls, 0).input;
   assert.equal(input.transcript_path, "/owned/session.json");
   assert.equal(input.agent_transcript_path, "/owned/owned-child.json");
   assert.equal(input.agent_id, p.agentId);
@@ -224,7 +230,7 @@ test("Stop keeps session transcript and supplies child archive, current mode/eff
       },
     ]),
   );
-  assert.equal(f.stop.calls[1]!.input.last_assistant_message, undefined);
+  assert.equal(at(f.stop.calls, 1).input.last_assistant_message, undefined);
 });
 
 test("Stop additional context alone continues; exit2 and JSON blocks retain distinct native feedback labels", async () => {
@@ -305,14 +311,14 @@ test("Stop default cap8 is per child; ordinary tool reset preserves stop-active 
   for (let index = 0; index < 8; index++)
     assert.equal((await f.lifecycle.stop(p, event(index > 0))).continue, true);
   assert.equal((await f.lifecycle.stop(p, event(true))).continue, false);
-  assert.match(f.diagnostics.at(-1)!, /9 consecutive/);
+  assert.match(at(f.diagnostics, -1), /9 consecutive/);
   assert.equal(
     (await f.lifecycle.stop(plan("sibling"), event())).continue,
     true,
   );
   f.lifecycle.resetContinuationCount(p);
   assert.equal((await f.lifecycle.stop(p, event(true))).continue, true);
-  assert.equal(stop.calls.at(-1)!.input.stop_hook_active, true);
+  assert.equal(at(stop.calls, -1).input.stop_hook_active, true);
   const unlimited = setup(undefined, stop, 0);
   for (let index = 0; index < 12; index++)
     assert.equal(
@@ -400,7 +406,7 @@ test("caller cancellation propagates; isolated hook cancellation preserves compl
     }),
   );
   await failed.lifecycle.teardown(plan());
-  assert.match(failed.diagnostics[0]!, /OWNED_TEARDOWN_FAILURE/);
+  assert.match(at(failed.diagnostics, 0), /OWNED_TEARDOWN_FAILURE/);
 });
 
 test("real command registry preserves lifecycle matcher, JSON feedback and detached async delivery", async () => {
@@ -554,8 +560,8 @@ test("child runAgent receives explicit Start context and Stop continuation witho
   assert.equal(requests, 2);
   assert.equal(child.turns, 2);
   assert.deepEqual(parent, snapshot);
-  assert.equal(stop.calls[0]!.input.stop_hook_active, false);
-  assert.equal(stop.calls[1]!.input.stop_hook_active, true);
+  assert.equal(at(stop.calls, 0).input.stop_hook_active, false);
+  assert.equal(at(stop.calls, 1).input.stop_hook_active, true);
   await f.lifecycle.teardown(p);
   assert.equal(stop.calls.length, 2);
 });

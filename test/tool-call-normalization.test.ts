@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "bun:test";
 import { z } from "zod";
 import {
   normalizeAssistantToolBlocks,
@@ -21,6 +21,15 @@ const call = (name: string, input: unknown): ToolUse => ({
   name,
   input,
 });
+function field(value: unknown, key: string): unknown {
+  return typeof value === "object" && value !== null
+    ? Reflect.get(value, key)
+    : undefined;
+}
+function setField(value: unknown, key: string, next: unknown): void {
+  assert.ok(typeof value === "object" && value !== null);
+  Reflect.set(value, key, next);
+}
 const options = { resolveTool: pureToolCallNormalizationBinding };
 const edit = {
   file_path: "/owned/fixture",
@@ -52,12 +61,13 @@ test("Edit ingest commits a concrete false while unrelated missing execution def
       call("Edit", { ...edit, replace_all: true }),
       options,
     ).input &&
-      (
+      field(
         normalizeAssistantToolCall(
           call("Edit", { ...edit, replace_all: true }),
           options,
-        ).input as any
-      ).replace_all,
+        ).input,
+        "replace_all",
+      ),
     true,
   );
 });
@@ -100,10 +110,13 @@ test("invalid schema input is retained after repair instead of aborting the assi
   });
   assert.deepEqual(result.input, malformed);
   assert.notEqual(result.input, malformed);
-  assert.equal("replace_all" in (result.input as object), false);
-  assert.equal(diagnostics[0]!.stage, "normalize");
-  assert.equal(diagnostics[0]!.errorName, "ZodError");
-  assert.ok(diagnostics[0]!.issueCodes?.includes("unrecognized_keys"));
+  assert.ok(typeof result.input === "object" && result.input !== null);
+  assert.equal("replace_all" in result.input, false);
+  const [diagnostic] = diagnostics;
+  assert.ok(diagnostic);
+  assert.equal(diagnostic.stage, "normalize");
+  assert.equal(diagnostic.errorName, "ZodError");
+  assert.ok(diagnostic.issueCodes?.includes("unrecognized_keys"));
 });
 
 test("repair and normalization have separate successful assignment boundaries", () => {
@@ -115,7 +128,7 @@ test("repair and normalization have separate successful assignment boundaries", 
       resolveTool: () => ({
         repair: () => ({ value: "repaired" }),
         normalize(input) {
-          (input as any).value = "partial mutation";
+          setField(input, "value", "partial mutation");
           throw new Error("owned failure");
         },
       }),
@@ -128,7 +141,7 @@ test("repair and normalization have separate successful assignment boundaries", 
     {
       resolveTool: () => ({
         repair(input) {
-          (input as any).value = "partial repair";
+          setField(input, "value", "partial repair");
           throw new Error("owned repair failure");
         },
         normalize: (input) => {
@@ -197,7 +210,7 @@ test("only known available tools normalize, and name healing precedes lookup", (
       return undefined;
     },
   });
-  assert.equal([...result.name].length, 200);
+  assert.equal(Array.from(result.name).length, 200);
   assert.equal(result.name, resolved);
 });
 
@@ -262,7 +275,7 @@ test("raw block and committed input remain independent of execution/hook rewrite
   const raw = Object.freeze({ ...call("Edit", Object.freeze({ ...edit })) });
   const committed = normalizeAssistantToolCall(raw, options),
     execution = toolCallForExecution(committed);
-  (execution.input as any).new_string = "after-hook";
+  setField(execution.input, "new_string", "after-hook");
   assert.deepEqual(raw.input, edit);
   assert.deepEqual(committed.input, { replace_all: false, ...edit });
   const nested = normalizeAssistantToolCall(
@@ -270,8 +283,8 @@ test("raw block and committed input remain independent of execution/hook rewrite
     { resolveTool: () => undefined },
   );
   const nestedExecution = toolCallForExecution(nested);
-  (nestedExecution.input as any).deep.value = "hook";
-  assert.equal((nested.input as any).deep.value, "model");
+  setField(field(nestedExecution.input, "deep"), "value", "hook");
+  assert.equal(field(field(nested.input, "deep"), "value"), "model");
   const parsed = normalizeAssistantToolCall(
     call(
       "owned",
@@ -280,7 +293,8 @@ test("raw block and committed input remain independent of execution/hook rewrite
     { resolveTool: () => undefined },
   );
   assert.deepEqual(parsed.input, { nested: { safe: 2 } });
-  assert.equal(({} as any).polluted, undefined);
+  const probe: Record<string, unknown> = {};
+  assert.equal(probe.polluted, undefined);
 });
 
 test("mock agent history commits normalized model input before execution defaults and local rewrites", async () => {
@@ -300,7 +314,7 @@ test("mock agent history commits normalized model input before execution default
     call("Edit", edit),
     call("Bash", { command: "owned-command-not-executed" }),
   ].map((value, index) => ({ ...value, id: `owned-call-${index}` }));
-  const seen: any[] = [],
+  const seen: Record<string, unknown>[] = [],
     requests: Message[][] = [];
   let round = 0;
   const schemas = {
@@ -332,9 +346,12 @@ test("mock agent history commits normalized model input before execution default
       definitions,
       async execute(committed) {
         const execution = toolCallForExecution(committed),
-          input: any = schemas[execution.name as keyof typeof schemas].parse(
-            execution.input,
-          );
+          schema: z.ZodType<Record<string, unknown>> | undefined =
+            Object.entries(schemas).find(
+              ([name]) => name === execution.name,
+            )?.[1];
+        assert.ok(schema);
+        const input = schema.parse(execution.input);
         if (execution.name === "Edit") input.new_string = "after-hook";
         seen.push(input);
         return {
@@ -354,13 +371,15 @@ test("mock agent history commits normalized model input before execution default
     signal: new AbortController().signal,
     onEvent() {},
   });
-  assert.equal(seen[0].offset, 1);
-  assert.equal(seen[1].new_string, "after-hook");
-  assert.equal(seen[2].timeout, 30000);
-  const wire = projectMessages(requests.at(-1)!);
+  assert.equal(seen[0]?.offset, 1);
+  assert.equal(seen[1]?.new_string, "after-hook");
+  assert.equal(seen[2]?.timeout, 30000);
+  const lastRequest = requests.at(-1);
+  assert.ok(lastRequest);
+  const wire = projectMessages(lastRequest);
   const history = wire
     .flatMap((m) => m.content)
-    .filter((b) => b.type === "tool_use") as ToolUse[];
+    .filter((b) => b.type === "tool_use");
   assert.deepEqual(
     history.map((c) => c.input),
     [

@@ -2,15 +2,15 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test, onTestFinished } from "bun:test";
 import { loadLaunchConfiguration } from "../src/launch-configuration.js";
 import { parseOptions } from "../src/options.js";
 
-test("launch resolves source order, flag/policy precedence, env/CLI model and trust-aware rules", async (t) => {
+test("launch resolves source order, flag/policy precedence, env/CLI model and trust-aware rules", async () => {
   const root = await realpath(
     await mkdtemp(join(tmpdir(), "tau-launch-config-")),
   );
-  t.after(() => rm(root, { recursive: true, force: true }));
+  onTestFinished(() => rm(root, { recursive: true, force: true }));
   const cwd = join(root, "work"),
     user = join(root, "user"),
     managed = join(root, "managed");
@@ -37,7 +37,7 @@ test("launch resolves source order, flag/policy precedence, env/CLI model and tr
     model: "default",
     modelExplicit: false,
   };
-  const run = (extra = {}, childEnv = env) =>
+  const run = (extra = {}, childEnv: NodeJS.ProcessEnv = env) =>
     loadLaunchConfiguration(
       { ...options, ...extra },
       { cwd, env: childEnv, homeDirectory: root, nonInteractive: true },
@@ -59,19 +59,19 @@ test("launch resolves source order, flag/policy precedence, env/CLI model and tr
   assert.equal((await run({ settings: '{"model":"flag"}' })).model, "flag");
   assert.equal(
     (
-      await run({ model: "environment" }, {
-        ...env,
-        ANTHROPIC_MODEL: "environment",
-      } as typeof env)
+      await run(
+        { model: "environment" },
+        { ...env, ANTHROPIC_MODEL: "environment" },
+      )
     ).model,
     "environment",
   );
   assert.equal(
     (
-      await run({ model: "explicit", modelExplicit: true }, {
-        ...env,
-        ANTHROPIC_MODEL: "environment",
-      } as typeof env)
+      await run(
+        { model: "explicit", modelExplicit: true },
+        { ...env, ANTHROPIC_MODEL: "environment" },
+      )
     ).model,
     "explicit",
   );

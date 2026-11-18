@@ -13,17 +13,53 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import test from "node:test";
+import { onTestFinished, test } from "bun:test";
+import { z } from "zod";
 import { fixtureSse } from "./sse-fixture.js";
 
+const unknownField = z.unknown().optional();
+const contentBlock = z.looseObject({
+  type: z.string(),
+  text: z.string().optional(),
+  tool_use_id: z.string().optional(),
+  is_error: z.boolean().optional(),
+  content: unknownField,
+});
+const requestBody = z.looseObject({
+  model: z.string().optional(),
+  tools: z.array(z.looseObject({ name: z.string(), description: z.string() })),
+  messages: z.array(
+    z.looseObject({ role: z.string(), content: z.array(contentBlock) }),
+  ),
+  output_config: z.looseObject({ effort: unknownField }).optional(),
+});
+type RequestBody = z.infer<typeof requestBody>;
+type ResponseBlock =
+  | { type: "tool_use"; name: string; input: unknown; id: string }
+  | { type: "text"; text: string };
+const hookRow = z.looseObject({
+  event: unknownField,
+  tool: unknownField,
+  root: unknownField,
+  tool_name: unknownField,
+});
+const cliResult = z.looseObject({
+  result: unknownField,
+  session_id: z.string(),
+});
+const savedSession = z.looseObject({ model: unknownField });
+const blocksOf = (body: RequestBody) =>
+  body.messages.flatMap((row) => row.content);
+const hasSkillTool = (body: RequestBody) =>
+  body.tools.some((entry) => entry.name === "Skill");
+
 async function fixture(
-  t: any,
   content: string,
   project = false,
   settings: object = {},
 ) {
   const root = await realpath(await mkdtemp(join(tmpdir(), "tau-cli-skills-")));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  onTestFinished(() => rm(root, { recursive: true, force: true }));
   const cwd = join(root, "project"),
     config = join(root, "config"),
     home = join(root, "home"),
@@ -38,17 +74,17 @@ async function fixture(
   await mkdir(cwd, { recursive: true });
   await writeFile(join(skill, "SKILL.md"), content);
   await writeFile(join(config, "settings.json"), JSON.stringify(settings));
-  let responder: (body: any, index: number) => unknown = () => ({
+  let responder: (body: RequestBody, index: number) => ResponseBlock = () => ({
     type: "text",
     text: "done",
   });
-  const bodies: any[] = [];
+  const bodies: RequestBody[] = [];
   const api = createServer(async (request, response) => {
     let raw = "";
     for await (const chunk of request) raw += chunk;
-    const body = JSON.parse(raw);
+    const body = requestBody.parse(JSON.parse(raw));
     bodies.push(body);
-    const block: any = responder(body, bodies.length);
+    const block = responder(body, bodies.length);
     response.writeHead(200, { "content-type": "text/event-stream" });
     response.end(
       fixtureSse([
@@ -74,7 +110,7 @@ async function fixture(
       ]),
     );
   });
-  t.after(
+  onTestFinished(
     () =>
       new Promise<void>((done) => {
         api.closeAllConnections();
@@ -94,7 +130,7 @@ async function fixture(
         const child = spawn(
           process.execPath,
           [
-            fileURLToPath(new URL("../src/cli.js", import.meta.url)),
+            fileURLToPath(new URL("../src/cli.ts", import.meta.url)),
             "--cwd",
             cwd,
             "-p",
@@ -130,6 +166,11 @@ async function fixture(
     root,
     cwd,
     bodies,
+    body: (index: number) => {
+      const found = bodies[index];
+      assert.ok(found);
+      return found;
+    },
     state,
     cli,
     skillPath: join(skill, "SKILL.md"),
@@ -139,7 +180,7 @@ async function fixture(
     },
   };
 }
-const tool = (name: string, input: unknown, id: number) => ({
+const tool = (name: string, input: unknown, id: number): ResponseBlock => ({
   type: "tool_use",
   name,
   input,
@@ -150,10 +191,8 @@ const instruction =
 
 test(
   "a guarded missing Read activates a conditional skill before the next catalog scan",
-  { timeout: 15000 },
-  async (t) => {
+  async () => {
     const f = await fixture(
-      t,
       "---\ndescription: Conditional owned workflow\npaths: ['src/**']\n---\nCONDITIONAL_SKILL_BODY",
     );
     f.respond((_body, index) =>
@@ -165,39 +204,28 @@ test(
     );
     const execution = await f.cli("inspect missing source");
     assert.equal(execution.code, 0, execution.err);
+    assert.equal(hasSkillTool(f.body(0)), false);
     assert.equal(
-      f.bodies[0].tools.some((entry: any) => entry.name === "Skill"),
+      JSON.stringify(f.body(0).messages).includes("Conditional owned workflow"),
       false,
     );
-    assert.equal(
-      JSON.stringify(f.bodies[0].messages).includes(
-        "Conditional owned workflow",
-      ),
-      false,
-    );
-    assert.equal(
-      f.bodies[1].tools.some((entry: any) => entry.name === "Skill"),
-      true,
-    );
+    assert.equal(hasSkillTool(f.body(1)), true);
     assert.match(
-      JSON.stringify(f.bodies[1].messages),
+      JSON.stringify(f.body(1).messages),
       /owned: Conditional owned workflow/,
     );
-    assert.match(
-      JSON.stringify(f.bodies[2].messages),
-      /CONDITIONAL_SKILL_BODY/,
-    );
+    assert.match(JSON.stringify(f.body(2).messages), /CONDITIONAL_SKILL_BODY/);
     await assert.rejects(readFile(join(f.cwd, "src", "missing.txt")), {
       code: "ENOENT",
     });
   },
+  { timeout: 15000 },
 );
 
 test(
   "compiled Skill → Write applies grants, preserves the query model snapshot and clears grants on resume",
-  { timeout: 15000 },
-  async (t) => {
-    const f = await fixture(t, instruction, false, {
+  async () => {
+    const f = await fixture(instruction, false, {
       permissions: { allow: ["Skill(owned)"] },
     });
     f.respond((_body, index) =>
@@ -215,37 +243,38 @@ test(
     );
     const first = await f.cli("do owned task");
     assert.equal(first.code, 0, first.err);
-    const result = JSON.parse(first.out);
+    const result = cliResult.parse(JSON.parse(first.out));
     assert.equal(result.result, "done");
     assert.equal(await readFile(join(f.cwd, "first.txt"), "utf8"), "first");
-    assert.ok(f.bodies[0].tools.some((entry: any) => entry.name === "Skill"));
+    assert.ok(hasSkillTool(f.body(0)));
     assert.equal(
-      f.bodies[0].tools
-        .find((entry: any) => entry.name === "Skill")
-        .description.includes("owned"),
+      f
+        .body(0)
+        .tools.find((entry) => entry.name === "Skill")
+        ?.description.includes("owned"),
       false,
     );
     assert.match(
-      JSON.stringify(f.bodies[0].messages),
+      JSON.stringify(f.body(0).messages),
       /owned: An owned local workflow/,
     );
     assert.equal(
-      JSON.stringify(f.bodies[0]).includes("PRIVATE_SKILL_BODY"),
+      JSON.stringify(f.body(0)).includes("PRIVATE_SKILL_BODY"),
       false,
     );
-    assert.match(
-      JSON.stringify(f.bodies[1].messages),
-      /PRIVATE_SKILL_BODY one/,
-    );
+    assert.match(JSON.stringify(f.body(1).messages), /PRIVATE_SKILL_BODY one/);
     assert.deepEqual(
       f.bodies.map((body) => body.model),
       ["claude-opus-4-6", "claude-opus-4-6", "claude-opus-4-6"],
     );
-    const partition = (await readdir(join(f.state, "sessions")))[0]!;
-    const saved = JSON.parse(
-      await readFile(
-        join(f.state, "sessions", partition, `${result.session_id}.json`),
-        "utf8",
+    const [partition] = await readdir(join(f.state, "sessions"));
+    assert.ok(partition);
+    const saved = savedSession.parse(
+      JSON.parse(
+        await readFile(
+          join(f.state, "sessions", partition, `${result.session_id}.json`),
+          "utf8",
+        ),
       ),
     );
     assert.equal(saved.model, "claude-opus-4-6");
@@ -257,25 +286,23 @@ test(
     assert.ok(
       f.bodies.slice(3).every((body) => body.model === "claude-opus-4-6"),
     );
-    const denied = f.bodies[4].messages
-      .flatMap((row: any) => row.content)
-      .find(
-        (block: any) =>
-          block.type === "tool_result" && block.tool_use_id === "call-4",
-      );
+    const denied = blocksOf(f.body(4)).find(
+      (block) => block.type === "tool_result" && block.tool_use_id === "call-4",
+    );
+    assert.ok(denied);
     assert.equal(denied.is_error, true);
     assert.match(JSON.stringify(denied), /Permission denied/);
     await assert.rejects(readFile(join(f.cwd, "second.txt")), {
       code: "ENOENT",
     });
   },
+  { timeout: 15000 },
 );
 
 test(
   "explicit slash skill expands before first request while inherited deny defeats its grant",
-  { timeout: 10000 },
-  async (t) => {
-    const f = await fixture(t, instruction, false, {
+  async () => {
+    const f = await fixture(instruction, false, {
       permissions: { deny: ["Write"] },
     });
     f.respond((_body, index) =>
@@ -286,27 +313,26 @@ test(
     const result = await f.cli("/owned explicit arguments");
     assert.equal(result.code, 0, result.err);
     assert.match(
-      JSON.stringify(f.bodies[0].messages),
+      JSON.stringify(f.body(0).messages),
       /PRIVATE_SKILL_BODY explicit arguments/,
     );
-    assert.equal(f.bodies[0].model, "claude-haiku-5-5");
+    assert.equal(f.body(0).model, "claude-haiku-5-5");
     assert.equal(
-      f.bodies[1].messages
-        .flatMap((row: any) => row.content)
-        .find((block: any) => block.type === "tool_result").is_error,
+      blocksOf(f.body(1)).find((block) => block.type === "tool_result")
+        ?.is_error,
       true,
     );
     await assert.rejects(readFile(join(f.cwd, "denied.txt")), {
       code: "ENOENT",
     });
   },
+  { timeout: 10000 },
 );
 
 test(
   "ignored persisted trust withholds project skill grants after explicit Skill authorization",
-  { timeout: 10000 },
-  async (t) => {
-    const f = await fixture(t, instruction, true, {
+  async () => {
+    const f = await fixture(instruction, true, {
       permissions: { allow: ["Skill(owned)"] },
     });
     f.respond((_body, index) =>
@@ -320,26 +346,25 @@ test(
     assert.equal(result.code, 0, result.err);
     assert.match(result.err, /automatic grants withheld \(untrusted_folder\)/);
     assert.match(
-      JSON.stringify(f.bodies[1].messages),
+      JSON.stringify(f.body(1).messages),
       /PRIVATE_SKILL_BODY project/,
     );
     assert.equal(
-      f.bodies[2].messages
-        .flatMap((row: any) => row.content)
-        .findLast((block: any) => block.type === "tool_result").is_error,
+      blocksOf(f.body(2)).findLast((block) => block.type === "tool_result")
+        ?.is_error,
       true,
     );
     await assert.rejects(readFile(join(f.cwd, "untrusted.txt")), {
       code: "ENOENT",
     });
   },
+  { timeout: 10000 },
 );
 
 test(
   "skill hooks register in the active session and successful once removal preserves settings once state",
-  { timeout: 10000 },
-  async (t) => {
-    const f = await fixture(t, "placeholder"),
+  async () => {
+    const f = await fixture("placeholder"),
       script = join(f.root, "hook.cjs"),
       log = join(f.root, "hooks.jsonl");
     await writeFile(
@@ -381,7 +406,7 @@ test(
     const rows = (await readFile(log, "utf8"))
       .trim()
       .split("\n")
-      .map((line) => JSON.parse(line));
+      .map((line) => hookRow.parse(JSON.parse(line)));
     assert.deepEqual(
       rows.map((row) => [row.event, row.tool]),
       [
@@ -389,31 +414,32 @@ test(
         ["PostToolUse", "Write"],
       ],
     );
-    assert.equal(rows[1].root, join(f.config, "skills", "owned"));
-    const blocks = f.bodies[2].messages.flatMap((row: any) => row.content);
+    assert.equal(rows[1]?.root, join(f.config, "skills", "owned"));
+    const blocks = blocksOf(f.body(2));
     const completed = blocks.find(
-      (block: any) =>
-        block.type === "tool_result" && block.tool_use_id === "call-2",
+      (block) => block.type === "tool_result" && block.tool_use_id === "call-2",
     );
+    assert.ok(typeof completed?.content === "string");
     assert.match(
       completed.content,
       /PostToolUse:Write hook additional context: OWNED_POST_ATTACHMENT/,
     );
     assert.equal(
       blocks.some(
-        (block: any) =>
-          block.type === "text" && block.text.includes("OWNED_POST_ATTACHMENT"),
+        (block) =>
+          block.type === "text" &&
+          block.text?.includes("OWNED_POST_ATTACHMENT"),
       ),
       false,
     );
   },
+  { timeout: 10000 },
 );
 
 test(
   "a blocked one-shot skill pre hook survives until success, then stops running",
-  { timeout: 10000 },
-  async (t) => {
-    const f = await fixture(t, "placeholder", false, {
+  async () => {
+    const f = await fixture("placeholder", false, {
       permissions: { allow: ["Skill(owned)"] },
     });
     const script = join(f.root, "pre.cjs"),
@@ -460,34 +486,34 @@ test(
     const rows = (await readFile(log, "utf8"))
       .split("\n")
       .filter(Boolean)
-      .map((line) => JSON.parse(line));
+      .map((line) => hookRow.parse(JSON.parse(line)));
     assert.deepEqual(
       rows.map((row) => row.tool_name),
       ["Write", "Write"],
     );
-    const blocks = f.bodies[3].messages.flatMap((row: any) => row.content);
+    const blocks = blocksOf(f.body(3));
     assert.ok(
       blocks.some(
-        (block: any) =>
-          block.type === "text" && block.text.includes("OWNED_PRE_ATTACHMENT"),
+        (block) =>
+          block.type === "text" && block.text?.includes("OWNED_PRE_ATTACHMENT"),
       ),
     );
     assert.equal(
       blocks.some(
-        (block: any) =>
+        (block) =>
           block.type === "tool_result" &&
           JSON.stringify(block.content).includes("OWNED_PRE_ATTACHMENT"),
       ),
       false,
     );
   },
+  { timeout: 10000 },
 );
 
 test(
   "disabled skill hook admission also withholds its dependent automatic grants",
-  { timeout: 10000 },
-  async (t) => {
-    const f = await fixture(t, "placeholder", false, {
+  async () => {
+    const f = await fixture("placeholder", false, {
       disableAllHooks: true,
       permissions: { allow: ["Skill(owned)"] },
     });
@@ -523,12 +549,12 @@ test(
       code: "ENOENT",
     });
   },
+  { timeout: 10000 },
 );
 
 test(
   "inline skill effort stays live while environment and settings caps retain precedence",
-  { timeout: 15000 },
-  async (t) => {
+  async () => {
     const cases = [
       { effort: "low", settings: {}, env: {}, expected: ["high", "low"] },
       {
@@ -558,7 +584,6 @@ test(
     ];
     for (const item of cases) {
       const f = await fixture(
-        t,
         `---\ndescription: owned effort\neffort: ${item.effort}\n---\nOWNED_EFFORT_BODY`,
         false,
         item.settings,
@@ -583,4 +608,5 @@ test(
       );
     }
   },
+  { timeout: 15000 },
 );

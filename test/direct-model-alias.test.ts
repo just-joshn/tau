@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "bun:test";
 import {
   bakedDirectModelAliases,
   directModelWireName,
@@ -36,8 +36,8 @@ test("three isolated original alias controls retain wire/output/reasoning/effort
     ["sonnet", "claude-sonnet-5-5"],
     ["haiku", "claude-haiku-5-5"],
     ["sonnet[1m]", "claude-sonnet-5-5"],
-  ]) {
-    const model = resolveDirectModelAlias(alias!, { env: {} });
+  ] as const) {
+    const model = resolveDirectModelAlias(alias, { env: {} });
     assert.equal(directModelWireName(model), wire);
     assert.equal(modelFacts(model).defaultOutput, 128000);
     assert.deepEqual(thinkingRequest(model, 128000, {}, {}), {

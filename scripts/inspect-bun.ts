@@ -287,7 +287,7 @@ async function main(): Promise<void> {
     paths[0] === undefined ||
     paths[0].startsWith("--")
   ) {
-    throw new Error("Usage: node dist/scripts/inspect-bun.js PATH [--modules]");
+    throw new Error("Usage: bun scripts/inspect-bun.ts PATH [--modules]");
   }
   const result = inspectBun(await readFile(paths[0]));
   const javascript = result.modules.filter((module) => module.tags[1] === 1);

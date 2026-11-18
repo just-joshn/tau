@@ -11,7 +11,8 @@ import {
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import test from "node:test";
+import { onTestFinished, test } from "bun:test";
+import { z } from "zod";
 import { fixtureSse } from "./sse-fixture.js";
 
 function cli(
@@ -19,11 +20,10 @@ function cli(
   env: NodeJS.ProcessEnv,
 ): Promise<{ code: number | null; out: string; err: string }> {
   return new Promise((done, reject) => {
-    const child = spawn(
-      process.execPath,
-      [resolve("dist/src/cli.js"), ...args],
-      { env, stdio: ["ignore", "pipe", "pipe"] },
-    );
+    const child = spawn(process.execPath, [resolve("src/cli.ts"), ...args], {
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     let out = "",
       err = "";
     child.stdout.setEncoding("utf8").on("data", (value) => {
@@ -37,14 +37,26 @@ function cli(
   });
 }
 
+const bodySchema = z.looseObject({
+  model: z.string(),
+  system: z.string(),
+  messages: z.array(z.looseObject({ content: z.unknown() })),
+});
+type Body = z.infer<typeof bodySchema>;
+const firstBlocksSchema = z.array(
+  z.object({ is_error: z.boolean().optional() }),
+);
+const printSchema = z.object({ session_id: z.string(), is_error: z.boolean() });
+const lastFirstIsError = (body: Body | undefined) =>
+  firstBlocksSchema.parse(body?.messages.at(-1)?.content)[0]?.is_error;
+
 test(
   "compiled layered settings/instructions coding→resume reloads files/permissions while retaining model/system snapshots",
-  { timeout: 15000 },
-  async (t) => {
+  async () => {
     const root = await realpath(
       await mkdtemp(join(tmpdir(), "tau-cli-configuration-")),
     );
-    t.after(() => rm(root, { recursive: true, force: true }));
+    onTestFinished(() => rm(root, { recursive: true, force: true }));
     const cwd = join(root, "work"),
       user = join(root, "user"),
       managed = join(root, "managed");
@@ -86,7 +98,7 @@ test(
     await fixtures("V1", true);
     let phase = "first",
       index = 0;
-    const bodies: any[] = [];
+    const bodies: Body[] = [];
     const steps = () =>
       phase === "first"
         ? [
@@ -126,7 +138,7 @@ test(
     const api = createServer(async (incoming, response) => {
       let raw = "";
       for await (const chunk of incoming) raw += chunk;
-      const body = JSON.parse(raw);
+      const body = bodySchema.parse(JSON.parse(raw));
       bodies.push(body);
       const step = steps()[index++];
       const block = step
@@ -160,7 +172,7 @@ test(
         ]),
       );
     });
-    t.after(
+    onTestFinished(
       () =>
         new Promise<void>((done) => {
           api.closeAllConnections();
@@ -191,20 +203,20 @@ test(
     ];
     const first = await cli(args, env);
     assert.equal(first.code, 0, first.err);
-    const result = JSON.parse(first.out);
+    const result = printSchema.parse(JSON.parse(first.out));
     assert.equal(result.is_error, false);
     assert.equal(bodies.length, 4);
-    assert.equal(bodies[0].model, "claude-opus-4-6");
-    const initial = JSON.stringify(bodies[0].messages);
+    assert.equal(bodies[0]?.model, "claude-opus-4-6");
+    const initial = JSON.stringify(bodies[0]?.messages);
     for (const marker of ["USER_V1", "ROOT_V1", "LOCAL_V1"])
       assert.ok(initial.includes(marker));
     assert.equal(initial.includes("NESTED_V1"), false);
-    assert.equal(JSON.stringify(bodies[0].system).includes("ROOT_V1"), false);
+    assert.equal(JSON.stringify(bodies[0]?.system).includes("ROOT_V1"), false);
     assert.ok(
-      JSON.stringify(bodies[1].messages.at(-1).content).includes("NESTED_V1"),
+      JSON.stringify(bodies[1]?.messages.at(-1)?.content).includes("NESTED_V1"),
     );
-    assert.equal(bodies[2].messages.at(-1).content[0].is_error, true);
-    assert.equal(bodies[3].messages.at(-1).content[0].is_error, true);
+    assert.equal(lastFirstIsError(bodies[2]), true);
+    assert.equal(lastFirstIsError(bodies[3]), true);
     await assert.rejects(readFile(join(cwd, "output.txt")), { code: "ENOENT" });
     await fixtures("V2", false);
     phase = "resume";
@@ -228,17 +240,14 @@ test(
     assert.equal(resumed.code, 0, resumed.err);
     assert.equal(bodies.length - before, 5);
     const resumedInitial = bodies[before];
-    assert.equal(resumedInitial.model, "claude-opus-4-6");
-    assert.ok(resumedInitial.system.includes("SYSTEM_V1"));
-    assert.equal(resumedInitial.system.includes("SYSTEM_V2"), false);
+    assert.equal(resumedInitial?.model, "claude-opus-4-6");
+    assert.ok(resumedInitial?.system.includes("SYSTEM_V1"));
+    assert.equal(resumedInitial?.system.includes("SYSTEM_V2"), false);
     assert.ok(
-      JSON.stringify(resumedInitial.messages.at(-1)).includes("ROOT_V2"),
+      JSON.stringify(resumedInitial?.messages.at(-1)).includes("ROOT_V2"),
     );
-    assert.equal(bodies[before + 1].messages.at(-1).content[0].is_error, true); // eager files do not seed print Read state
-    assert.equal(
-      bodies[before + 3].messages.at(-1).content[0].is_error,
-      undefined,
-    ); // nested full text does seed
+    assert.equal(lastFirstIsError(bodies[before + 1]), true); // eager files do not seed print Read state
+    assert.equal(lastFirstIsError(bodies[before + 3]), undefined); // nested full text does seed
     assert.equal(
       await readFile(join(cwd, "nested/CLAUDE.md"), "utf8"),
       "CHANGED_V2\n",
@@ -264,9 +273,10 @@ test(
       env,
     );
     assert.equal(off.code, 0, off.err);
-    assert.ok(bodies.at(-1).system.includes("SYSTEM_V3"));
-    assert.equal(bodies.at(-1).system.includes("SYSTEM_V1"), false);
+    assert.ok(bodies.at(-1)?.system.includes("SYSTEM_V3"));
+    assert.equal(bodies.at(-1)?.system.includes("SYSTEM_V1"), false);
     assert.equal(JSON.stringify(bodies).includes('"instructionFiles"'), false);
     assert.equal(JSON.stringify(bodies).includes('"permissionDenied"'), false);
   },
+  { timeout: 15000 },
 );

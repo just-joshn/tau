@@ -4,7 +4,6 @@ import {
   createHookRegistry,
   HOOK_EVENTS,
   type CommandHook,
-  type HookBatchResult,
   type HookEvent,
   type HookInput,
   type HookRegistry,
@@ -171,11 +170,9 @@ export class SessionSkillHookRegistry {
     try {
       const registry = createHookRegistry(
         [{ source: "skill-validation", hooks: request.hooks }],
-        {
-          ...(this.options.matchesCondition
-            ? { matchesCondition: this.options.matchesCondition }
-            : {}),
-        },
+        this.options.matchesCondition
+          ? { matchesCondition: this.options.matchesCondition }
+          : {},
       );
       parsed = registry.list();
       void registry.close();
@@ -399,11 +396,12 @@ export class SessionSkillHookRegistry {
         },
       });
     }
-    const parsed = createHookRegistry(sources, {
-      ...(this.options.matchesCondition
+    const parsed = createHookRegistry(
+      sources,
+      this.options.matchesCondition
         ? { matchesCondition: this.options.matchesCondition }
-        : {}),
-    });
+        : {},
+    );
     const listed = parsed.list();
     void parsed.close();
     // Registry enumeration follows source/group order, with one supported event per source object.
@@ -455,11 +453,12 @@ export class SessionSkillHookRegistry {
       stableResult,
       observe,
       createRegistry: () =>
-        createHookRegistry(sources, {
-          ...(this.options.matchesCondition
+        createHookRegistry(
+          sources,
+          this.options.matchesCondition
             ? { matchesCondition: this.options.matchesCondition }
-            : {}),
-        }),
+            : {},
+        ),
     };
   }
 }

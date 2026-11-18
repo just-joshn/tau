@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "bun:test";
 import { runAgent } from "../src/agent.js";
 import type { QueryEffort } from "../src/query-model-effort.js";
 import type {
@@ -74,7 +74,8 @@ test("agent samples live query effort after context preparation for each model r
     seen.map((request) => request.queryEffort),
     [undefined, "low", "high"],
   );
-  assert.equal(Object.hasOwn(seen[0]!, "queryEffort"), false);
+  assert.ok(seen[0]);
+  assert.equal(Object.hasOwn(seen[0], "queryEffort"), false);
   assert.equal(samples, 3);
   assert.ok(seen.every((request) => request.model === "fixed-request-model"));
   assert.equal(JSON.stringify(messages).includes("queryEffort"), false);
@@ -126,5 +127,7 @@ test("output-limit continuation resamples effort and absent callback leaves prov
     ...common,
     messages: [{ role: "user", content: [{ type: "text", text: "owned" }] }],
   });
-  assert.equal(Object.hasOwn(seen.at(-1)!, "queryEffort"), false);
+  const last = seen.at(-1);
+  assert.ok(last);
+  assert.equal(Object.hasOwn(last, "queryEffort"), false);
 });

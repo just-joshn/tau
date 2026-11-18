@@ -12,17 +12,46 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import test from "node:test";
+import { onTestFinished, test } from "bun:test";
+import { z } from "zod";
 import { fixtureSse } from "./sse-fixture.js";
+
+const requestSchema = z.object({
+  messages: z.array(z.object({ content: z.unknown() })),
+});
+const toolResultSchema = z.object({
+  type: z.literal("tool_result"),
+  tool_use_id: z.string(),
+  is_error: z.boolean().optional(),
+  content: z.string(),
+});
+const sessionSchema = z.object({ session_id: z.string() });
+const taskSchema = z.object({
+  subject: z.string(),
+  status: z.string(),
+  metadata: z.unknown().optional(),
+  blocks: z.array(z.string()),
+  blockedBy: z.array(z.string()),
+});
+
+function toolResult(body: unknown, id: string) {
+  for (const row of requestSchema.parse(body).messages)
+    for (const block of Array.isArray(row.content)
+      ? row.content
+      : [row.content]) {
+      const parsed = toolResultSchema.safeParse(block);
+      if (parsed.success && parsed.data.tool_use_id === id) return parsed.data;
+    }
+  return assert.fail(`missing tool_result ${id}`);
+}
 
 test(
   "compiled task workflow keeps completion rollback, cycles, metadata removal and resumed identity",
-  { timeout: 15000 },
-  async (t) => {
+  async () => {
     const root = await realpath(
       await mkdtemp(join(tmpdir(), "tau-cli-tasks-")),
     );
-    t.after(() => rm(root, { recursive: true, force: true }));
+    onTestFinished(() => rm(root, { recursive: true, force: true }));
     const config = join(root, "config"),
       log = join(root, "complete.jsonl"),
       script = join(root, "complete.cjs");
@@ -86,7 +115,7 @@ test(
       null,
       ["TaskGet", { taskId: "1" }],
     ] as const;
-    const bodies: any[] = [];
+    const bodies: unknown[] = [];
     const api = createServer(async (request, response) => {
       let raw = "";
       for await (const chunk of request) raw += chunk;
@@ -124,7 +153,7 @@ test(
         ]),
       );
     });
-    t.after(
+    onTestFinished(
       () =>
         new Promise<void>((done) => {
           api.closeAllConnections();
@@ -140,7 +169,7 @@ test(
           const child = spawn(
             process.execPath,
             [
-              fileURLToPath(new URL("../src/cli.js", import.meta.url)),
+              fileURLToPath(new URL("../src/cli.ts", import.meta.url)),
               "--cwd",
               root,
               "-p",
@@ -178,30 +207,24 @@ test(
       );
     const first = await cli([]);
     assert.equal(first.code, 0, first.err);
-    const result = JSON.parse(first.out);
-    const blocked = bodies[3].messages
-      .flatMap((row: any) => row.content)
-      .find(
-        (block: any) =>
-          block.type === "tool_result" && block.tool_use_id === "task-3",
-      );
+    const result = sessionSchema.parse(JSON.parse(first.out));
+    const blocked = toolResult(bodies[3], "task-3");
     assert.equal(blocked.is_error, undefined);
     assert.match(
       blocked.content,
       /TaskCompleted hook feedback:[\s\S]*OWNED_COMPLETION_HOLD/,
     );
-    const retrieved = bodies[4].messages
-      .flatMap((row: any) => row.content)
-      .find(
-        (block: any) =>
-          block.type === "tool_result" && block.tool_use_id === "task-4",
-      );
+    const retrieved = toolResult(bodies[4], "task-4");
     assert.match(retrieved.content, /A/);
     assert.match(retrieved.content, /pending/);
     assert.equal(retrieved.content.includes("must roll back"), false);
     const directory = join(config, "tasks", result.session_id);
-    const a = JSON.parse(await readFile(join(directory, "1.json"), "utf8")),
-      b = JSON.parse(await readFile(join(directory, "2.json"), "utf8"));
+    const a = taskSchema.parse(
+        JSON.parse(await readFile(join(directory, "1.json"), "utf8")),
+      ),
+      b = taskSchema.parse(
+        JSON.parse(await readFile(join(directory, "2.json"), "utf8")),
+      );
     assert.equal(a.subject, "changed");
     assert.equal(a.status, "pending");
     assert.deepEqual(a.metadata, { keep: true });
@@ -213,14 +236,13 @@ test(
     const resumed = await cli(["--resume", result.session_id]);
     assert.equal(resumed.code, 0, resumed.err);
     assert.equal(bodies.length, 10);
-    assert.equal(JSON.parse(resumed.out).session_id, result.session_id);
-    const resumedResult = bodies[9].messages
-      .flatMap((row: any) => row.content)
-      .find(
-        (block: any) =>
-          block.type === "tool_result" && block.tool_use_id === "task-9",
-      );
+    assert.equal(
+      sessionSchema.parse(JSON.parse(resumed.out)).session_id,
+      result.session_id,
+    );
+    const resumedResult = toolResult(bodies[9], "task-9");
     assert.match(resumedResult.content, /changed/);
     assert.equal(resumedResult.is_error, undefined);
   },
+  { timeout: 15000 },
 );

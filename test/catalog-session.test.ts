@@ -1,4 +1,4 @@
-import test from "node:test";
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { wrapCatalogTools } from "../src/catalog-session.js";
 import {
@@ -7,6 +7,17 @@ import {
   type ToolExecutor,
 } from "../src/types.js";
 import { matchingAgentTypeDeny, type ToolPolicy } from "../src/tool-policy.js";
+
+function textOf(block: Message["content"][number] | undefined): string {
+  assert.ok(block?.type === "text");
+  return block.text;
+}
+
+function at<T>(items: readonly T[], index: number): T {
+  const item = items.at(index);
+  if (item === undefined) assert.fail(`no item at index ${String(index)}`);
+  return item;
+}
 
 test("catalogs follow the retained user history, refresh after compaction and survive persistence", async () => {
   const messages: Message[] = [
@@ -31,30 +42,31 @@ test("catalogs follow the retained user history, refresh after compaction and su
     skills: () => skills,
   });
   const signal = new AbortController().signal;
-  await wrapper.beforeModelRequest!(signal);
+  if (!wrapper.beforeModelRequest) assert.fail("missing beforeModelRequest");
+  await wrapper.beforeModelRequest(signal);
   assert.equal(messages.length, 1);
-  assert.equal(messages[0]!.content.length, 3);
-  assert.match((messages[0]!.content[1] as { text: string }).text, /reader/);
-  assert.match((messages[0]!.content[2] as { text: string }).text, /owned/);
+  assert.equal(at(messages, 0).content.length, 3);
+  assert.match(textOf(at(messages, 0).content[1]), /reader/);
+  assert.match(textOf(at(messages, 0).content[2]), /owned/);
   assert.deepEqual(
-    messages[0]!.catalogAttachments?.map((record) => record.type),
+    at(messages, 0).catalogAttachments?.map((record) => record.type),
     ["agent_listing_delta", "skill_listing"],
   );
   assert.deepEqual(
     messageSchema.parse(JSON.parse(JSON.stringify(messages[0]))),
     messages[0],
   );
-  await wrapper.beforeModelRequest!(signal);
-  assert.equal(messages[0]!.content.length, 3);
+  await wrapper.beforeModelRequest(signal);
+  assert.equal(at(messages, 0).content.length, 3);
   messages.push(
     { role: "assistant", content: [{ type: "text", text: "done" }] },
     { role: "user", content: [{ type: "text", text: "next" }] },
   );
   skills = [{ name: "owned", description: "Changed" }];
   agents = [];
-  await wrapper.beforeModelRequest!(signal);
-  assert.equal(messages.at(-1)!.catalogAttachments?.length, 2);
-  const removal = messages.at(-1)!.catalogAttachments?.[0];
+  await wrapper.beforeModelRequest(signal);
+  assert.equal(at(messages, -1).catalogAttachments?.length, 2);
+  const removal = at(messages, -1).catalogAttachments?.[0];
   assert.deepEqual(
     removal?.type === "agent_listing_delta" && removal.removedTypes,
     ["reader"],
@@ -64,8 +76,8 @@ test("catalogs follow the retained user history, refresh after compaction and su
     content: [{ type: "text", text: "summary" }],
     contextBoundary: { beforeTokens: 100, afterTokens: 20, reason: "manual" },
   });
-  await wrapper.beforeModelRequest!(signal);
-  assert.equal(messages.at(-1)!.catalogAttachments?.[0]?.isInitial, true);
+  await wrapper.beforeModelRequest(signal);
+  assert.equal(at(messages, -1).catalogAttachments?.[0]?.isInitial, true);
   assert.deepEqual(
     base.definitions.map((tool) => tool.description),
     ["static", "static"],
@@ -96,16 +108,18 @@ test("catalog scanning follows underlying context flush and adds siblings outsid
       });
     },
   };
-  await wrapCatalogTools(base, messages, {
+  const wrapped = wrapCatalogTools(base, messages, {
     agents: () => [],
     skills: () => [{ name: "owned", description: "Owned" }],
-  }).beforeModelRequest!(new AbortController().signal);
-  assert.deepEqual(messages[0]!.content[0], {
+  });
+  if (!wrapped.beforeModelRequest) assert.fail("missing beforeModelRequest");
+  await wrapped.beforeModelRequest(new AbortController().signal);
+  assert.deepEqual(at(messages, 0).content[0], {
     type: "tool_result",
     tool_use_id: "owned",
     content: "result",
   });
-  assert.equal(messages[0]!.content[1]?.type, "text");
+  assert.equal(at(messages, 0).content[1]?.type, "text");
 });
 
 test("Agent catalog filters exact named denies while generic argument denial stays a launch check", () => {

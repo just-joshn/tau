@@ -12,7 +12,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import test, { type TestContext } from "node:test";
+import { test, onTestFinished } from "bun:test";
 import { createServer, type ServerResponse } from "node:http";
 import { createTools } from "../src/tools.js";
 import { ReadState } from "../src/read-state.js";
@@ -27,7 +27,13 @@ import { projectMessages } from "../src/thinking-history.js";
 import { estimateContextTokens } from "../src/context-usage.js";
 import { newSession, SessionStore } from "../src/session.js";
 import { resolveTimeoutPolicy } from "../src/timeout-policy.js";
-import type { CompletionRequest, Message, Provider } from "../src/types.js";
+import type {
+  CompletionRequest,
+  Message,
+  PrepareCompaction,
+  Provider,
+} from "../src/types.js";
+import { z } from "zod";
 
 const model = "claude-sonnet-4-5-20250929";
 const user = (text: string): Message => ({
@@ -46,11 +52,17 @@ const provider: Provider = {
     usage: { input_tokens: 2, output_tokens: 2 },
   }),
 };
-async function fixture(t: TestContext) {
+function testSignal(): AbortSignal {
+  const controller = new AbortController();
+  onTestFinished(() => controller.abort());
+  return controller.signal;
+}
+async function fixture() {
   const cwd = await realpath(
     await mkdtemp(path.join(tmpdir(), "tau-restoration-")),
   );
-  t.after(() => rm(cwd, { recursive: true, force: true }));
+  onTestFinished(() => rm(cwd, { recursive: true, force: true }));
+  const signal = testSignal();
   const state = new ReadState();
   const tools = createTools({
     cwd,
@@ -59,7 +71,7 @@ async function fixture(t: TestContext) {
     approve: async () => true,
   });
   const run = (name: string, input: Record<string, unknown>) =>
-    tools.execute({ type: "tool_use", name, input, id: "call" }, t.signal);
+    tools.execute({ type: "tool_use", name, input, id: "call" }, signal);
   const file = async (name: string, text = name, mtime = 1000) => {
     const filename = path.join(cwd, name);
     await mkdir(path.dirname(filename), { recursive: true });
@@ -71,9 +83,9 @@ async function fixture(t: TestContext) {
     keptMessages: Message[] = [],
     countTokens?: (text: string) => Promise<number | undefined>,
   ) =>
-    tools.prepareCompaction!({
+    compactionPreparer(tools)({
       keptMessages,
-      signal: t.signal,
+      signal: signal,
       ...(countTokens ? { countTokens } : {}),
     });
   const request = (messages: Message[]): Omit<CompletionRequest, "onText"> => ({
@@ -82,11 +94,29 @@ async function fixture(t: TestContext) {
     messages,
     tools: tools.definitions,
     maxTokens: 32000,
-    signal: t.signal,
+    signal: signal,
   });
   return { cwd, state, tools, run, file, prepare, request };
 }
 
+const requestBodySchema = z.looseObject({
+  model: z.string().optional(),
+  messages: z.array(z.looseObject({ content: z.unknown() })).optional(),
+  tools: z.unknown().optional(),
+});
+type RequestBody = z.infer<typeof requestBodySchema>;
+type Tools = ReturnType<typeof createTools>;
+function present<T>(value: T | null | undefined): T {
+  assert.ok(value !== null && value !== undefined);
+  return value;
+}
+function compactionPreparer(tools: Tools): PrepareCompaction {
+  return async (options) => {
+    const prepared = tools.prepareCompaction?.(options);
+    assert.ok(prepared);
+    return prepared;
+  };
+}
 function body(message: Message): string {
   return message.content
     .filter((block) => block.type === "text")
@@ -94,8 +124,8 @@ function body(message: Message): string {
     .join("\n");
 }
 
-test("restoration chooses filesystem mtimes, uses touch order only for ties, and reads whole partial views", async (t) => {
-  const f = await fixture(t);
+test("restoration chooses filesystem mtimes, uses touch order only for ties, and reads whole partial views", async () => {
+  const f = await fixture();
   await f.file("new", "new\nbody", 3000);
   await f.run("Read", { file_path: "new", offset: 2 });
   await f.file("old", "old", 1000);
@@ -106,10 +136,12 @@ test("restoration chooses filesystem mtimes, uses touch order only for ties, and
   await f.run("Read", { file_path: "tie-b" });
   const restored = await f.prepare();
   assert.deepEqual(
-    restored.messages.map((row) => path.basename(row.restoredFile!.path)),
+    restored.messages.map((row) =>
+      path.basename(present(row.restoredFile).path),
+    ),
     ["new", "tie-b", "tie-a", "old"],
   );
-  assert.match(body(restored.messages[0]!), /1\tnew\n2\tbody/);
+  assert.match(body(present(restored.messages[0])), /1\tnew\n2\tbody/);
   restored.commit();
   assert.equal(
     (
@@ -123,8 +155,8 @@ test("restoration chooses filesystem mtimes, uses touch order only for ties, and
   );
 });
 
-test("top five selection happens before rereads and failed candidates are not backfilled", async (t) => {
-  const f = await fixture(t);
+test("top five selection happens before rereads and failed candidates are not backfilled", async () => {
+  const f = await fixture();
   for (let i = 0; i < 7; i++) {
     await f.file(String(i), `file ${i}`, 1000 + i);
     await f.run("Read", { file_path: String(i) });
@@ -133,7 +165,9 @@ test("top five selection happens before rereads and failed candidates are not ba
   await writeFile(path.join(f.cwd, "5"), Buffer.from([0, 0, 0]));
   const restored = await f.prepare();
   assert.deepEqual(
-    restored.messages.map((row) => path.basename(row.restoredFile!.path)),
+    restored.messages.map((row) =>
+      path.basename(present(row.restoredFile).path),
+    ),
     ["4", "3", "2"],
   );
   restored.commit();
@@ -149,13 +183,13 @@ test("top five selection happens before rereads and failed candidates are not ba
   );
 });
 
-test("reread content replaces old baselines only on commit and remains subject to stale checks", async (t) => {
-  const f = await fixture(t),
+test("reread content replaces old baselines only on commit and remains subject to stale checks", async () => {
+  const f = await fixture(),
     file = await f.file("a", "old");
   await f.run("Read", { file_path: "a" });
   await writeFile(file, "new");
   const restored = await f.prepare();
-  assert.match(body(restored.messages[0]!), /1\tnew/);
+  assert.match(body(present(restored.messages[0])), /1\tnew/);
   assert.equal(
     (
       await f.run("Edit", {
@@ -184,8 +218,8 @@ test("reread content replaces old baselines only on commit and remains subject t
   );
 });
 
-test("retained Read paths, loaded instructions, supplied plan paths and tool-result artifacts are excluded", async (t) => {
-  const f = await fixture(t);
+test("retained Read paths, loaded instructions, supplied plan paths and tool-result artifacts are excluded", async () => {
+  const f = await fixture();
   for (const name of [
     "a",
     "b",
@@ -225,13 +259,13 @@ test("retained Read paths, loaded instructions, supplied plan paths and tool-res
     restorationExcludedPaths: ["plan.md"],
     approve: async () => true,
   });
-  const result = await tools.prepareCompaction!({
+  const result = await compactionPreparer(tools)({
     keptMessages: kept,
-    signal: t.signal,
+    signal: testSignal(),
   });
   assert.deepEqual(
     result.messages
-      .map((row) => path.relative(f.cwd, row.restoredFile!.path))
+      .map((row) => path.relative(f.cwd, present(row.restoredFile).path))
       .sort(),
     ["b", "nested/CLAUDE.md", "tool-results/result"],
   );
@@ -252,8 +286,8 @@ test("retained Read paths, loaded instructions, supplied plan paths and tool-res
   );
 });
 
-test("restoration rechecks Read policy and workspace canonical paths", async (t) => {
-  const f = await fixture(t),
+test("restoration rechecks Read policy and workspace canonical paths", async () => {
+  const f = await fixture(),
     file = await f.file("a", "inside");
   await f.run("Read", { file_path: "a" });
   const denied = createTools({
@@ -264,8 +298,12 @@ test("restoration rechecks Read policy and workspace canonical paths", async (t)
     approve: async () => true,
   });
   assert.deepEqual(
-    (await denied.prepareCompaction!({ keptMessages: [], signal: t.signal }))
-      .messages,
+    (
+      await compactionPreparer(denied)({
+        keptMessages: [],
+        signal: testSignal(),
+      })
+    ).messages,
     [],
   );
   await rm(file);
@@ -281,8 +319,8 @@ test("token estimates use UTF-16 length and denser JSON divisors", () => {
   assert.equal(estimateFileTokens("x".repeat(10), "a.txt"), 3);
 });
 
-test("files above a quarter of the token cap use counting; over-cap files contain references only", async (t) => {
-  const f = await fixture(t);
+test("files above a quarter of the token cap use counting; over-cap files contain references only", async () => {
+  const f = await fixture();
   await f.file("small", "s".repeat(5000), 2000);
   await f.run("Read", { file_path: "small" });
   await f.file("large", "SECRET".repeat(1000));
@@ -295,10 +333,10 @@ test("files above a quarter of the token cap use counting; over-cap files contai
   assert.equal(counts.length, 1);
   assert.equal(counts[0], "SECRET".repeat(1000));
   assert.deepEqual(
-    result.messages.map((row) => row.restoredFile!.kind),
+    result.messages.map((row) => present(row.restoredFile).kind),
     ["text", "reference"],
   );
-  assert.equal(body(result.messages[1]!).includes("SECRET"), false);
+  assert.equal(body(present(result.messages[1])).includes("SECRET"), false);
   result.commit();
   assert.equal(
     (await f.run("Write", { file_path: "large", content: "lost" })).is_error,
@@ -306,8 +344,8 @@ test("files above a quarter of the token cap use counting; over-cap files contai
   );
 });
 
-test("count failure falls back to estimates and exactly 5000 tokens can restore", async (t) => {
-  const f = await fixture(t);
+test("count failure falls back to estimates and exactly 5000 tokens can restore", async () => {
+  const f = await fixture();
   await f.file("a", "x".repeat(20000));
   await f.run("Read", { file_path: "a" });
   for (const count of [
@@ -318,28 +356,34 @@ test("count failure falls back to estimates and exactly 5000 tokens can restore"
     async () => 5000,
   ]) {
     assert.equal(
-      (await f.prepare([], count)).messages[0]!.restoredFile!.kind,
+      present(present((await f.prepare([], count)).messages[0]).restoredFile)
+        .kind,
       "text",
     );
   }
   await writeFile(path.join(f.cwd, "a"), "x".repeat(20004));
   assert.equal(
-    (await f.prepare([], async () => undefined)).messages[0]!.restoredFile!
-      .kind,
+    present(
+      present((await f.prepare([], async () => undefined)).messages[0])
+        .restoredFile,
+    ).kind,
     "reference",
   );
 });
 
-test("over-byte files produce a reference without a prefix or count request", async (t) => {
-  const f = await fixture(t);
+test("over-byte files produce a reference without a prefix or count request", async () => {
+  const f = await fixture();
   await f.file("a", "initial");
   await f.run("Read", { file_path: "a" });
   await writeFile(path.join(f.cwd, "a"), "secret".repeat(60000));
   const result = await f.prepare([], async () => {
     throw new Error("must not count bounded prefixes");
   });
-  assert.equal(result.messages[0]!.restoredFile!.kind, "reference");
-  assert.equal(body(result.messages[0]!).includes("secret"), false);
+  assert.equal(
+    present(present(result.messages[0]).restoredFile).kind,
+    "reference",
+  );
+  assert.equal(body(present(result.messages[0])).includes("secret"), false);
   result.commit();
   assert.equal(
     (await f.run("Write", { file_path: "a", content: "lost" })).is_error,
@@ -347,7 +391,7 @@ test("over-byte files produce a reference without a prefix or count request", as
   );
 });
 
-test("aggregate JSON attachment budget drops an oversized result and can retain a later candidate", async (t) => {
+test("aggregate JSON attachment budget drops an oversized result and can retain a later candidate", async () => {
   const state = new ReadState();
   state.rememberPartial("/root/large", 2);
   state.rememberPartial("/root/small", 1);
@@ -356,7 +400,7 @@ test("aggregate JSON attachment budget drops an oversized result and can retain 
     state,
     excludedPaths: [],
     keptMessages: [],
-    signal: t.signal,
+    signal: testSignal(),
     countTokens: async () => 5000,
     read: async (file) => ({
       bytes: Buffer.from(
@@ -367,7 +411,7 @@ test("aggregate JSON attachment budget drops an oversized result and can retain 
     }),
   });
   assert.deepEqual(
-    result.messages.map((row) => row.restoredFile!.path),
+    result.messages.map((row) => present(row.restoredFile).path),
     ["/root/small"],
   );
   result.commit();
@@ -378,8 +422,8 @@ test("aggregate JSON attachment budget drops an oversized result and can retain 
   );
 });
 
-test("UTF-16LE, BOM and CRLF restoration keeps a usable normalized baseline", async (t) => {
-  const f = await fixture(t),
+test("UTF-16LE, BOM and CRLF restoration keeps a usable normalized baseline", async () => {
+  const f = await fixture(),
     filename = path.join(f.cwd, "a");
   await writeFile(
     filename,
@@ -390,7 +434,7 @@ test("UTF-16LE, BOM and CRLF restoration keeps a usable normalized baseline", as
   );
   await f.run("Read", { file_path: "a", limit: 1 });
   const result = await f.prepare();
-  assert.match(body(result.messages[0]!), /1\tα\n2\tβ/);
+  assert.match(body(present(result.messages[0])), /1\tα\n2\tβ/);
   result.commit();
   assert.equal(
     (await f.run("Edit", { file_path: "a", old_string: "β", new_string: "γ" }))
@@ -403,8 +447,8 @@ test("UTF-16LE, BOM and CRLF restoration keeps a usable normalized baseline", as
   );
 });
 
-test("manual compaction commits restored messages, persists metadata and authorizes edits before observers", async (t) => {
-  const f = await fixture(t);
+test("manual compaction commits restored messages, persists metadata and authorizes edits before observers", async () => {
+  const f = await fixture();
   await f.file("a", "old");
   await f.run("Read", { file_path: "a" });
   await writeFile(path.join(f.cwd, "a"), "fresh");
@@ -416,7 +460,7 @@ test("manual compaction commits restored messages, persists metadata and authori
       request: f.request(messages),
       state: freshCompactionState(),
       reason: "manual",
-      prepareCompaction: f.tools.prepareCompaction!,
+      prepareCompaction: compactionPreparer(f.tools),
       onEvent: (event) => {
         if (event.type === "compaction" && event.stage === "complete") {
           observed = true;
@@ -427,9 +471,10 @@ test("manual compaction commits restored messages, persists metadata and authori
     true,
   );
   assert.ok(observed);
-  assert.equal(messages.at(-1)!.restoredFile?.kind, "text");
+  assert.equal(present(messages.at(-1)).restoredFile?.kind, "text");
   assert.equal(
-    messages.find((row) => row.contextBoundary)!.contextBoundary!.afterTokens,
+    present(messages.find((row) => row.contextBoundary)?.contextBoundary)
+      .afterTokens,
     estimateContextTokens(messages),
   );
   const store = await SessionStore.create(f.cwd, path.join(f.cwd, "storage")),
@@ -452,8 +497,8 @@ test("manual compaction commits restored messages, persists metadata and authori
   );
 });
 
-test("invalid summaries do not start restoration and abort during restoration preserves history and cache", async (t) => {
-  const f = await fixture(t);
+test("invalid summaries do not start restoration and abort during restoration preserves history and cache", async () => {
+  const f = await fixture();
   await f.file("a", "old");
   await f.run("Read", { file_path: "a" });
   const messages = [user("task"), answer("prior")],
@@ -474,7 +519,7 @@ test("invalid summaries do not start restoration and abort during restoration pr
       reason: "manual",
       prepareCompaction: async (options) => {
         reads++;
-        return f.tools.prepareCompaction!(options);
+        return compactionPreparer(f.tools)(options);
       },
       onEvent: () => {},
     }),
@@ -496,7 +541,7 @@ test("invalid summaries do not start restoration and abort during restoration pr
       request: { ...f.request(messages), signal: controller.signal },
       state: freshCompactionState(),
       reason: "manual",
-      prepareCompaction: f.tools.prepareCompaction!,
+      prepareCompaction: compactionPreparer(f.tools),
       onEvent: () => {},
     }),
     { name: "AbortError" },
@@ -506,25 +551,26 @@ test("invalid summaries do not start restoration and abort during restoration pr
 });
 
 async function httpFixture(
-  t: TestContext,
   handler: (
     url: string,
-    body: any,
+    body: RequestBody,
     res: ServerResponse,
     headers: Record<string, unknown>,
   ) => void,
   timeout = 1000,
 ) {
-  const requests: Array<{ url: string; body: any }> = [];
+  const requests: Array<{ url: string; body: RequestBody }> = [];
   const http = createServer(async (req, res) => {
     let raw = "";
     for await (const chunk of req) raw += chunk;
-    const body = JSON.parse(raw);
-    requests.push({ url: req.url!, body });
-    handler(req.url!, body, res, req.headers);
+    const body = requestBodySchema.parse(JSON.parse(raw));
+    const url = req.url;
+    assert.ok(url);
+    requests.push({ url, body });
+    handler(url, body, res, req.headers);
   });
   await new Promise<void>((done) => http.listen(0, "127.0.0.1", done));
-  t.after(async () => {
+  onTestFinished(async () => {
     http.closeAllConnections();
     await new Promise<void>((done) => http.close(() => done()));
   });
@@ -551,6 +597,8 @@ function respond(res: ServerResponse, text: string, tool = false) {
         },
       ]
     : [{ type: "text", text }];
+  const [block] = content;
+  assert.ok(block);
   res.writeHead(200, { "content-type": "text/event-stream" });
   res.end(
     fixtureSse([
@@ -562,7 +610,7 @@ function respond(res: ServerResponse, text: string, tool = false) {
           usage: { input_tokens: 10, output_tokens: 0 },
         },
       },
-      { type: "content_block_start", index: 0, content_block: content[0]! },
+      { type: "content_block_start", index: 0, content_block: block },
       { type: "content_block_stop", index: 0 },
       {
         type: "message_delta",
@@ -574,9 +622,9 @@ function respond(res: ServerResponse, text: string, tool = false) {
   );
 }
 
-test("direct count API uses the verified beta endpoint, model alias and an independent one-retry allowance", async (t) => {
+test("direct count API uses the verified beta endpoint, model alias and an independent one-retry allowance", async () => {
   let calls = 0;
-  const f = await httpFixture(t, (url, body, res, headers) => {
+  const f = await httpFixture((url, body, res, headers) => {
     assert.equal(url, "/v1/messages/count_tokens?beta=true");
     assert.equal(headers["anthropic-beta"], "token-counting-2024-11-01");
     assert.equal(headers["x-api-key"], "loopback");
@@ -595,15 +643,15 @@ test("direct count API uses the verified beta endpoint, model alias and an indep
     await f.provider.countFileTokens({
       model: "sonnet",
       text: "🌍",
-      signal: t.signal,
+      signal: testSignal(),
     }),
     17,
   );
   assert.equal(calls, 2);
-  assert.equal(f.requests[0]!.body.model, "claude-sonnet-5-5");
+  assert.equal(present(f.requests[0]).body.model, "claude-sonnet-5-5");
 });
 
-test("count API declines malformed, oversized, redirected and unsupported responses without disclosure", async (t) => {
+test("count API declines malformed, oversized, redirected and unsupported responses without disclosure", async () => {
   for (const variant of [
     "bad",
     "oversized",
@@ -611,7 +659,7 @@ test("count API declines malformed, oversized, redirected and unsupported respon
     "negative",
     "nonjson",
   ]) {
-    const f = await httpFixture(t, (_url, _body, res) => {
+    const f = await httpFixture((_url, _body, res) => {
       if (variant === "redirect") {
         res.writeHead(302, { location: "http://127.0.0.1:1/secret" });
         res.end();
@@ -632,25 +680,29 @@ test("count API declines malformed, oversized, redirected and unsupported respon
       );
     });
     assert.equal(
-      await f.provider.countFileTokens({ model, text: "x", signal: t.signal }),
+      await f.provider.countFileTokens({
+        model,
+        text: "x",
+        signal: testSignal(),
+      }),
       undefined,
     );
     assert.equal(f.requests.length, 1);
   }
 });
 
-test("count API bounds a stalled accepted body and propagates caller cancellation", async (t) => {
-  const f = await httpFixture(
-    t,
-    (_url, _body, res) => {
-      res.writeHead(200, { "content-type": "application/json" });
-      res.flushHeaders();
-      res.write("{");
-    },
-    25,
-  );
+test("count API bounds a stalled accepted body and propagates caller cancellation", async () => {
+  const f = await httpFixture((_url, _body, res) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.flushHeaders();
+    res.write("{");
+  }, 25);
   assert.equal(
-    await f.provider.countFileTokens({ model, text: "x", signal: t.signal }),
+    await f.provider.countFileTokens({
+      model,
+      text: "x",
+      signal: testSignal(),
+    }),
     undefined,
   );
   assert.equal(f.requests.length, 1);
@@ -664,12 +716,12 @@ test("count API bounds a stalled accepted body and propagates caller cancellatio
   await assert.rejects(pending, { name: "AbortError" });
 });
 
-test("automatic HTTP compaction restores fresh text before continuation and edits through the same executor", async (t) => {
-  const f = await fixture(t);
+test("automatic HTTP compaction restores fresh text before continuation and edits through the same executor", async () => {
+  const f = await fixture();
   await f.file("a", "old");
   await f.run("Read", { file_path: "a", limit: 1 });
   await writeFile(path.join(f.cwd, "a"), "fresh");
-  const http = await httpFixture(t, (_url, _body, res) =>
+  const http = await httpFixture((_url, _body, res) =>
     respond(
       res,
       http.requests.length === 1 ? summary : "done",
@@ -692,27 +744,33 @@ test("automatic HTTP compaction restores fresh text before continuation and edit
     autoCompactWindow: "200k",
     contextWindowTokens: 200000,
     maxApiAttempts: 3,
-    signal: t.signal,
+    signal: testSignal(),
     onEvent: () => {},
   });
   assert.equal(http.requests.length, 3);
   assert.match(
-    JSON.stringify(http.requests[1]!.body.messages),
+    JSON.stringify(present(http.requests[1]).body.messages),
     /Restored file after context compaction/,
   );
-  assert.match(JSON.stringify(http.requests[1]!.body.messages), /fresh/);
+  assert.match(
+    JSON.stringify(present(http.requests[1]).body.messages),
+    /fresh/,
+  );
   assert.equal(await readFile(path.join(f.cwd, "a"), "utf8"), "done");
-  assert.match(JSON.stringify(http.requests[2]!.body.messages), /File edited/);
+  assert.match(
+    JSON.stringify(present(http.requests[2]).body.messages),
+    /File edited/,
+  );
 });
 
-test("manual restoration counts the full text even after the summary consumes its generation allowance", async (t) => {
-  const f = await fixture(t),
+test("manual restoration counts the full text even after the summary consumes its generation allowance", async () => {
+  const f = await fixture(),
     contents = "fresh".repeat(1500);
   await f.file("a", contents);
   await f.run("Read", { file_path: "a", offset: 2 });
-  const http = await httpFixture(t, (url, body, res) => {
+  const http = await httpFixture((url, body, res) => {
     if (url.includes("count_tokens")) {
-      assert.equal(body.messages[0].content, contents);
+      assert.equal(body.messages?.[0]?.content, contents);
       res.writeHead(200, { "content-type": "application/json" });
       res.end('{"input_tokens":4999}');
     } else respond(res, summary);
@@ -726,22 +784,22 @@ test("manual restoration counts the full text even after the summary consumes it
       request: { ...f.request(messages), attemptBudget: budget },
       state: freshCompactionState(),
       reason: "manual",
-      prepareCompaction: f.tools.prepareCompaction!,
+      prepareCompaction: compactionPreparer(f.tools),
       onEvent: () => {},
     }),
     true,
   );
   assert.equal(budget.remaining, 0);
   assert.equal(http.requests.length, 2);
-  assert.equal(messages.at(-1)!.restoredFile!.kind, "text");
+  assert.equal(present(present(messages.at(-1)).restoredFile).kind, "text");
 });
 
-test("a preferred larger summary keeps auxiliary restoration counts on the main Read model", async (t) => {
-  const f = await fixture(t);
+test("a preferred larger summary keeps auxiliary restoration counts on the main Read model", async () => {
+  const f = await fixture();
   await f.file("a", "fresh".repeat(1500));
   await f.run("Read", { file_path: "a" });
   const preferred = "claude-opus-5-5";
-  const http = await httpFixture(t, (url, _body, res) => {
+  const http = await httpFixture((url, _body, res) => {
     if (url.includes("count_tokens")) {
       res.writeHead(200, { "content-type": "application/json" });
       res.end('{"input_tokens":2000}');
@@ -766,20 +824,24 @@ test("a preferred larger summary keeps auxiliary restoration counts on the main 
     maxTurns: 1,
     contextWindowTokens: 200000,
     maxApiAttempts: 2,
-    signal: t.signal,
+    signal: testSignal(),
     onEvent: () => {},
   });
   assert.equal(http.requests.length, 3);
-  assert.equal(http.requests[0]!.body.model, preferred);
-  assert.equal(http.requests[1]!.url, "/v1/messages/count_tokens?beta=true");
-  assert.equal(http.requests[1]!.body.model, model);
-  assert.equal(http.requests[2]!.body.model, model);
+  assert.equal(present(http.requests[0]).body.model, preferred);
   assert.equal(
-    messages.find((row) => row.contextBoundary)!.contextBoundary!.summaryModel,
+    present(http.requests[1]).url,
+    "/v1/messages/count_tokens?beta=true",
+  );
+  assert.equal(present(http.requests[1]).body.model, model);
+  assert.equal(present(http.requests[2]).body.model, model);
+  assert.equal(
+    present(messages.find((row) => row.contextBoundary)?.contextBoundary)
+      .summaryModel,
     preferred,
   );
   assert.match(
-    JSON.stringify(http.requests[2]!.body.messages),
+    JSON.stringify(present(http.requests[2]).body.messages),
     /Restored file after context compaction/,
   );
 });

@@ -9,7 +9,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test, onTestFinished } from "bun:test";
 import {
   createInstructionCatalog,
   type InstructionFile,
@@ -51,11 +51,11 @@ test("nested projection preserves Unicode boundaries, continuation lines and Man
   assert.equal(managed.record.partial, false);
 });
 
-test("nested clipped/processed instructions remain partial until a complete direct Read; eager print instructions do not seed", async (t) => {
+test("nested clipped/processed instructions remain partial until a complete direct Read; eager print instructions do not seed", async () => {
   const cwd = await realpath(
     await mkdtemp(join(tmpdir(), "tau-instruction-context-")),
   );
-  t.after(() => rm(cwd, { recursive: true, force: true }));
+  onTestFinished(() => rm(cwd, { recursive: true, force: true }));
   await mkdir(join(cwd, "src/.claude/rules"), { recursive: true });
   await writeFile(join(cwd, "CLAUDE.md"), "eager\n");
   await writeFile(join(cwd, "src/a.txt"), "alpha\n");
@@ -159,11 +159,11 @@ test("nested clipped/processed instructions remain partial until a complete dire
   );
 });
 
-test("instruction changes and removals are announced on resume without duplicating unchanged files", async (t) => {
+test("instruction changes and removals are announced on resume without duplicating unchanged files", async () => {
   const cwd = await realpath(
     await mkdtemp(join(tmpdir(), "tau-instruction-refresh-")),
   );
-  t.after(() => rm(cwd, { recursive: true, force: true }));
+  onTestFinished(() => rm(cwd, { recursive: true, force: true }));
   const create = () =>
     new InstructionContext({
       cwd,
@@ -194,11 +194,11 @@ test("instruction changes and removals are announced on resume without duplicati
   );
 });
 
-test("nested activation stays in tool history and a direct instruction Read is not eagerly reannounced", async (t) => {
+test("nested activation stays in tool history and a direct instruction Read is not eagerly reannounced", async () => {
   const cwd = await realpath(
     await mkdtemp(join(tmpdir(), "tau-instruction-delivery-")),
   );
-  t.after(() => rm(cwd, { recursive: true, force: true }));
+  onTestFinished(() => rm(cwd, { recursive: true, force: true }));
   await mkdir(join(cwd, "src/deeper"), { recursive: true });
   await writeFile(join(cwd, "src/CLAUDE.md"), "nested marker");
   await writeFile(join(cwd, "src/a.txt"), "alpha");
@@ -267,11 +267,11 @@ test("nested activation stays in tool history and a direct instruction Read is n
   assert.equal(resumed.instructionFiles, undefined);
 });
 
-test("a validated hook redirect activates instructions for the executed path without mutating the model call", async (t) => {
+test("a validated hook redirect activates instructions for the executed path without mutating the model call", async () => {
   const cwd = await realpath(
     await mkdtemp(join(tmpdir(), "tau-instruction-redirect-")),
   );
-  t.after(() => rm(cwd, { recursive: true, force: true }));
+  onTestFinished(() => rm(cwd, { recursive: true, force: true }));
   for (const directory of ["original", "executed"])
     await mkdir(join(cwd, directory));
   await writeFile(join(cwd, "original/a.txt"), "original data");

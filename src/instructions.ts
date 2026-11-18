@@ -1,6 +1,5 @@
 import { lstat, readdir, realpath } from "node:fs/promises";
 import {
-  basename,
   dirname,
   extname,
   isAbsolute,

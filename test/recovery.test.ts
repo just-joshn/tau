@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test } from "bun:test";
 import {
   ApiAttemptBudget,
   RequestAttemptLedger,
@@ -26,7 +26,7 @@ const stream = (
   progress: StreamProgress = "nothing",
   stopReasonReceived = false,
   outlastedNonStreamingTimeout = false,
-): RecoveryFailure => ({
+): Extract<RecoveryFailure, { kind: "streamFailed" }> => ({
   kind: "streamFailed",
   cause,
   progress,
@@ -439,26 +439,14 @@ test("ledger preserves partial results at exhausted admission, supports undo and
   assert.equal(ledger.takeApiAttempt(), true);
   assert.equal(ledger.takeApiAttempt(), false);
   assert.equal(
-    ledger.onStreamFailed(
-      stream("stalled", "started") as Extract<
-        RecoveryFailure,
-        { kind: "streamFailed" }
-      >,
-      true,
-    ),
+    ledger.onStreamFailed(stream("stalled", "started"), true),
     "fail",
   );
   assert.equal(ledger.counts().triedWithoutStreaming, true);
   ledger.undoLastCount();
   assert.equal(ledger.counts().triedWithoutStreaming, false);
   assert.equal(
-    ledger.onStreamFailed(
-      stream("connectionLost", "output") as Extract<
-        RecoveryFailure,
-        { kind: "streamFailed" }
-      >,
-      true,
-    ),
+    ledger.onStreamFailed(stream("connectionLost", "output"), true),
     "keepPartial",
   );
   assert.equal(
@@ -472,13 +460,7 @@ test("ledger preserves partial results at exhausted admission, supports undo and
   const terminal = new ModelCallRecovery(
     recoveryPolicy(2, { hasFallbackModel: true }),
   );
-  terminal.onStreamFailed(
-    stream("serverError", "thinkingOnly") as Extract<
-      RecoveryFailure,
-      { kind: "streamFailed" }
-    >,
-    true,
-  );
+  terminal.onStreamFailed(stream("serverError", "thinkingOnly"), true);
   terminal.reportRequestFailure(connection, "retry");
   assert.equal(terminal.counts().retries, 0);
   terminal.undoLastCount();

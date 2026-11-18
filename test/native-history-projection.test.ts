@@ -1,9 +1,10 @@
-import test from "node:test";
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   decodeNativeSession,
   encodeNativeSessionRows,
   indexNativeSession,
+  isNativeObject,
   serializeNativeSession,
   type NativeJson,
 } from "../src/native-session-codec.js";
@@ -61,7 +62,7 @@ function row(
           }
         : {}),
       content,
-      ...(nativeMessage as Record<string, NativeJson> | undefined),
+      ...(isNativeObject(nativeMessage) ? nativeMessage : {}),
     },
     ...rest,
   };
@@ -108,7 +109,8 @@ test("explicit chain projection retains owned JSON bytes, detached messages, res
     { type: "redacted_thinking", data: "opaque-data==" },
     text("owned final"),
   ]);
-  const toolInput = projected.messages[1].content[0]!;
+  const toolInput = projected.messages[1]?.content[0];
+  assert.ok(toolInput);
   if (toolInput.type === "thinking") toolInput.signature = "changed";
   assert.deepEqual(serializeNativeSession(doc), before);
 });
@@ -313,7 +315,7 @@ test("context descendants follow selected native traversal profile but cannot si
 });
 
 test("advanced native resume transforms fail explicitly with source rows retained", () => {
-  const base = [
+  const base: [NativeJson, NativeJson] = [
     row("u", null, "user", "request"),
     row("a", "u", "assistant", [text("done")]),
   ];
@@ -346,7 +348,7 @@ test("advanced native resume transforms fail explicitly with source rows retaine
       projectNativeHistory(
         document([
           row("u", null, "user", "request", { sentAsUuid: "migrated" }),
-          base[1]!,
+          base[1],
         ]),
         options("a"),
       ),
@@ -361,7 +363,7 @@ test("advanced native resume transforms fail explicitly with source rows retaine
     expectCode(
       () =>
         projectNativeHistory(
-          document([row("u", null, "user", "request", extra), base[1]!]),
+          document([row("u", null, "user", "request", extra), base[1]]),
           options("a"),
         ),
       "unsupported-resume-row-transform",

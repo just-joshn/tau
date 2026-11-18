@@ -10,7 +10,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import test, { type TestContext } from "node:test";
+import { test, onTestFinished } from "bun:test";
 import { createTools, type FileToolCallContext } from "../src/tools.js";
 import { createLocalSkillRegistry } from "../src/skills.js";
 import type { ToolHookRuntime } from "../src/tool-hook-runtime.js";
@@ -22,20 +22,23 @@ const call = (name: string, input: unknown): ToolUse => ({
   name,
   input,
 });
-const pre = () => ({
-  additionalContext: [] as string[],
+const pre = (): {
+  additionalContext: string[];
+  preventContinuation: boolean;
+} => ({
+  additionalContext: [],
   preventContinuation: false,
 });
-async function fixture(t: TestContext) {
+async function fixture() {
   const cwd = await realpath(
     await mkdtemp(join(tmpdir(), "tau-file-activation-")),
   );
-  t.after(() => rm(cwd, { recursive: true, force: true }));
+  onTestFinished(() => rm(cwd, { recursive: true, force: true }));
   return cwd;
 }
 
-test("missing Read activates matching conditional skill before its call fails", async (t) => {
-  const cwd = await fixture(t),
+test("missing Read activates matching conditional skill before its call fails", async () => {
+  const cwd = await fixture(),
     skill = join(cwd, ".claude", "skills", "owned-conditional", "SKILL.md");
   await mkdir(dirname(skill), { recursive: true });
   await writeFile(
@@ -73,8 +76,8 @@ test("missing Read activates matching conditional skill before its call fails", 
     ["owned-conditional"],
   );
 });
-test("Write callback precedes parent creation, then later filesystem/read-state failure remains visible", async (t) => {
-  const cwd = await fixture(t),
+test("Write callback precedes parent creation, then later filesystem/read-state failure remains visible", async () => {
+  const cwd = await fixture(),
     target = join(cwd, "new", "file.txt"),
     seen: FileToolCallContext[] = [];
   const tools = createTools({
@@ -96,12 +99,12 @@ test("Write callback precedes parent creation, then later filesystem/read-state 
   assert.equal(result.is_error, true);
   assert.match(result.content, /Read/);
   assert.equal(seen.length, 1);
-  assert.equal(seen[0]!.name, "Write");
-  assert.equal(seen[0]!.path, target);
+  assert.equal(seen[0]?.name, "Write");
+  assert.equal(seen[0]?.path, target);
   assert.equal(await readFile(target, "utf8"), "external content");
 });
-test("effective hook path activates after PreToolUse and permission but before execution and PostToolUse", async (t) => {
-  const cwd = await fixture(t),
+test("effective hook path activates after PreToolUse and permission but before execution and PostToolUse", async () => {
+  const cwd = await fixture(),
     events: string[] = [];
   const hooks: ToolHookRuntime = {
     async before(_call, _signal, validate) {
@@ -146,8 +149,8 @@ test("effective hook path activates after PreToolUse and permission but before e
   assert.equal(await readFile(join(cwd, "effective.txt"), "utf8"), "effective");
   await assert.rejects(readFile(join(cwd, "original.txt")), { code: "ENOENT" });
 });
-test("validated Read and Edit invoke callback once each, before new content is written", async (t) => {
-  const cwd = await fixture(t),
+test("validated Read and Edit invoke callback once each, before new content is written", async () => {
+  const cwd = await fixture(),
     target = join(cwd, "file.txt"),
     names: string[] = [];
   await writeFile(target, "alpha");
@@ -181,8 +184,8 @@ test("validated Read and Edit invoke callback once each, before new content is w
   assert.deepEqual(names, ["Read", "Edit"]);
   assert.equal(await readFile(target, "utf8"), "beta");
 });
-test("denied, rejected, unread, stopped and invalid hook-replacement inputs never activate", async (t) => {
-  const cwd = await fixture(t),
+test("denied, rejected, unread, stopped and invalid hook-replacement inputs never activate", async () => {
+  const cwd = await fixture(),
     seen: string[] = [],
     onFileToolCall = (context: FileToolCallContext) => {
       seen.push(context.path);
@@ -248,9 +251,9 @@ test("denied, rejected, unread, stopped and invalid hook-replacement inputs neve
   }
   assert.deepEqual(seen, []);
 });
-test("post-permission path changes fail before callback rather than activating a rejected call", async (t) => {
-  const cwd = await fixture(t),
-    outside = await fixture(t),
+test("post-permission path changes fail before callback rather than activating a rejected call", async () => {
+  const cwd = await fixture(),
+    outside = await fixture(),
     seen: string[] = [];
   const tools = createTools({
     cwd,
@@ -271,8 +274,8 @@ test("post-permission path changes fail before callback rather than activating a
   assert.deepEqual(seen, []);
   await assert.rejects(readFile(join(outside, "file")), { code: "ENOENT" });
 });
-test("callback errors stop I/O and reach failure hook; callback cancellation stops I/O", async (t) => {
-  const cwd = await fixture(t),
+test("callback errors stop I/O and reach failure hook; callback cancellation stops I/O", async () => {
+  const cwd = await fixture(),
     events: string[] = [];
   const hooks: ToolHookRuntime = {
     async before() {
@@ -323,8 +326,8 @@ test("callback errors stop I/O and reach failure hook; callback cancellation sto
   );
   await assert.rejects(readFile(join(cwd, "cancelled")), { code: "ENOENT" });
 });
-test("Bash, Glob, and Grep never invoke file call activation", async (t) => {
-  const cwd = await fixture(t),
+test("Bash, Glob, and Grep never invoke file call activation", async () => {
+  const cwd = await fixture(),
     names: string[] = [];
   await writeFile(join(cwd, "file.txt"), "owned marker");
   const tools = createTools({

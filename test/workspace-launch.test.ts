@@ -4,16 +4,16 @@ import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import test from "node:test";
+import { test, onTestFinished } from "bun:test";
 import { loadLaunchConfiguration } from "../src/launch-configuration.js";
 import { loadLaunchMcp } from "../src/mcp-launch.js";
 import { parseOptions } from "../src/options.js";
 
-test("nested repository launch merges legacy and canonical local settings while keeping permission and MCP trust distinct", async (t) => {
+test("nested repository launch merges legacy and canonical local settings while keeping permission and MCP trust distinct", async () => {
   const root = await realpath(
     await mkdtemp(join(tmpdir(), "tau-workspace-launch-")),
   );
-  t.after(() => rm(root, { recursive: true, force: true }));
+  onTestFinished(() => rm(root, { recursive: true, force: true }));
   const repo = join(root, "repo"),
     cwd = join(repo, "packages/app"),
     user = join(root, "user"),
@@ -141,11 +141,11 @@ test("nested repository launch merges legacy and canonical local settings while 
   ]);
 });
 
-test("interactive trust does not inherit print acceptance, and an ancestor record is not strict persisted project trust", async (t) => {
+test("interactive trust does not inherit print acceptance, and an ancestor record is not strict persisted project trust", async () => {
   const root = await realpath(
     await mkdtemp(join(tmpdir(), "tau-workspace-trust-")),
   );
-  t.after(() => rm(root, { recursive: true, force: true }));
+  onTestFinished(() => rm(root, { recursive: true, force: true }));
   const cwd = join(root, "repo/subdir"),
     user = join(root, "user"),
     home = join(root, "home"),

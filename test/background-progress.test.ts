@@ -1,4 +1,4 @@
-import test from "node:test";
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { createBackgroundProgressMeter } from "../src/background-progress.js";
 import { MessageStream, streamEventSchema } from "../src/message-stream.js";

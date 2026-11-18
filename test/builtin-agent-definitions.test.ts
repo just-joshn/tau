@@ -1,4 +1,4 @@
-import test from "node:test";
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   builtinAgentProfile,
@@ -13,6 +13,21 @@ import {
 } from "../src/builtin-agent-definitions.js";
 import { createLocalAgentRegistry } from "../src/agent-definitions.js";
 
+function agentNamed<T extends { agentType: string }>(
+  definitions: readonly T[],
+  agentType: string,
+): T {
+  const agent = definitions.find(
+    (candidate) => candidate.agentType === agentType,
+  );
+  assert.ok(agent, `missing built-in agent ${agentType}`);
+  return agent;
+}
+function withoutExplorePlan(): BuiltinAgentCatalogOptions {
+  const invalid = options();
+  Reflect.set(invalid, "explorePlanEnabled", undefined);
+  return invalid;
+}
 function options(
   changes: Partial<BuiltinAgentCatalogOptions> = {},
 ): BuiltinAgentCatalogOptions {
@@ -44,7 +59,8 @@ test("ordinary built-in catalog provides exact default identity and independentl
       "claude-code-guide",
     ],
   );
-  const general = catalog.definitions[0]!;
+  const general = catalog.definitions[0];
+  assert.ok(general);
   assert.equal(general.source, "built-in");
   assert.equal(general.baseDir, "built-in");
   assert.deepEqual(general.tools, ["*"]);
@@ -55,7 +71,10 @@ test("ordinary built-in catalog provides exact default identity and independentl
     DEFAULT_BUILTIN_SUBAGENT_TYPE,
   );
   assert.ok(general.prompt.length > 30 && general.prompt.length < 400);
-  assert.throws(() => (general.tools as string[]).push("Bash"), TypeError);
+  assert.throws(
+    () => Reflect.apply(Array.prototype.push, general.tools, ["Bash"]),
+    TypeError,
+  );
   assert.ok(Object.isFrozen(general) && Object.isFrozen(catalog.definitions));
 });
 
@@ -115,10 +134,7 @@ test("headless disable precedence, safe mode, entrypoint and explore/plan latch 
     { capability: "coordinator-agents" },
   ]);
   await assert.rejects(
-    createBuiltinAgentCatalog({
-      ...options(),
-      explorePlanEnabled: undefined,
-    } as unknown as BuiltinAgentCatalogOptions),
+    createBuiltinAgentCatalog(withoutExplorePlan()),
     /Explicit built-in host capabilities/,
   );
 });
@@ -126,9 +142,7 @@ test("headless disable precedence, safe mode, entrypoint and explore/plan latch 
 test("Explore and Plan inherit tool pool with actual deny floor and do not manufacture plan mode", async () => {
   const catalog = await createBuiltinAgentCatalog(options());
   for (const name of ["Explore", "Plan"]) {
-    const agent = catalog.definitions.find(
-      (agent) => agent.agentType === name,
-    )!;
+    const agent = agentNamed(catalog.definitions, name);
     assert.equal(agent.tools, undefined);
     assert.deepEqual(agent.disallowedTools, EXPLORATION_DISALLOWED_TOOLS);
     assert.equal(agent.model, "inherit");
@@ -240,7 +254,7 @@ test("claude append-system mode requires a real adapter and never silently subst
   assert.equal(calls, 1);
   assert.deepEqual(admitted.appendedSystemPromptAgents, ["claude"]);
   assert.match(
-    admitted.definitions.find((agent) => agent.agentType === "claude")!.prompt,
+    agentNamed(admitted.definitions, "claude").prompt,
     /^OWNED BASE SYSTEM/,
   );
   await assert.rejects(
@@ -259,9 +273,7 @@ test("guide and web-fetch retain their distinct source tools, models, turns, mod
   const native = await createBuiltinAgentCatalog(
     options({ webFetch: { enabled: true, model: "haiku" } }),
   );
-  const guide = native.definitions.find(
-    (agent) => agent.agentType === "claude-code-guide",
-  )!;
+  const guide = agentNamed(native.definitions, "claude-code-guide");
   assert.deepEqual(guide.tools, [
     "Glob",
     "Grep",
@@ -274,14 +286,13 @@ test("guide and web-fetch retain their distinct source tools, models, turns, mod
   const bash = await createBuiltinAgentCatalog(
     options({ guideToolMode: "bash" }),
   );
-  assert.deepEqual(
-    bash.definitions.find((agent) => agent.agentType === "claude-code-guide")!
-      .tools,
-    ["Bash", "Read", "WebFetch", "WebSearch"],
-  );
-  const web = native.definitions.find(
-    (agent) => agent.agentType === "web-fetch",
-  )!;
+  assert.deepEqual(agentNamed(bash.definitions, "claude-code-guide").tools, [
+    "Bash",
+    "Read",
+    "WebFetch",
+    "WebSearch",
+  ]);
+  const web = agentNamed(native.definitions, "web-fetch");
   assert.deepEqual(web.tools, ["WebFetch"]);
   assert.equal(web.model, "haiku");
   assert.equal(web.maxTurns, 15);
@@ -371,9 +382,7 @@ test("default resolution preserves exact spelling, canonical ambiguity and allow
 
 test("registry consumes admitted builtin definitions and custom precedence still owns exact names", async () => {
   const catalog = await createBuiltinAgentCatalog(options());
-  const builtin = catalog.definitions.find(
-    (agent) => agent.agentType === "general-purpose",
-  )!;
+  const builtin = agentNamed(catalog.definitions, "general-purpose");
   const registry = await createLocalAgentRegistry({
     locations: [],
     definitions: [

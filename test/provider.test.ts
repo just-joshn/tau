@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { setImmediate } from "node:timers/promises";
-import { test } from "node:test";
-import type { TestContext } from "node:test";
+import { test, onTestFinished } from "bun:test";
+import { z } from "zod";
 import { AnthropicProvider } from "../src/provider.js";
 import type { CompletionRequest } from "../src/types.js";
 import { ApiAttemptBudget } from "../src/attempt-ledger.js";
@@ -64,7 +64,6 @@ function request(
 }
 
 async function server(
-  t: TestContext,
   handler: (req: IncomingMessage, res: ServerResponse) => Promise<void> | void,
   options: { maxRetries?: number; allowNonStreamingFallback?: boolean } = {},
 ): Promise<AnthropicProvider> {
@@ -72,7 +71,7 @@ async function server(
     Promise.resolve(handler(req, res)).catch(() => res.destroy());
   });
   await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve));
-  t.after(async () => {
+  onTestFinished(async () => {
     http.closeAllConnections();
     await new Promise<void>((resolve, reject) =>
       http.close((error) => (error ? reject(error) : resolve())),
@@ -96,9 +95,9 @@ function respond(
   res.end(events.map((event) => sse(event)).join(""));
 }
 
-test("POSTs the Messages API request and handles fragmented UTF-8, CRLF and multiline SSE", async (t) => {
+test("POSTs the Messages API request and handles fragmented UTF-8, CRLF and multiline SSE", async () => {
   let seen: unknown;
-  const provider = await server(t, async (req, res) => {
+  const provider = await server(async (req, res) => {
     assert.equal(req.method, "POST");
     assert.equal(req.url, "/v1/messages");
     assert.equal(req.headers["x-api-key"], "secret-key");
@@ -141,10 +140,9 @@ test("POSTs the Messages API request and handles fragmented UTF-8, CRLF and mult
   assert.equal(text.join(""), "Hi 🌍");
 });
 
-test("nonstream fallback emits one finalized assistant usage observation without synthetic stream lengths", async (t) => {
+test("nonstream fallback emits one finalized assistant usage observation without synthetic stream lengths", async () => {
   let calls = 0;
   const provider = await server(
-    t,
     async (req, res) => {
       for await (const _chunk of req) {
         /* Consume the owned request. */
@@ -186,8 +184,8 @@ test("nonstream fallback emits one finalized assistant usage observation without
   ]);
 });
 
-test("assembles multiple text/tool blocks and fragmented JSON arguments", async (t) => {
-  const provider = await server(t, (_req, res) =>
+test("assembles multiple text/tool blocks and fragmented JSON arguments", async () => {
+  const provider = await server((_req, res) =>
     respond(res, [
       start,
       { type: "ping" },
@@ -241,8 +239,8 @@ test("assembles multiple text/tool blocks and fragmented JSON arguments", async 
   });
 });
 
-test("assembles tool input deltas and retains the max_tokens stop reason", async (t) => {
-  const provider = await server(t, (_req, res) =>
+test("assembles tool input deltas and retains the max_tokens stop reason", async () => {
+  const provider = await server((_req, res) =>
     respond(res, [
       start,
       {
@@ -314,8 +312,8 @@ const invalidStreams = [
   { name: "event size limit", raw: `data: ${"x".repeat(1024 * 1024)}\n\n` },
 ];
 for (const item of invalidStreams) {
-  test(`rejects ${item.name}`, async (t) => {
-    const provider = await server(t, (_req, res) => {
+  test(`rejects ${item.name}`, async () => {
+    const provider = await server((_req, res) => {
       res.writeHead(200, { "content-type": "text/event-stream" });
       res.end(item.raw);
     });
@@ -326,8 +324,8 @@ for (const item of invalidStreams) {
   });
 }
 
-test("bounds total response size independently of per-event size", async (t) => {
-  const provider = await server(t, async (_req, res) => {
+test("bounds total response size independently of per-event size", async () => {
+  const provider = await server(async (_req, res) => {
     res.writeHead(200, { "content-type": "text/event-stream" });
     for (let i = 0; i < 18; i++) {
       if (res.destroyed) return;
@@ -342,17 +340,17 @@ test("bounds total response size independently of per-event size", async (t) => 
   );
 });
 
-test("replacement decoding of invalid UTF-8 alone cannot fabricate a message envelope", async (t) => {
-  const provider = await server(t, (_req, res) => {
+test("replacement decoding of invalid UTF-8 alone cannot fabricate a message envelope", async () => {
+  const provider = await server((_req, res) => {
     res.writeHead(200, { "content-type": "text/event-stream" });
     res.end(Buffer.from([0xff]));
   });
   await assert.rejects(provider.complete(request()), /protocol/);
 });
 
-test("does not expose API error messages or HTTP bodies containing credentials", async (t) => {
+test("does not expose API error messages or HTTP bodies containing credentials", async () => {
   for (const status of [200, 401]) {
-    const provider = await server(t, (_req, res) => {
+    const provider = await server((_req, res) => {
       res.writeHead(status, { "content-type": "text/event-stream" });
       res.end(
         sse({
@@ -370,16 +368,16 @@ test("does not expose API error messages or HTTP bodies containing credentials",
   }
 });
 
-test("rejects non-SSE responses", async (t) => {
-  const provider = await server(t, (_req, res) => {
+test("rejects non-SSE responses", async () => {
+  const provider = await server((_req, res) => {
     res.end("secret-key");
   });
   await assert.rejects(provider.complete(request()), /not an event stream/);
 });
 
-test("cancels an in-flight stream and rejects with AbortError", async (t) => {
+test("cancels an in-flight stream and rejects with AbortError", async () => {
   const controller = new AbortController();
-  const provider = await server(t, (_req, res) => {
+  const provider = await server((_req, res) => {
     res.writeHead(200, { "content-type": "text/event-stream" });
     res.write(
       [start, textStart, textDelta].map((event) => sse(event)).join(""),
@@ -393,9 +391,9 @@ test("cancels an in-flight stream and rejects with AbortError", async (t) => {
   );
 });
 
-test("cancels while waiting for the next stream chunk", async (t) => {
+test("cancels while waiting for the next stream chunk", async () => {
   const controller = new AbortController();
-  const provider = await server(t, (_req, res) => {
+  const provider = await server((_req, res) => {
     res.writeHead(200, { "content-type": "text/event-stream" });
     res.write(
       [start, textStart, textDelta].map((event) => sse(event)).join(""),
@@ -414,8 +412,8 @@ test("cancels while waiting for the next stream chunk", async (t) => {
   );
 });
 
-test("message_stop completes without waiting for the server to close the response", async (t) => {
-  const provider = await server(t, (_req, res) => {
+test("message_stop completes without waiting for the server to close the response", async () => {
+  const provider = await server((_req, res) => {
     res.writeHead(200, { "content-type": "text/event-stream" });
     res.write([start, end, stop].map((event) => sse(event)).join(""));
   });
@@ -439,9 +437,9 @@ test("invalid base URLs are rejected without echoing their contents", () => {
   }
 });
 
-test("does not send an already-cancelled request", async (t) => {
+test("does not send an already-cancelled request", async () => {
   let requests = 0;
-  const provider = await server(t, (_req, res) => {
+  const provider = await server((_req, res) => {
     requests++;
     res.end();
   });
@@ -454,11 +452,10 @@ test("does not send an already-cancelled request", async (t) => {
 
 test(
   "retries pre-stream transient HTTP failures without duplicating text",
-  { timeout: 10000 },
-  async (t) => {
+  async () => {
     let calls = 0;
     const bodies: string[] = [];
-    const provider = await server(t, async (req, res) => {
+    const provider = await server(async (req, res) => {
       let body = "";
       for await (const chunk of req) body += chunk;
       bodies.push(body);
@@ -476,15 +473,14 @@ test(
     assert.deepEqual(text, ["Hi 🌍"]);
     assert.equal(result.usage.output_tokens, 4);
   },
+  { timeout: 10000 },
 );
 
 test(
   "retry budget stops after the final attempt and does not expose response bodies",
-  { timeout: 10000 },
-  async (t) => {
+  async () => {
     let calls = 0;
     const provider = await server(
-      t,
       (_req, res) => {
         calls++;
         res.writeHead(500);
@@ -497,14 +493,14 @@ test(
     });
     assert.equal(calls, 3);
   },
+  { timeout: 10000 },
 );
 
 test(
   "retry headers can decline a transient failure or request another retryable status",
-  { timeout: 10000 },
-  async (t) => {
+  async () => {
     let declined = 0;
-    const no = await server(t, (_req, res) => {
+    const no = await server((_req, res) => {
       declined++;
       res.writeHead(503, { "x-should-retry": "false" });
       res.end();
@@ -512,7 +508,7 @@ test(
     await assert.rejects(no.complete(request()), /HTTP error 503/);
     assert.equal(declined, 1);
     let forced = 0;
-    const yes = await server(t, (_req, res) => {
+    const yes = await server((_req, res) => {
       if (++forced === 1) {
         res.writeHead(418, { "x-should-retry": "true" });
         res.end();
@@ -521,15 +517,15 @@ test(
     assert.equal((await yes.complete(request())).stop_reason, "end_turn");
     assert.equal(forced, 2);
   },
+  { timeout: 10000 },
 );
 
 test(
   "a retry wait is cancellable and overlong server delays are refused",
-  { timeout: 3000 },
-  async (t) => {
+  async () => {
     let calls = 0;
     const controller = new AbortController();
-    const provider = await server(t, (_req, res) => {
+    const provider = await server((_req, res) => {
       calls++;
       res.writeHead(429, { "retry-after": "30" });
       res.end();
@@ -541,7 +537,7 @@ test(
     );
     assert.equal(calls, 1);
     let longCalls = 0;
-    const tooLong = await server(t, (_req, res) => {
+    const tooLong = await server((_req, res) => {
       longCalls++;
       res.writeHead(429, { "retry-after-ms": "90000" });
       res.end();
@@ -549,14 +545,14 @@ test(
     await assert.rejects(tooLong.complete(request()), /retry delay exceeds/);
     assert.equal(longCalls, 1);
   },
+  { timeout: 3000 },
 );
 
 test(
   "connection loss before headers retries, while zero ordinary budget prevents partial replay",
-  { timeout: 10000 },
-  async (t) => {
+  async () => {
     let calls = 0;
-    const provider = await server(t, (req, res) => {
+    const provider = await server((req, res) => {
       if (++calls === 1) req.socket.destroy();
       else respond(res, [start, end, stop]);
     });
@@ -564,7 +560,6 @@ test(
     assert.equal(calls, 2);
     let streams = 0;
     const partial = await server(
-      t,
       (_req, res) => {
         streams++;
         respond(res, [start, textStart, textDelta]);
@@ -579,11 +574,12 @@ test(
     assert.equal(streams, 1);
     assert.deepEqual(text, ["Hi 🌍"]);
   },
+  { timeout: 10000 },
 );
 
-test("HTTP redirects are never followed or retried, even with a retry hint", async (t) => {
+test("HTTP redirects are never followed or retried, even with a retry hint", async () => {
   let requests = 0;
-  const provider = await server(t, (_req, res) => {
+  const provider = await server((_req, res) => {
     requests++;
     res.writeHead(307, { location: "/redirect", "x-should-retry": "true" });
     res.end();
@@ -592,8 +588,8 @@ test("HTTP redirects are never followed or retried, even with a retry hint", asy
   assert.equal(requests, 1);
 });
 
-test("terminal billing and policy failures do not retry, even with positive retry hints", async (t) => {
-  for (const [status, error, headers] of [
+test("terminal billing and policy failures do not retry, even with positive retry hints", async () => {
+  const cases: Array<[number, object, Record<string, string>]> = [
     [429, { details: { error_code: "credits_required" } }, {}],
     [429, { message: "usage credits are required" }, {}],
     [429, { message: "service_spend_limit_reached" }, {}],
@@ -611,9 +607,10 @@ test("terminal billing and policy failures do not retry, even with positive retr
       {},
     ],
     [400, { type: "policy_blocked" }, {}],
-  ] as Array<[number, object, Record<string, string>]>) {
+  ];
+  for (const [status, error, headers] of cases) {
     let calls = 0;
-    const provider = await server(t, (_req, res) => {
+    const provider = await server((_req, res) => {
       calls++;
       res.writeHead(status, {
         "content-type": "application/json",
@@ -647,14 +644,13 @@ function jsonReply(
   );
 }
 
-test("opted-in 404 fallback sends a fixed request with stream false, including when retries are zero", async (t) => {
+test("opted-in 404 fallback sends a fixed request with stream false, including when retries are zero", async () => {
   const bodies: Array<Record<string, unknown>> = [];
   const provider = await server(
-    t,
     async (req, res) => {
       let body = "";
       for await (const chunk of req) body += chunk;
-      bodies.push(JSON.parse(body));
+      bodies.push(z.record(z.string(), z.unknown()).parse(JSON.parse(body)));
       if (bodies.length === 1) {
         res.writeHead(404);
         res.end();
@@ -684,7 +680,7 @@ test("opted-in 404 fallback sends a fixed request with stream false, including w
   assert.equal(result.content[1]?.type, "tool_use");
 });
 
-test("fallback is opt-in, cannot override a refusal hint and cannot repeat", async (t) => {
+test("fallback is opt-in, cannot override a refusal hint and cannot repeat", async () => {
   for (const [enabled, hint, expected] of [
     [false, undefined, 1],
     [true, "false", 1],
@@ -692,7 +688,6 @@ test("fallback is opt-in, cannot override a refusal hint and cannot repeat", asy
   ] as const) {
     let calls = 0;
     const provider = await server(
-      t,
       (_req, res) => {
         calls++;
         res.writeHead(404, hint ? { "x-should-retry": hint } : {});
@@ -707,12 +702,10 @@ test("fallback is opt-in, cannot override a refusal hint and cannot repeat", asy
 
 test(
   "stream and JSON phases share both retry counts and dispatch allowance",
-  { timeout: 5000 },
-  async (t) => {
+  async () => {
     for (const maxRetries of [1, 2]) {
       let calls = 0;
       const provider = await server(
-        t,
         (_req, res) => {
           calls++;
           if (calls <= 2) {
@@ -738,7 +731,6 @@ test(
     }
     let calls = 0;
     const provider = await server(
-      t,
       (_req, res) => {
         calls++;
         res.writeHead(404);
@@ -752,9 +744,10 @@ test(
     );
     assert.equal(calls, 1);
   },
+  { timeout: 5000 },
 );
 
-test("JSON fallback validates the whole response before publishing any text", async (t) => {
+test("JSON fallback validates the whole response before publishing any text", async () => {
   for (const content of [
     [
       { type: "text", text: "uncommitted" },
@@ -768,7 +761,6 @@ test("JSON fallback validates the whole response before publishing any text", as
   ]) {
     let calls = 0;
     const provider = await server(
-      t,
       (_req, res) => {
         if (++calls === 1) {
           res.writeHead(404);
@@ -787,11 +779,10 @@ test("JSON fallback validates the whole response before publishing any text", as
   }
 });
 
-test("JSON fallback can be cancelled during body reading", async (t) => {
+test("JSON fallback can be cancelled during body reading", async () => {
   let calls = 0;
   const controller = new AbortController();
   const provider = await server(
-    t,
     (_req, res) => {
       if (++calls === 1) {
         res.writeHead(404);
@@ -813,12 +804,10 @@ test("JSON fallback can be cancelled during body reading", async (t) => {
 
 test(
   "error metadata is bounded and best-effort for malformed, oversized or stalled bodies",
-  { timeout: 6000 },
-  async (t) => {
+  async () => {
     for (const mode of ["invalid", "large", "stalled"] as const) {
       let calls = 0;
       const provider = await server(
-        t,
         (_req, res) => {
           if (++calls > 1) {
             respond(res, [start, end, stop]);
@@ -839,12 +828,13 @@ test(
       assert.equal(calls, 2);
     }
   },
+  { timeout: 6000 },
 );
 
-test("cancellation during error metadata inspection does not retry", async (t) => {
+test("cancellation during error metadata inspection does not retry", async () => {
   const controller = new AbortController();
   let calls = 0;
-  const provider = await server(t, (_req, res) => {
+  const provider = await server((_req, res) => {
     calls++;
     res.writeHead(503, { "content-type": "application/json" });
     res.write("{");
@@ -857,7 +847,7 @@ test("cancellation during error metadata inspection does not retry", async (t) =
   assert.equal(calls, 1);
 });
 
-test("fallback rejects malformed UTF8/JSON and non-JSON responses without exposing bodies", async (t) => {
+test("fallback rejects malformed UTF8/JSON and non-JSON responses without exposing bodies", async () => {
   for (const [type, body, expected] of [
     ["application/json", Buffer.from([255]), /protocol/],
     ["application/json", Buffer.from("{private-data"), /protocol/],
@@ -865,7 +855,6 @@ test("fallback rejects malformed UTF8/JSON and non-JSON responses without exposi
   ] as const) {
     let calls = 0;
     const provider = await server(
-      t,
       (_req, res) => {
         if (++calls === 1) {
           res.writeHead(404);
@@ -887,10 +876,9 @@ test("fallback rejects malformed UTF8/JSON and non-JSON responses without exposi
   }
 });
 
-test("fallback JSON has the same bounded total response size as streaming", async (t) => {
+test("fallback JSON has the same bounded total response size as streaming", async () => {
   let calls = 0;
   const provider = await server(
-    t,
     async (_req, res) => {
       if (++calls === 1) {
         res.writeHead(404);

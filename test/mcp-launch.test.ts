@@ -9,7 +9,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { onTestFinished, test } from "bun:test";
 import {
   loadLaunchConfiguration,
   resolveGlobalConfigPath,
@@ -51,11 +51,11 @@ test("enterprise presence distinguishes unsearchable Unix ancestors from deploye
   );
 });
 
-test("global MCP config lookup honors the config-directory override and legacy metadata selection", async (t) => {
+test("global MCP config lookup honors the config-directory override and legacy metadata selection", async () => {
   const root = await realpath(
     await mkdtemp(join(tmpdir(), "tau-global-config-path-")),
   );
-  t.after(() => rm(root, { recursive: true, force: true }));
+  onTestFinished(() => rm(root, { recursive: true, force: true }));
   const user = join(root, "config"),
     cwd = join(root, "work"),
     managed = join(root, "managed");
@@ -80,9 +80,9 @@ test("global MCP config lookup honors the config-directory override and legacy m
   assert.equal(await resolveGlobalConfigPath(user, normal), normal);
 });
 
-test("MCP file loading keeps malformed enterprise presence exclusive, refuses dynamic/strict, and validates siblings independently", async (t) => {
+test("MCP file loading keeps malformed enterprise presence exclusive, refuses dynamic/strict, and validates siblings independently", async () => {
   const root = await realpath(await mkdtemp(join(tmpdir(), "tau-mcp-launch-")));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  onTestFinished(() => rm(root, { recursive: true, force: true }));
   const user = join(root, "config"),
     cwd = join(root, "work"),
     managed = join(root, "managed");
@@ -159,11 +159,11 @@ test("MCP file loading keeps malformed enterprise presence exclusive, refuses dy
   assert.deepEqual(restricted.resolution.policyBlockedNames, ["expanded"]);
 });
 
-test("unresolved MCP variables retain higher-scope definitions and explicit invalid siblings do not drop valid servers", async (t) => {
+test("unresolved MCP variables retain higher-scope definitions and explicit invalid siblings do not drop valid servers", async () => {
   const root = await realpath(
     await mkdtemp(join(tmpdir(), "tau-mcp-unresolved-")),
   );
-  t.after(() => rm(root, { recursive: true, force: true }));
+  onTestFinished(() => rm(root, { recursive: true, force: true }));
   const user = join(root, "config"),
     cwd = join(root, "work"),
     managed = join(root, "managed");

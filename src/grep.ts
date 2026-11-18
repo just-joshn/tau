@@ -73,7 +73,7 @@ export function searchText(options: {
       break;
     default: {
       const exhaustive: never = input.output_mode;
-      throw new Error(`Unknown Grep mode: ${exhaustive}`);
+      throw new Error(`Unknown Grep mode: ${String(exhaustive)}`);
     }
   }
   args.push("--", "-");

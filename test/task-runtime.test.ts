@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test, onTestFinished } from "bun:test";
+import { z } from "zod";
 import { createLocalTaskStore } from "../src/task-store.js";
 import {
   createTaskRuntime,
@@ -15,6 +16,25 @@ import { projectMessages } from "../src/thinking-history.js";
 import type { Message, Provider, ToolUse } from "../src/types.js";
 import type { ToolHookRuntime } from "../src/tool-hook-runtime.js";
 
+function at<T>(items: readonly T[], index: number): T {
+  const item = items.at(index);
+  if (item === undefined) assert.fail(`no item at index ${String(index)}`);
+  return item;
+}
+
+const taskView = z.looseObject({
+  id: z.string().optional(),
+  owner: z.string().optional(),
+  description: z.string().optional(),
+  metadata: z.unknown().optional(),
+  blockedBy: z.array(z.string()).optional(),
+});
+const taskResponse = z.looseObject({ task: taskView });
+const tasksResponse = z.looseObject({ tasks: z.array(taskView) });
+const updateResponse = z.looseObject({
+  success: z.boolean(),
+  updatedFields: z.array(z.string()).optional(),
+});
 const signal = () => new AbortController().signal;
 const call = (name: string, input: unknown): ToolUse => ({
   type: "tool_use",
@@ -49,9 +69,17 @@ test("ordinary task enablement uses the exact canonical catalog and independent 
     assert.equal(nativeTasksEnabled({ canonicalModel, todoTools: true }), true);
   }
 });
-async function fixture(t: any, overrides: Partial<TaskRuntimeOptions> = {}) {
+async function stored(
+  store: ReturnType<typeof createLocalTaskStore>,
+  id: string,
+) {
+  const task = await store.get(id);
+  assert.ok(task);
+  return task;
+}
+async function fixture(overrides: Partial<TaskRuntimeOptions> = {}) {
   const root = await mkdtemp(join(tmpdir(), "tau-task-runtime-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  onTestFinished(() => rm(root, { recursive: true, force: true }));
   const store = createLocalTaskStore({ root, listId: "owned-list" });
   const runtime = createTaskRuntime({
     store,
@@ -67,8 +95,8 @@ async function fixture(t: any, overrides: Partial<TaskRuntimeOptions> = {}) {
     runtime.execute(call(name, input), signal());
   return { store, runtime, execute };
 }
-test("agent can create/get/update/list local tasks with persistent dependencies and request-only hook metadata", async (t) => {
-  const f = await fixture(t),
+test("agent can create/get/update/list local tasks with persistent dependencies and request-only hook metadata", async () => {
+  const f = await fixture(),
     messages: Message[] = [
       { role: "user", content: [{ type: "text", text: "track owned work" }] },
     ];
@@ -108,23 +136,26 @@ test("agent can create/get/update/list local tasks with persistent dependencies 
     signal: signal(),
     onEvent() {},
   });
-  assert.deepEqual((await f.store.get("2"))!.blockedBy, ["1"]);
-  assert.equal((await f.store.get("1"))!.owner, "worker");
+  assert.deepEqual((await stored(f.store, "2")).blockedBy, ["1"]);
+  assert.equal((await stored(f.store, "1")).owner, "worker");
   const results = messages
     .flatMap((message) => message.content)
     .filter((block) => block.type === "tool_result");
-  const got = results[3]!.hookResponse as any;
+  const got = taskResponse.parse(at(results, 3).hookResponse);
   assert.equal(got.task.owner, undefined);
   assert.equal(got.task.metadata, undefined);
   assert.equal(got.task.description, "first owned");
-  assert.equal((results[4]!.hookResponse as any).tasks[0].owner, "worker");
+  assert.equal(
+    at(tasksResponse.parse(at(results, 4).hookResponse).tasks, 0).owner,
+    "worker",
+  );
   assert.equal(
     JSON.stringify(projectMessages(messages)).includes("hookResponse"),
     false,
   );
 });
-test("domain missing tasks remain ordinary results, updates allow nonmonotone status and missing edge reports", async (t) => {
-  const f = await fixture(t);
+test("domain missing tasks remain ordinary results, updates allow nonmonotone status and missing edge reports", async () => {
+  const f = await fixture();
   assert.equal(
     (await f.execute("TaskGet", { taskId: "999" })).is_error,
     undefined,
@@ -134,7 +165,7 @@ test("domain missing tasks remain ordinary results, updates allow nonmonotone st
     status: "completed",
   });
   assert.equal(missing.is_error, undefined);
-  assert.equal((missing.hookResponse as any).success, false);
+  assert.equal(updateResponse.parse(missing.hookResponse).success, false);
   assert.equal((await f.execute("TaskList", {})).content, "No tasks found");
   await f.execute("TaskCreate", { subject: "one", description: "owned" });
   for (const status of ["completed", "pending", "in_progress"])
@@ -146,11 +177,13 @@ test("domain missing tasks remain ordinary results, updates allow nonmonotone st
     taskId: "1",
     addBlocks: ["missing"],
   });
-  assert.deepEqual((changed.hookResponse as any).updatedFields, ["blocks"]);
-  assert.deepEqual((await f.store.get("1"))!.blocks, []);
+  assert.deepEqual(updateResponse.parse(changed.hookResponse).updatedFields, [
+    "blocks",
+  ]);
+  assert.deepEqual((await stored(f.store, "1")).blocks, []);
 });
-test("list hides internal tasks and removes only visible completed blockers; Get preserves raw links", async (t) => {
-  const f = await fixture(t);
+test("list hides internal tasks and removes only visible completed blockers; Get preserves raw links", async () => {
+  const f = await fixture();
   await f.execute("TaskCreate", {
     subject: "hidden",
     description: "owned",
@@ -163,25 +196,28 @@ test("list hides internal tasks and removes only visible completed blockers; Get
     status: "completed",
   });
   await f.store.update("2", { blockedBy: ["1", "missing"] });
-  let tasks = (await f.execute("TaskList", {})).hookResponse as any;
+  let tasks = tasksResponse.parse(
+    (await f.execute("TaskList", {})).hookResponse,
+  );
   assert.equal(tasks.tasks.length, 1);
-  assert.deepEqual(tasks.tasks[0].blockedBy, ["1", "missing"]);
+  assert.deepEqual(at(tasks.tasks, 0).blockedBy, ["1", "missing"]);
   await f.execute("TaskUpdate", { taskId: "1", metadata: { _internal: null } });
-  tasks = (await f.execute("TaskList", {})).hookResponse as any;
+  tasks = tasksResponse.parse((await f.execute("TaskList", {})).hookResponse);
   assert.equal(tasks.tasks.length, 2);
-  assert.deepEqual(tasks.tasks[1].blockedBy, ["missing"]);
+  assert.deepEqual(at(tasks.tasks, 1).blockedBy, ["missing"]);
   assert.deepEqual(
-    ((await f.execute("TaskGet", { taskId: "2" })).hookResponse as any).task
-      .blockedBy,
+    taskResponse.parse(
+      (await f.execute("TaskGet", { taskId: "2" })).hookResponse,
+    ).task.blockedBy,
     ["1", "missing"],
   );
   await f.execute("TaskUpdate", { taskId: "1", status: "deleted" });
-  assert.deepEqual((await f.store.get("2"))!.blockedBy, ["missing"]);
+  assert.deepEqual((await stored(f.store, "2")).blockedBy, ["missing"]);
 });
-test("TaskCompleted block holds every patch and dependency, while a repeated completion does not rerun lifecycle", async (t) => {
+test("TaskCompleted block holds every patch and dependency, while a repeated completion does not rerun lifecycle", async () => {
   let block = true,
     completed = 0;
-  const f = await fixture(t, {
+  const f = await fixture({
     lifecycle: {
       async completed(context) {
         completed++;
@@ -212,17 +248,17 @@ test("TaskCompleted block holds every patch and dependency, while a repeated com
   };
   const refused = await f.execute("TaskUpdate", input);
   assert.equal(refused.is_error, undefined);
-  assert.equal((refused.hookResponse as any).success, false);
+  assert.equal(updateResponse.parse(refused.hookResponse).success, false);
   assert.deepEqual(await f.store.get("1"), before);
-  assert.deepEqual((await f.store.get("2"))!.blockedBy, []);
+  assert.deepEqual((await stored(f.store, "2")).blockedBy, []);
   block = false;
   assert.equal((await f.execute("TaskUpdate", input)).is_error, undefined);
-  assert.equal((await f.store.get("1"))!.subject, "new");
+  assert.equal((await stored(f.store, "1")).subject, "new");
   await f.execute("TaskUpdate", { taskId: "1", status: "completed" });
   assert.equal(completed, 2);
-  assert.deepEqual((await f.store.get("1"))!.metadata, { passed: true });
+  assert.deepEqual((await stored(f.store, "1")).metadata, { passed: true });
 });
-test("TaskCreated blocking rolls back and consumes id; generic failure hook sees only thrown execution failures", async (t) => {
+test("TaskCreated blocking rolls back and consumes id; generic failure hook sees only thrown execution failures", async () => {
   let block = true,
     failures = 0,
     posts = 0;
@@ -239,7 +275,7 @@ test("TaskCreated blocking rolls back and consumes id; generic failure hook sees
       return { additionalContext: ["owned failure feedback"] };
     },
   };
-  const f = await fixture(t, {
+  const f = await fixture({
     hooks,
     lifecycle: {
       async created() {
@@ -259,12 +295,12 @@ test("TaskCreated blocking rolls back and consumes id; generic failure hook sees
     subject: "two",
     description: "owned",
   });
-  assert.equal((created.hookResponse as any).task.id, "2");
+  assert.equal(taskResponse.parse(created.hookResponse).task.id, "2");
   await f.execute("TaskUpdate", { taskId: "missing" });
   assert.equal(failures, 1);
   assert.equal(posts, 2);
 });
-test("strict schemas/coercion validate before hooks and host objections survive hook allow", async (t) => {
+test("strict schemas/coercion validate before hooks and host objections survive hook allow", async () => {
   let pres = 0,
     permit = false;
   const hooks: ToolHookRuntime = {
@@ -280,7 +316,7 @@ test("strict schemas/coercion validate before hooks and host objections survive 
       return result;
     },
   };
-  const f = await fixture(t, { hooks, authorize: () => permit });
+  const f = await fixture({ hooks, authorize: () => permit });
   for (const input of [
     { tasks: [{ subject: "batch" }] },
     { prompt: "delegate", subagent_type: "Explore" },
@@ -301,21 +337,24 @@ test("strict schemas/coercion validate before hooks and host objections survive 
     status: "completed",
     owner: "not-created-owner",
   });
-  assert.equal((created.hookResponse as any).task.description, "repaired");
-  assert.equal((await f.store.get("1"))!.status, "pending");
-  assert.equal((await f.store.get("1"))!.owner, undefined);
+  assert.equal(
+    taskResponse.parse(created.hookResponse).task.description,
+    "repaired",
+  );
+  assert.equal((await stored(f.store, "1")).status, "pending");
+  assert.equal((await stored(f.store, "1")).owner, undefined);
   assert.equal(
     (await f.execute("TaskUpdate", { task_id: "1", active_form: "Reading" }))
       .is_error,
     undefined,
   );
-  assert.equal((await f.store.get("1"))!.activeForm, "Reading");
+  assert.equal((await stored(f.store, "1")).activeForm, "Reading");
   assert.deepEqual(coerceTaskCreateInput({ task: "simple owned task" }), {
     subject: "simple owned task",
     description: "simple owned task",
   });
 });
-test("pre rewrites revalidate and retain original assistant input; post output cannot alter task state", async (t) => {
+test("pre rewrites revalidate and retain original assistant input; post output cannot alter task state", async () => {
   const hooks: ToolHookRuntime = {
     async before(_call, _signal, validate) {
       return {
@@ -328,7 +367,8 @@ test("pre rewrites revalidate and retain original assistant input; post output c
       };
     },
     async after(_call, result, _signal, validate) {
-      return validate!(
+      assert.ok(validate);
+      return validate(
         {
           task: {
             id: "display-only",
@@ -340,7 +380,7 @@ test("pre rewrites revalidate and retain original assistant input; post output c
       );
     },
   };
-  const f = await fixture(t, { hooks });
+  const f = await fixture({ hooks });
   const original = call("TaskCreate", {
     subject: "model",
     description: "original",
@@ -354,11 +394,11 @@ test("pre rewrites revalidate and retain original assistant input; post output c
     subject: "rewritten",
     description: "effective",
   });
-  assert.equal((await f.store.get("1"))!.subject, "rewritten");
-  assert.equal((result.hookResponse as any).task.id, "display-only");
+  assert.equal((await stored(f.store, "1")).subject, "rewritten");
+  assert.equal(taskResponse.parse(result.hookResponse).task.id, "display-only");
   assert.equal(await f.store.get("display-only"), null);
 });
-test("mutation guard precedes hooks, readonly access stays available, disabled and cancelled calls do not mutate", async (t) => {
+test("mutation guard precedes hooks, readonly access stays available, disabled and cancelled calls do not mutate", async () => {
   let pres = 0;
   const hooks: ToolHookRuntime = {
     async before() {
@@ -369,7 +409,7 @@ test("mutation guard precedes hooks, readonly access stays available, disabled a
       return result;
     },
   };
-  const f = await fixture(t, {
+  const f = await fixture({
     hooks,
     validateMutation: () => "host background mutation guard",
   });

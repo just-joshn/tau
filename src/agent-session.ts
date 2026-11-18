@@ -33,6 +33,7 @@ import type {
   Message,
   PermissionMode,
   Provider,
+  ToolDefinition,
   ToolExecutor,
 } from "./types.js";
 import { triBoolean } from "./env-settings.js";
@@ -48,6 +49,7 @@ import {
 import { createBackgroundProgressMeter } from "./background-progress.js";
 import { ordinarySubagentConcurrencyLimit } from "./subagent-admission.js";
 import type { createChildCapabilityTools } from "./child-capability-tools.js";
+import type { createChildPlanHost } from "./child-plan-host.js";
 import { selectableToolNameSchema } from "./tool-policy.js";
 import { wrapCatalogTools } from "./catalog-session.js";
 
@@ -88,12 +90,21 @@ export async function createSessionAgentHost(options: {
   childCapabilities?(
     plan: Readonly<SubagentPlan>,
     context: {
+      policy: () => ToolPolicy;
+      mode: () => PermissionMode;
+      hooks: ToolHookRuntime;
+      signal: AbortSignal;
+    },
+  ): Promise<Awaited<ReturnType<typeof createChildCapabilityTools>>>;
+  childPlan?(
+    plan: Readonly<SubagentPlan>,
+    context: {
       policy(): ToolPolicy;
       mode(): PermissionMode;
       hooks: ToolHookRuntime;
       signal: AbortSignal;
     },
-  ): Promise<Awaited<ReturnType<typeof createChildCapabilityTools>>>;
+  ): ReturnType<typeof createChildPlanHost>;
   background?: {
     outputFile(plan: Readonly<SubagentPlan>): string;
     persist(snapshot: Readonly<BackgroundTaskSnapshot>): Promise<void>;
@@ -215,8 +226,9 @@ export async function createSessionAgentHost(options: {
   >();
   const pendingTools = new Map<string, Set<Promise<unknown>>>();
   const ownerSessionId = options.sessionId();
+  const backgroundOptions = options.background;
   const background =
-    options.background &&
+    backgroundOptions &&
     createBackgroundAgentRuntime({
       sessionId: ownerSessionId,
       admit: (plan, signal) => {
@@ -260,7 +272,9 @@ export async function createSessionAgentHost(options: {
       runChild: async (request) => {
         const adapter = backgroundAdapters.get(request.plan.agentId);
         if (!adapter) throw new Error("Background child runner is unavailable");
-        progressCallbacks.set(request.plan.agentId, request.onProgress);
+        progressCallbacks.set(request.plan.agentId, (progress) =>
+          request.onProgress(progress),
+        );
         const start = await adapter.lifecycle?.start?.(
           request.plan,
           request.signal,
@@ -273,20 +287,23 @@ export async function createSessionAgentHost(options: {
           });
         await request.prepareAfterStart?.();
         request.signal.throwIfAborted();
-        const stop = adapter.lifecycle?.stop;
+        const lifecycle = adapter.lifecycle,
+          stop = lifecycle?.stop?.bind(lifecycle);
         return adapter.runChild({
           ...request,
           ...(stop ? { stopHook: (event) => stop(request.plan, event) } : {}),
         });
       },
-      outputFile: options.background.outputFile,
+      outputFile: (plan) => backgroundOptions.outputFile(plan),
       canReadOutputFile: (plan) =>
         plan.parent.availableTools.some((tool) => tool.name === "Read") &&
         !matchingToolRule(options.policy(), "deny", "Read"),
-      persist: options.background.persist,
-      enqueueNotification: options.background.enqueueNotification,
+      persist: (snapshot) => backgroundOptions.persist(snapshot),
+      enqueueNotification: (notification) =>
+        backgroundOptions.enqueueNotification(notification),
       cleanupTask: async ({ task }) => {
-        await Promise.allSettled([...(pendingTools.get(task.agentId) ?? [])]);
+        const pending = pendingTools.get(task.agentId);
+        if (pending) await Promise.allSettled(pending);
         return 0;
       },
       watchdog: { kind: "unsupported" },
@@ -364,6 +381,7 @@ export async function createSessionAgentHost(options: {
   const makeRuntime = (
     base: () => ToolExecutor,
     inherited?: Readonly<SubagentPlan>,
+    scope?: () => readonly ToolDefinition[],
   ): ReturnType<typeof createSubagentRuntime> => {
     const parentMode = () => (inherited ? liveMode(inherited) : options.mode());
     const hooks: ToolHookRuntime = inherited
@@ -396,7 +414,10 @@ export async function createSessionAgentHost(options: {
         ...(inherited ? { parentAgentId: inherited.agentId } : {}),
         depth: inherited?.depth ?? 0,
         maxDepth,
-        availableTools: [...base().definitions, ...runtime.definitions],
+        availableTools: scope?.() ?? [
+          ...base().definitions,
+          ...runtime.definitions,
+        ],
         allowedModes: allowedModes(parentMode()),
         foregroundAllowed: !["1", "true"].includes(
           env.CLAUDE_CODE_FORK_SUBAGENT ?? "",
@@ -599,6 +620,12 @@ export async function createSessionAgentHost(options: {
         });
         if (childCapabilities)
           capabilities.set(plan.agentId, childCapabilities);
+        const childPlan = options.childPlan?.(plan, {
+          policy,
+          mode: () => liveMode(plan),
+          hooks: childHooks,
+          signal,
+        });
         const instructions = new InstructionContext({
           cwd: options.cwd,
           ...(plan.definition.omitClaudeMd &&
@@ -684,7 +711,11 @@ export async function createSessionAgentHost(options: {
             policy: current,
             readState,
             hooks: childHooks,
-            restorationExcludedPaths: instructions.excludedPaths,
+            restorationExcludedPaths: [
+              ...instructions.excludedPaths,
+              ...(childPlan?.location() ? [childPlan.location() ?? ""] : []),
+            ],
+            ...(childPlan ? childPlan.fileAccess : {}),
             sensitiveWritePaths: options.launch.snapshot.documents.flatMap(
               (document) =>
                 document.path === undefined ? [] : [document.path],
@@ -699,7 +730,9 @@ export async function createSessionAgentHost(options: {
                   options.launch.workspace.gitRoot ?? options.cwd,
                 );
             },
-            approve: plan.isAsync ? async () => false : options.approve,
+            approve: plan.isAsync
+              ? async () => false
+              : (description) => options.approve(description),
             readTokenCounter: (text, signal) =>
               options.provider.countFileTokens?.({
                 model: childCapabilities?.contextModel() ?? plan.model,
@@ -717,7 +750,16 @@ export async function createSessionAgentHost(options: {
           return cached;
         };
         // Nested agents receive this narrowed executor as their parent scope.
-        const nested = makeRuntime(tools, plan);
+        let completeChildTools: ToolExecutor | undefined;
+        const nested = makeRuntime(
+          tools,
+          plan,
+          () =>
+            completeChildTools?.definitions ?? [
+              ...tools().definitions,
+              ...nested.definitions,
+            ],
+        );
         const wrapped: ToolExecutor = {
           get definitions() {
             return [...tools().definitions, ...nested.definitions];
@@ -740,8 +782,39 @@ export async function createSessionAgentHost(options: {
         const history = { messages: contexts };
         childHistories.set(plan.agentId, history);
         activePlans.set(plan.agentId, plan);
-        const withCapabilities =
+        const capabilitiesOnly =
           childCapabilities?.wrap(wrapped, () => history.messages) ?? wrapped;
+        const withCapabilities =
+          childPlan?.wrap(capabilitiesOnly) ?? capabilitiesOnly;
+        completeChildTools = withCapabilities;
+        let announcedPlan: string | undefined;
+        const withPlanNotice: ToolExecutor = {
+          ...withCapabilities,
+          get definitions() {
+            return withCapabilities.definitions;
+          },
+          beforeModelRequest: async (signal) => {
+            await withCapabilities.beforeModelRequest?.(signal);
+            signal.throwIfAborted();
+            const location = childPlan?.location();
+            if (!location) {
+              announcedPlan = undefined;
+              return;
+            }
+            if (location !== announcedPlan) {
+              history.messages.push({
+                role: "user",
+                content: [
+                  {
+                    type: "text",
+                    text: `Planning mode is active. Agent plan file: ${location}\nPrepare the plan in this file, then request ExitPlanMode approval.`,
+                  },
+                ],
+              });
+              announcedPlan = location;
+            }
+          },
+        };
         return {
           system: `${options.system()}\n\n${plan.definition.prompt}`,
           contextMessages: contexts,
@@ -789,11 +862,7 @@ export async function createSessionAgentHost(options: {
             },
             beforeModelRequest: async (signal) => {
               await wrapCatalogTools(
-                instructions.wrap(
-                  withCapabilities,
-                  history.messages,
-                  readState,
-                ),
+                instructions.wrap(withPlanNotice, history.messages, readState),
                 history.messages,
                 {
                   agents: async () =>
@@ -970,15 +1039,18 @@ export async function createSessionAgentHost(options: {
     close: async () => {
       await background?.close();
       activePlans.clear();
-      for (const id of [...ownedSlots]) releaseSlot(id);
+      for (const id of ownedSlots) releaseSlot(id);
     },
     catalog: async () =>
       (await registry.catalog()).filter(
         (definition) =>
           !matchingAgentTypeDeny(options.policy(), definition.agentType),
       ),
-    wrap(base: () => ToolExecutor): ToolExecutor {
-      const runtime = makeRuntime(base);
+    wrap(
+      base: () => ToolExecutor,
+      scope?: () => readonly ToolDefinition[],
+    ): ToolExecutor {
+      const runtime = makeRuntime(base, undefined, scope);
       return {
         get definitions() {
           return [...base().definitions, ...runtime.definitions];

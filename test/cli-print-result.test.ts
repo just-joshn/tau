@@ -5,17 +5,23 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import test from "node:test";
+import { onTestFinished, test } from "bun:test";
+import { z } from "zod";
 import { fixtureSse } from "./sse-fixture.js";
+
+const row = z.object({
+  type: z.unknown().optional(),
+  text: z.unknown().optional(),
+  result: z.unknown().optional(),
+});
 
 test(
   "print outputs select the final text block while stream events retain earlier accepted text",
-  { timeout: 15000 },
-  async (t) => {
+  async () => {
     const root = await realpath(
       await mkdtemp(join(tmpdir(), "tau-print-result-")),
     );
-    t.after(() => rm(root, { recursive: true, force: true }));
+    onTestFinished(() => rm(root, { recursive: true, force: true }));
     for (const name of ["config", "managed", "home"])
       await mkdir(join(root, name));
     await writeFile(join(root, "a.txt"), "owned");
@@ -64,7 +70,7 @@ test(
         ]),
       );
     });
-    t.after(
+    onTestFinished(
       () =>
         new Promise<void>((done) => {
           api.closeAllConnections();
@@ -83,7 +89,7 @@ test(
         const child = spawn(
           process.execPath,
           [
-            fileURLToPath(new URL("../src/cli.js", import.meta.url)),
+            fileURLToPath(new URL("../src/cli.ts", import.meta.url)),
             "-p",
             "read owned",
             "--cwd",
@@ -117,15 +123,16 @@ test(
         const rows = result.out
           .trim()
           .split("\n")
-          .map((line) => JSON.parse(line));
-        assert.equal(rows.at(-1).result, "final answer");
+          .map((line) => row.parse(JSON.parse(line)));
+        assert.equal(rows.at(-1)?.result, "final answer");
         if (format === "stream-json")
           assert.deepEqual(
-            rows.filter((row) => row.type === "text").map((row) => row.text),
+            rows.filter((r) => r.type === "text").map((r) => r.text),
             ["before tool", "earlier text block", "final answer"],
           );
       }
     }
     assert.equal(calls, 6);
   },
+  { timeout: 15000 },
 );

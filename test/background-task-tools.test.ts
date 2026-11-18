@@ -1,4 +1,4 @@
-import test from "node:test";
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { BackgroundTaskError } from "../src/background-agent-runtime.js";
 import {
@@ -6,12 +6,27 @@ import {
   projectTaskStopText,
   type BackgroundTaskToolView,
   type BackgroundTaskToolsOptions,
+  taskStopOutputSchema,
   type TaskStopOutput,
 } from "../src/background-task-tools.js";
 import { projectMessages } from "../src/thinking-history.js";
 import type { ToolPolicy } from "../src/tool-policy.js";
 import type { ToolHookRuntime } from "../src/tool-hook-runtime.js";
 import type { ToolUse } from "../src/types.js";
+import { z } from "zod";
+function head<T>(items: readonly T[]): T {
+  const [item] = items;
+  assert.ok(item);
+  return item;
+}
+const owned = (
+  f: { tasks: Map<string, BackgroundTaskToolView> },
+  id = "owned-a",
+) => {
+  const item = f.tasks.get(id);
+  assert.ok(item);
+  return item;
+};
 const signal = () => new AbortController().signal;
 const call = (input: unknown, name = "TaskStop"): ToolUse => ({
   type: "tool_use",
@@ -19,8 +34,11 @@ const call = (input: unknown, name = "TaskStop"): ToolUse => ({
   name,
   input,
 });
-const pre = () => ({
-  additionalContext: [] as string[],
+const pre = (): {
+  additionalContext: string[];
+  preventContinuation: boolean;
+} => ({
+  additionalContext: [],
   preventContinuation: false,
 });
 const task = (id = "owned-a"): BackgroundTaskToolView => ({
@@ -70,7 +88,9 @@ function fixture(overrides: Partial<BackgroundTaskToolsOptions> = {}) {
         message: "Owned task stopped",
         task_id: id,
         task_type: item.type,
-        command: item.description!,
+        ...(item.description === undefined
+          ? {}
+          : { command: item.description }),
       };
     },
     ...overrides,
@@ -91,10 +111,13 @@ test("canonical TaskStop and KillShell/KillBash aliases preserve shell_id and ex
       controller = new AbortController();
     const result = await f.runtime.execute(model, controller.signal);
     assert.equal(result.is_error, undefined);
-    assert.equal(JSON.parse(result.content).task_id, "owned-a");
-    assert.equal(f.stops[0]![0], "owned-a");
-    assert.equal(f.stops[0]![1].killedBy, "parent");
-    assert.equal(f.stops[0]![1].signal, controller.signal);
+    assert.equal(
+      taskStopOutputSchema.parse(JSON.parse(result.content)).task_id,
+      "owned-a",
+    );
+    assert.equal(head(f.stops)[0], "owned-a");
+    assert.equal(head(f.stops)[1].killedBy, "parent");
+    assert.equal(head(f.stops)[1].signal, controller.signal);
     assert.deepEqual(model, call({ shell_id: "owned-a" }, name));
     assert.deepEqual(
       f.runtime.definitions.map((tool) => tool.name),
@@ -135,7 +158,7 @@ test("strict optional schema requires a truthy selected ID and task_id wins over
     ).is_error,
     undefined,
   );
-  assert.equal(f.stops[0]![0], "owned-a");
+  assert.equal(head(f.stops)[0], "owned-a");
 });
 test("missing and finished tasks reject before hooks; scheduler not_found errors are typed", async () => {
   let hooks = 0;
@@ -150,8 +173,8 @@ test("missing and finished tasks reject before hooks; scheduler not_found errors
       },
     },
   });
-  f.tasks.get("owned-a")!.status = "completed";
-  f.tasks.get("owned-a")!.settled = true;
+  owned(f).status = "completed";
+  owned(f).settled = true;
   for (const id of ["missing", "owned-a"])
     assert.equal(
       (await f.runtime.execute(call({ task_id: id }), signal())).inputRejected,
@@ -172,7 +195,7 @@ test("missing and finished tasks reject before hooks; scheduler not_found errors
 });
 test("ended local loop may reach scheduler to re-signal, without rewriting task status in wrapper", async () => {
   const f = fixture();
-  f.tasks.get("owned-a")!.status = "completed";
+  owned(f).status = "completed";
   assert.equal(
     (await f.runtime.execute(call({ task_id: "owned-a" }), signal())).is_error,
     undefined,
@@ -196,7 +219,10 @@ test("hooks see canonical alias, validated full replacements authorize and stop 
     async after(tool, result) {
       events.push("post");
       seen.push(tool);
-      assert.equal((result.hookResponse as TaskStopOutput).task_id, "owned-b");
+      assert.equal(
+        taskStopOutputSchema.parse(result.hookResponse).task_id,
+        "owned-b",
+      );
       return result;
     },
   };
@@ -212,8 +238,8 @@ test("hooks see canonical alias, validated full replacements authorize and stop 
   const model = call({ task_id: "owned-a" }, "KillShell"),
     result = await f.runtime.execute(model, signal());
   assert.deepEqual(events, ["pre", "authorize", "post"]);
-  assert.equal(f.stops[0]![0], "owned-b");
-  assert.equal(seen[0]!.name, "TaskStop");
+  assert.equal(head(f.stops)[0], "owned-b");
+  assert.equal(head(seen).name, "TaskStop");
   assert.deepEqual(result.effectiveToolInput, { shell_id: "owned-b" });
   assert.deepEqual(model.input, { task_id: "owned-a" });
   assert.deepEqual(
@@ -248,7 +274,7 @@ test("invalid hook full replacement cannot retain allow or stop the original tas
     true,
   );
   assert.deepEqual(f.stops, []);
-  assert.equal(f.tasks.get("owned-a")!.status, "running");
+  assert.equal(owned(f).status, "running");
 });
 test("explicit deny, asked policy, and host refusal retain authority over hook allow", async () => {
   const hooks: ToolHookRuntime = {
@@ -373,8 +399,8 @@ test("ownership is delegated at stop after Pre and permissions; failure hooks re
   assert.equal(result.inputRejected, undefined);
   assert.match(result.content, /scheduler refuses/);
   assert.deepEqual(result.hookContext, ["Owned failure feedback"]);
-  assert.equal(f.tasks.get("owned-a")!.status, "running");
-  assert.equal(f.stops[0]![1].callerAgentId, "another");
+  assert.equal(owned(f).status, "running");
+  assert.equal(head(f.stops)[1].callerAgentId, "another");
 });
 test("post output replacement validates native payload shape and preserves short projected fields", async () => {
   const f = fixture({
@@ -409,7 +435,8 @@ test("post output replacement validates native payload shape and preserves short
 });
 test("malformed stop/post output is an outcome error, not an input-validation error", async () => {
   const invalid = fixture({
-    stop: () => ({ task_id: "owned-a" }) as TaskStopOutput,
+    // Deliberately violates the output schema; z.custom without a check admits any value.
+    stop: () => z.custom<TaskStopOutput>().parse({ task_id: "owned-a" }),
   });
   const badStop = await invalid.runtime.execute(
     call({ task_id: "owned-a" }),
@@ -423,7 +450,8 @@ test("malformed stop/post output is an outcome error, not an input-validation er
         return pre();
       },
       async after(_call, result, _signal, validate) {
-        return validate!({ message: 1 }, result);
+        assert.ok(validate);
+        return validate({ message: 1 }, result);
       },
     },
   });
@@ -438,12 +466,11 @@ test("disabled/narrowed tool stays unavailable, policy changes during authorizat
   for (const override of [
     { enabled: () => false },
     {
-      policy: () =>
-        ({
-          allowedTools: [],
-          disallowedTools: [],
-          tools: ["Read"],
-        }) as ToolPolicy,
+      policy: (): ToolPolicy => ({
+        allowedTools: [],
+        disallowedTools: [],
+        tools: ["Read"],
+      }),
     },
   ]) {
     const f = fixture(override);

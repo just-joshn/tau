@@ -116,8 +116,8 @@ function agentTools(agent: CatalogAgentMetadata): string {
   return "All tools";
 }
 function compareName(left: string, right: string): number {
-  const leftAscii = /^[\x00-\x7f]*$/.test(left),
-    rightAscii = /^[\x00-\x7f]*$/.test(right);
+  const leftAscii = /^\p{ASCII}*$/u.test(left),
+    rightAscii = /^\p{ASCII}*$/u.test(right);
   if (leftAscii !== rightAscii) return leftAscii ? -1 : 1;
   return leftAscii
     ? left.localeCompare(right)

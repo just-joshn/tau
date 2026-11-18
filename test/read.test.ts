@@ -2,12 +2,12 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import test, { type TestContext } from "node:test";
+import { test, onTestFinished } from "bun:test";
 import { createTools } from "../src/tools.js";
 
-async function workspace(t: TestContext) {
+async function workspace() {
   const cwd = await mkdtemp(path.join(os.tmpdir(), "tau-read-"));
-  t.after(() => rm(cwd, { recursive: true, force: true }));
+  onTestFinished(() => rm(cwd, { recursive: true, force: true }));
   const tools = createTools({
     cwd,
     mode: "plan",
@@ -26,8 +26,8 @@ async function workspace(t: TestContext) {
 
 const MAX_BYTES = 65536;
 
-test("Read advertises file_path, offset, limit and allow_large with strict bounds", async (t) => {
-  const { tools } = await workspace(t);
+test("Read advertises file_path, offset, limit and allow_large with strict bounds", async () => {
+  const { tools } = await workspace();
   const definition = tools.definitions.find((tool) => tool.name === "Read");
   assert.ok(definition);
   assert.match(definition.description, /offset/i);
@@ -66,8 +66,8 @@ test("Read advertises file_path, offset, limit and allow_large with strict bound
   }
 });
 
-test("Read numbers lines and applies offset before an optional limit, including offset zero", async (t) => {
-  const { cwd, run } = await workspace(t);
+test("Read numbers lines and applies offset before an optional limit, including offset zero", async () => {
+  const { cwd, run } = await workspace();
   await writeFile(path.join(cwd, "lines"), "alpha\nbeta\ngamma");
   for (const [input, expected] of [
     [{ file_path: "lines" }, "1\talpha\n2\tbeta\n3\tgamma"],
@@ -84,8 +84,8 @@ test("Read numbers lines and applies offset before an optional limit, including 
   }
 });
 
-test("Read distinguishes empty files, numbered blank lines and trailing LF", async (t) => {
-  const { cwd, run } = await workspace(t);
+test("Read distinguishes empty files, numbered blank lines and trailing LF", async () => {
+  const { cwd, run } = await workspace();
   for (const [text, expected] of [
     ["", "[empty file]"],
     ["\n", "1\t\n2\t"],
@@ -100,8 +100,8 @@ test("Read distinguishes empty files, numbered blank lines and trailing LF", asy
   }
 });
 
-test("Read beyond a complete file reports EOF as a successful result", async (t) => {
-  const { cwd, run } = await workspace(t);
+test("Read beyond a complete file reports EOF as a successful result", async () => {
+  const { cwd, run } = await workspace();
   await writeFile(path.join(cwd, "lines"), "first\n");
   assert.equal((await run({ file_path: "lines", offset: 2 })).content, "2\t");
   for (const offset of [3, 100]) {
@@ -112,8 +112,8 @@ test("Read beyond a complete file reports EOF as a successful result", async (t)
   }
 });
 
-test("Read has neither a default 2000-line limit nor a 2000-character line limit", async (t) => {
-  const { cwd, run } = await workspace(t);
+test("Read has neither a default 2000-line limit nor a 2000-character line limit", async () => {
+  const { cwd, run } = await workspace();
   const lines = Array.from({ length: 2105 }, (_, index) => `line-${index + 1}`);
   await writeFile(path.join(cwd, "many"), lines.join("\n"));
   assert.equal(
@@ -125,8 +125,8 @@ test("Read has neither a default 2000-line limit nor a 2000-character line limit
   assert.equal((await run({ file_path: "long" })).content, `1\t${long}`);
 });
 
-test("Read rejects coercion, invalid bounds, aliases and unsupported keys", async (t) => {
-  const { cwd, run } = await workspace(t);
+test("Read rejects coercion, invalid bounds, aliases and unsupported keys", async () => {
+  const { cwd, run } = await workspace();
   await writeFile(path.join(cwd, "text"), "valid");
   const invalid: Array<Record<string, unknown>> = [
     {},
@@ -184,8 +184,8 @@ test("Read rejects coercion, invalid bounds, aliases and unsupported keys", asyn
   }
 });
 
-test("Read accepts UTF-8, strips only its leading BOM and preserves Unicode content", async (t) => {
-  const { cwd, run } = await workspace(t);
+test("Read accepts UTF-8, strips only its leading BOM and preserves Unicode content", async () => {
+  const { cwd, run } = await workspace();
   await writeFile(path.join(cwd, "unicode"), "\ufeffcafé 😀\ninside\ufefftext");
   const result = await run({ file_path: "unicode" });
   assert.equal(result.is_error, undefined);
@@ -199,8 +199,8 @@ test("Read accepts UTF-8, strips only its leading BOM and preserves Unicode cont
   assert.ok(Buffer.byteLength(uncut.content) > MAX_BYTES);
 });
 
-test("Read rejects NUL, invalid UTF-8, UTF-16BE and recognized media instead of displaying bytes", async (t) => {
-  const { cwd, run } = await workspace(t);
+test("Read rejects NUL, invalid UTF-8, UTF-16BE and recognized media instead of displaying bytes", async () => {
+  const { cwd, run } = await workspace();
   const invalid = [
     Buffer.from("text\0tail"),
     Buffer.from([0xff]),
@@ -230,8 +230,8 @@ test("Read rejects NUL, invalid UTF-8, UTF-16BE and recognized media instead of 
   }
 });
 
-test("Read uses the 256KiB whole-file limit and explicit ranges avoid it", async (t) => {
-  const { cwd, run } = await workspace(t);
+test("Read uses the 256KiB whole-file limit and explicit ranges avoid it", async () => {
+  const { cwd, run } = await workspace();
   const prefix = "ok\n" + "x".repeat(262144 - 3);
   await writeFile(path.join(cwd, "exact"), prefix);
   assert.equal((await run({ file_path: "exact", limit: 1 })).content, "1\tok");
@@ -246,8 +246,8 @@ test("Read uses the 256KiB whole-file limit and explicit ranges avoid it", async
   assert.match(all.content, /262144.*offset.*limit/i);
 });
 
-test("Read scans beyond the old prefix and reports real EOF for later ranges", async (t) => {
-  const { cwd, run } = await workspace(t);
+test("Read scans beyond the old prefix and reports real EOF for later ranges", async () => {
+  const { cwd, run } = await workspace();
   await writeFile(
     path.join(cwd, "large"),
     "x\n".repeat(MAX_BYTES / 2) + "unseen",
@@ -266,8 +266,8 @@ test("Read scans beyond the old prefix and reports real EOF for later ranges", a
   assert.match(beyond.content, /end of file/);
 });
 
-test("Read decodes a UTF8 sequence crossing the former prefix boundary", async (t) => {
-  const { cwd, run } = await workspace(t);
+test("Read decodes a UTF8 sequence crossing the former prefix boundary", async () => {
+  const { cwd, run } = await workspace();
   const prefix = Buffer.concat([
     Buffer.from("x".repeat(MAX_BYTES - 7) + "\nsmall"),
     Buffer.from([0xe2]),
@@ -281,8 +281,8 @@ test("Read decodes a UTF8 sequence crossing the former prefix boundary", async (
   assert.equal(result.content, "2\tsmall€");
 });
 
-test("Read rejects missing and nonregular files, excluded trees and pre-aborted calls", async (t) => {
-  const { cwd, run } = await workspace(t);
+test("Read rejects missing and nonregular files, excluded trees and pre-aborted calls", async () => {
+  const { cwd, run } = await workspace();
   await mkdir(path.join(cwd, "directory"));
   for (const file_path of ["absent", "directory"]) {
     assert.equal((await run({ file_path })).is_error, true);

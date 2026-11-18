@@ -9,7 +9,8 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { onTestFinished, test } from "bun:test";
+import { z } from "zod";
 import { createSessionAgentHost } from "../src/agent-session.js";
 import { loadLaunchConfiguration } from "../src/launch-configuration.js";
 import { parseOptions } from "../src/options.js";
@@ -17,17 +18,23 @@ import { parseToolPolicy } from "../src/tool-policy.js";
 import { createTools } from "../src/tools.js";
 import type { ToolHookRuntime } from "../src/tool-hook-runtime.js";
 import type {
+  Completion,
   CompletionRequest,
   PermissionMode,
   Provider,
   ToolUse,
 } from "../src/types.js";
 
-async function fixture(t: any) {
+function head<T>(items: readonly T[]): T {
+  const [item] = items;
+  assert.ok(item);
+  return item;
+}
+async function fixture() {
   const cwd = await realpath(
     await mkdtemp(join(tmpdir(), "tau-agent-live-policy-")),
   );
-  t.after(() => rm(cwd, { recursive: true, force: true }));
+  onTestFinished(() => rm(cwd, { recursive: true, force: true }));
   const user = join(cwd, "config"),
     managed = join(cwd, "managed");
   await mkdir(join(user, "agents"), { recursive: true });
@@ -57,7 +64,7 @@ async function fixture(t: any) {
   let sessionHost:
     Awaited<ReturnType<typeof createSessionAgentHost>> | undefined;
   const notifications: unknown[] = [];
-  t.after(async () => sessionHost?.close());
+  onTestFinished(async () => sessionHost?.close());
   const hookModes: string[] = [];
   const hooks: ToolHookRuntime = {
     before: async (call) => {
@@ -121,35 +128,46 @@ async function fixture(t: any) {
     before: (callback: typeof onBefore) => {
       onBefore = callback;
     },
-    host: () => sessionHost!,
+    host: () => {
+      assert.ok(sessionHost);
+      return sessionHost;
+    },
+    background: () => {
+      assert.ok(sessionHost?.background);
+      return sessionHost.background;
+    },
     notifications,
     env,
   };
 }
+const callInput = {
+  description: "Own task",
+  prompt: "Owned task",
+  subagent_type: "owned",
+  run_in_background: false,
+};
 const call: ToolUse = {
   type: "tool_use",
   id: "agent",
   name: "Agent",
-  input: {
-    description: "Own task",
-    prompt: "Owned task",
-    subagent_type: "owned",
-    run_in_background: false,
-  },
+  input: callInput,
 };
-const response = (content: any, index: number) => ({
+const response = (content: Completion["content"][number], index: number) => ({
   content: [content],
   stop_reason: content.type === "tool_use" ? "tool_use" : "end_turn",
   usage: { input_tokens: 10, output_tokens: 3 },
   responseId: `live-${index}`,
 });
-const result = (request: CompletionRequest, id: string) =>
-  request.messages
+const result = (request: CompletionRequest, id: string) => {
+  const block = request.messages
     .flatMap((message) => message.content)
     .find((block) => block.type === "tool_result" && block.tool_use_id === id);
+  assert.ok(block?.type === "tool_result");
+  return block;
+};
 
-test("child adopts live parent ask, tool availability and mode without losing its isolated query", async (t) => {
-  const f = await fixture(t);
+test("child adopts live parent ask, tool availability and mode without losing its isolated query", async () => {
+  const f = await fixture();
   let requests = 0;
   // An allow from a hook never defeats a newly applied explicit parent ask.
   const provider: Provider = {
@@ -168,7 +186,7 @@ test("child adopts live parent ask, tool availability and mode without losing it
         );
       }
       if (requests === 2) {
-        assert.equal((result(request, "asked-read") as any).is_error, true);
+        assert.equal(result(request, "asked-read").is_error, true);
         assert.equal(
           JSON.stringify(result(request, "asked-read")).includes(
             "PRIVATE_FILE_CONTENT",
@@ -191,7 +209,7 @@ test("child adopts live parent ask, tool availability and mode without losing it
         );
       }
       if (requests === 3) {
-        assert.equal((result(request, "narrowed-read") as any).is_error, true);
+        assert.equal(result(request, "narrowed-read").is_error, true);
         assert.equal(
           request.tools.some((tool) => tool.name === "Read"),
           false,
@@ -207,7 +225,7 @@ test("child adopts live parent ask, tool availability and mode without losing it
           requests,
         );
       }
-      assert.equal((result(request, "live-write") as any).is_error, undefined);
+      assert.equal(result(request, "live-write").is_error, undefined);
       assert.equal(
         await readFile(join(f.cwd, "result.txt"), "utf8"),
         "OWNED_WRITE",
@@ -223,8 +241,8 @@ test("child adopts live parent ask, tool availability and mode without losing it
   assert.ok(f.hookModes.includes("acceptEdits"));
 });
 
-test("a parent policy change during a child Pre hook prevents I/O and permits a later valid retry", async (t) => {
-  const f = await fixture(t);
+test("a parent policy change during a child Pre hook prevents I/O and permits a later valid retry", async () => {
+  const f = await fixture();
   let first = true,
     requests = 0;
   f.setPolicy({ ...f.getPolicy(), allowedTools: ["Write"] });
@@ -238,7 +256,7 @@ test("a parent policy change during a child Pre hook prevents I/O and permits a 
     async complete(request) {
       requests++;
       if (requests === 2) {
-        assert.equal((result(request, "race-write") as any).is_error, true);
+        assert.equal(result(request, "race-write").is_error, true);
         await assert.rejects(readFile(join(f.cwd, "result.txt")), {
           code: "ENOENT",
         });
@@ -254,7 +272,7 @@ test("a parent policy change during a child Pre hook prevents I/O and permits a 
           },
           requests,
         );
-      assert.equal((result(request, "retry-write") as any).is_error, undefined);
+      assert.equal(result(request, "retry-write").is_error, undefined);
       return response({ type: "text", text: "done" }, requests);
     },
   };
@@ -268,14 +286,14 @@ test("a parent policy change during a child Pre hook prevents I/O and permits a 
   );
 });
 
-test("a published background child survives parent-turn abort and adopts later asks without opening a prompt", async (t) => {
-  const f = await fixture(t);
+test("a published background child survives parent-turn abort and adopts later asks without opening a prompt", async () => {
+  const f = await fixture();
   let release!: () => void,
     requests = 0;
   const gate = new Promise<void>((resolve) => {
     release = resolve;
   });
-  t.after(() => release());
+  onTestFinished(() => release());
   const provider: Provider = {
     async complete(request) {
       requests++;
@@ -292,10 +310,7 @@ test("a published background child survives parent-turn abort and adopts later a
           requests,
         );
       }
-      assert.equal(
-        (result(request, "background-asked-read") as any).is_error,
-        true,
-      );
+      assert.equal(result(request, "background-asked-read").is_error, true);
       assert.equal(
         JSON.stringify(request.messages).includes("PRIVATE_FILE_CONTENT"),
         false,
@@ -306,30 +321,33 @@ test("a published background child survives parent-turn abort and adopts later a
   const tools = await f.setup(provider, true),
     parent = new AbortController();
   const execution = await tools.execute(
-    { ...call, input: { ...(call.input as object), run_in_background: true } },
+    { ...call, input: { ...callInput, run_in_background: true } },
     parent.signal,
   );
   assert.equal(execution.is_error, undefined);
-  assert.equal((execution.hookResponse as any).status, "async_launched");
+  assert.equal(
+    z.object({ status: z.string() }).parse(execution.hookResponse).status,
+    "async_launched",
+  );
   parent.abort(new Error("parent turn ended"));
   f.setPolicy({ ...f.getPolicy(), askedTools: ["Read"] });
   release();
-  await f.host().background!.settled();
-  assert.equal(f.host().background!.list()[0]!.status, "completed");
+  await f.background().settled();
+  assert.equal(head(f.background().list()).status, "completed");
   assert.equal(f.notifications.length, 1);
   assert.equal(f.approveCount(), 0);
   assert.equal(requests, 2);
 });
 
-test("concurrency is reserved before child start and released on settlement", async (t) => {
-  const f = await fixture(t);
+test("concurrency is reserved before child start and released on settlement", async () => {
+  const f = await fixture();
   f.env.CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS = " +02 ";
   let release!: () => void,
     requests = 0;
   const gate = new Promise<void>((resolve) => {
     release = resolve;
   });
-  t.after(() => release());
+  onTestFinished(() => release());
   const provider: Provider = {
     async complete() {
       const index = ++requests;
@@ -344,7 +362,7 @@ test("concurrency is reserved before child start and released on settlement", as
       {
         ...call,
         id,
-        input: { ...(call.input as object), run_in_background: true },
+        input: { ...callInput, run_in_background: true },
       },
       signal,
     );
@@ -353,10 +371,10 @@ test("concurrency is reserved before child start and released on settlement", as
   const held = await launch("third");
   assert.equal(held.is_error, true);
   assert.match(held.content, /Concurrent agent limit/);
-  assert.equal(f.host().background!.list().length, 2);
+  assert.equal(f.background().list().length, 2);
   release();
-  await f.host().background!.settled();
+  await f.background().settled();
   assert.equal((await launch("fourth")).is_error, undefined);
-  await f.host().background!.settled();
+  await f.background().settled();
   assert.equal(requests, 3);
 });

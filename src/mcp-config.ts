@@ -70,7 +70,7 @@ export function parseMcpConfigs(
       throw new Error(`Invalid MCP server config: ${name}`);
     if (config.type !== undefined && config.type !== "stdio")
       throw new Error(
-        `Unsupported MCP transport for ${name}: ${String(config.type)}; supported transport: stdio`,
+        `Unsupported MCP transport for ${name}: ${typeof config.type === "string" ? config.type : JSON.stringify(config.type)}; supported transport: stdio`,
       );
     if (typeof config.command !== "string" || !config.command)
       throw new Error(`MCP server ${name} requires a command`);

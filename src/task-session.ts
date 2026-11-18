@@ -13,7 +13,7 @@ export function createSessionTaskHost(options: {
   userConfigDir: string;
   sessionId: string;
   environmentListId?: string;
-  enabled(): boolean;
+  enabled: () => boolean;
   policy(): ToolPolicy;
   approve(description: string): Promise<boolean>;
   hooks: ToolHookRuntime;
@@ -22,7 +22,7 @@ export function createSessionTaskHost(options: {
     task: { taskId: string; subject: string; description: string },
     signal: AbortSignal,
   ): Promise<readonly string[]>;
-  onDiagnostic?(message: string): void;
+  onDiagnostic?: (message: string) => void;
 }) {
   const listId = localTaskListIdentity({
     sessionId: options.sessionId,

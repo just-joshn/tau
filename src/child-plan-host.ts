@@ -98,7 +98,6 @@ export interface ChildPlanHostOptions {
   onDiagnostic?(message: string): void;
 }
 const enterInput = z.strictObject({});
-const planNames = new Set(["EnterPlanMode", "ExitPlanMode"]);
 
 /** Ordinary file-backed nonteammate child plan host. No model input can designate another file. */
 export function createChildPlanHost(options: ChildPlanHostOptions) {
@@ -137,7 +136,8 @@ export function createChildPlanHost(options: ChildPlanHostOptions) {
     cwd: options.cwd,
     files: options.files,
     sessionId: () => sessionId,
-    vetDirectory: options.vetDirectory,
+    vetDirectory: (canonical, declared) =>
+      options.vetDirectory(canonical, declared),
   });
   const fileAccess = {
     async extraPathAdmission(request: PlanExtraPathRequest) {
@@ -179,14 +179,14 @@ export function createChildPlanHost(options: ChildPlanHostOptions) {
   };
   const available = (name: string): boolean => {
     if (
-      !planNames.has(name) ||
+      (name !== "EnterPlanMode" && name !== "ExitPlanMode") ||
       options.sessionId() !== sessionId ||
       options.permissions().planDoc != null
     )
       return false;
     const policy = options.policy();
     return (
-      options.enabled(name as "EnterPlanMode" | "ExitPlanMode") &&
+      options.enabled(name) &&
       (policy.tools === undefined ||
         policy.tools.some((tool) => tool === name)) &&
       !matchingToolRule(policy, "deny", name)
@@ -254,17 +254,23 @@ export function createChildPlanHost(options: ChildPlanHostOptions) {
         };
       },
     },
-    canRequestApproval: options.canRequestApproval,
+    canRequestApproval: () => options.canRequestApproval(),
     approve: async () => {
       throw new Error(
         "Child plan approval must use the full host permission pipeline",
       );
     },
     ...(options.canRestoreMode
-      ? { canRestoreMode: options.canRestoreMode }
+      ? {
+          canRestoreMode: (mode, state) =>
+            options.canRestoreMode?.(mode, state) ?? false,
+        }
       : {}),
     ...(options.prepareTransition
-      ? { prepareTransition: options.prepareTransition }
+      ? {
+          prepareTransition: (state, transition) =>
+            options.prepareTransition?.(state, transition) ?? state,
+        }
       : {}),
   });
   function wrap(base: ToolExecutor | (() => ToolExecutor)): ToolExecutor {
@@ -323,15 +329,18 @@ export function createChildPlanHost(options: ChildPlanHostOptions) {
       },
       ...(options.onExecution
         ? {
-            onExecution: (execution, signal) =>
-              options.onExecution!(
+            onExecution: async (execution, signal) => {
+              await options.onExecution?.(
                 execution,
                 { sessionId, agentId: actor.agentId, isAsync: options.isAsync },
                 signal,
-              ),
+              );
+            },
           }
         : {}),
-      ...(options.onDiagnostic ? { onDiagnostic: options.onDiagnostic } : {}),
+      ...(options.onDiagnostic
+        ? { onDiagnostic: (message) => options.onDiagnostic?.(message) }
+        : {}),
     });
     return {
       ...wrapped,

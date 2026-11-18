@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "bun:test";
 import {
   createLocalAgentRegistry,
   type LocalAgentDefinition,
@@ -12,6 +12,7 @@ import {
   type SubagentRuntimeOptions,
   type SubagentParentContext,
   type SubagentChildRequest,
+  type SubagentMaterialization,
   type SubagentPlan,
   type SubagentAsyncLaunch,
 } from "../src/subagent-runtime.js";
@@ -21,6 +22,7 @@ import {
 } from "../src/background-agent-runtime.js";
 import { runAgent } from "../src/agent.js";
 import type {
+  CompletionRequest,
   Message,
   Provider,
   ToolDefinition,
@@ -69,6 +71,20 @@ const assistant = (
   usage: { input_tokens, output_tokens },
   model: "claude-sonnet-4-6",
 });
+function first<T extends object>(items: readonly T[]): T {
+  const [item] = items;
+  assert.ok(item);
+  return item;
+}
+function asObject(value: unknown): object {
+  assert.ok(typeof value === "object" && value !== null);
+  return value;
+}
+function field(value: unknown, key: string): unknown {
+  const object = asObject(value);
+  assert.ok(key in object);
+  return Reflect.get(object, key);
+}
 test("ordinary native permission selection preserves sticky parent modes and resolved source-policy gates", () => {
   assert.equal(
     resolveOrdinarySubagentPermissionMode({
@@ -222,7 +238,7 @@ test("foreground dispatch materializes an isolated fresh child and returns a str
   assert.equal(result.is_error, undefined);
   assert.deepEqual(original, snapshot);
   assert.equal(f.children.length, 1);
-  const child = f.children[0]!;
+  const child = first(f.children);
   assert.equal(child.system, "OWNED_AGENT_SYSTEM_READER");
   assert.deepEqual(child.messages, [
     {
@@ -245,7 +261,7 @@ test("foreground dispatch materializes an isolated fresh child and returns a str
   assert.match(result.content, /subagent_tokens: 13/);
   assert.match(result.content, /tool_uses: 0/);
   assert.match(result.content, /no user authority/);
-  assert.equal((result.hookResponse as any).canContinueAgent, false);
+  assert.equal(field(result.hookResponse, "canContinueAgent"), false);
 });
 
 test("ordinary unsupported async/fork/isolation/resume/team paths fail before running a child", async () => {
@@ -427,21 +443,19 @@ test("parent deny/ask and mode caps survive hook allow and child definition gran
 });
 
 test("depth caps include hook depth and remove recursive Agent aliases at the boundary", async () => {
-  const atBoundary = await setup(
-    {},
-    [definition({ tools: undefined } as any)],
-    {
-      depth: 2,
-      maxDepth: 3,
-      availableTools: [tool("Read"), tool("Agent"), tool("Task")],
-    },
-  );
+  const unrestricted = definition();
+  delete unrestricted.tools;
+  const atBoundary = await setup({}, [unrestricted], {
+    depth: 2,
+    maxDepth: 3,
+    availableTools: [tool("Read"), tool("Agent"), tool("Task")],
+  });
   assert.equal(
     (await atBoundary.runtime.execute(call(), signal())).is_error,
     undefined,
   );
   assert.deepEqual(
-    atBoundary.children[0]!.tools.definitions.map((t) => t.name),
+    first(atBoundary.children).tools.definitions.map((t) => t.name),
     ["Read"],
   );
   const blocked = await setup({}, undefined, {
@@ -472,7 +486,7 @@ test("tool selection cannot widen parent/definition scope; zero intentional tool
     (await empty.runtime.execute(call(), signal())).is_error,
     undefined,
   );
-  assert.deepEqual(empty.children[0]!.tools.definitions, []);
+  assert.deepEqual(first(empty.children).tools.definitions, []);
   const scoped = await setup({}, [definition({ tools: ["Bash(git status)"] })]);
   assert.match(
     (await scoped.runtime.execute(call(), signal())).content,
@@ -488,15 +502,18 @@ test("tool selection cannot widen parent/definition scope; zero intentional tool
 });
 
 test("model/mode/materialization receive passive metadata and preserve query/cost/compaction ownership", async () => {
-  let resolution: any, policy: any;
+  const resolutions: Parameters<SubagentRuntimeOptions["resolveModel"]>[0][] =
+      [],
+    policies: Parameters<SubagentRuntimeOptions["resolvePermissionMode"]>[0][] =
+      [];
   const f = await setup(
     {
       resolveModel: (request) => {
-        resolution = request;
+        resolutions.push(request);
         return "host-resolved-model";
       },
       resolvePermissionMode: (request) => {
-        policy = request;
+        policies.push(request);
         return "default";
       },
     },
@@ -509,10 +526,12 @@ test("model/mode/materialization receive passive metadata and preserve query/cos
     ],
     { inheritedAutoCompactWindow: 150000, sharedSessionCostCapUsd: 2 },
   );
-  (f.parent as any).attemptBudget = { count: 1 };
-  (f.parent as any).maxTurns = 1;
-  (f.parent as any).maxOutputTokens = 9;
-  (f.parent as any).messages = [assistant("PARENT_PRIVATE_CONTEXT")];
+  Object.assign(f.parent, {
+    attemptBudget: { count: 1 },
+    maxTurns: 1,
+    maxOutputTokens: 9,
+    messages: [assistant("PARENT_PRIVATE_CONTEXT")],
+  });
   assert.equal(
     (
       await f.runtime.execute(
@@ -524,10 +543,13 @@ test("model/mode/materialization receive passive metadata and preserve query/cos
     ).is_error,
     undefined,
   );
+  const resolution = resolutions.at(-1),
+    policy = policies.at(-1);
+  assert.ok(resolution && policy);
   assert.equal(resolution.input.model, "haiku");
   assert.equal(resolution.definition.model, "declared-model");
   assert.equal(policy.model, "host-resolved-model");
-  const plan = f.children[0]!.plan;
+  const plan = first(f.children).plan;
   assert.equal(plan.effort, "low");
   assert.equal(plan.maxTurns, 3);
   assert.deepEqual(plan.compaction, {
@@ -546,7 +568,9 @@ test("model/mode/materialization receive passive metadata and preserve query/cos
   ])
     assert.equal(key in plan.parent, false);
   assert.equal(
-    JSON.stringify(f.children[0]!.messages).includes("PARENT_PRIVATE_CONTEXT"),
+    JSON.stringify(first(f.children).messages).includes(
+      "PARENT_PRIVATE_CONTEXT",
+    ),
     false,
   );
 });
@@ -561,16 +585,20 @@ test("unhandled execution features and missing parent-floor enforcement fail exp
   );
   assert.equal(required.children.length, 0);
   const unsafe = await setup({
-    materialize: () =>
-      ({
+    materialize: () => {
+      const materialization: SubagentMaterialization = {
         system: "owned",
+        enforcesParentPolicy: true,
         tools: {
           definitions: [],
           async execute() {
             throw new Error("never");
           },
         },
-      }) as any,
+      };
+      Reflect.deleteProperty(materialization, "enforcesParentPolicy");
+      return materialization;
+    },
   });
   assert.match(
     (await unsafe.runtime.execute(call(), signal())).content,
@@ -607,12 +635,12 @@ test("SubagentStart feedback is child context and SubagentStop continuation must
     }),
     runChild: async (request) => {
       events.push("run");
-      assert.equal(
-        (request.messages.at(-1)!.content[0] as any).text,
-        "Owned SubagentStart feedback",
-      );
+      const feedback = request.messages.at(-1)?.content[0];
+      assert.ok(feedback?.type === "text");
+      assert.equal(feedback.text, "Owned SubagentStart feedback");
       const messages = [...request.messages, assistant("child result")];
-      await request.stopHook!({
+      assert.ok(request.stopHook);
+      await request.stopHook({
         messages,
         signal: request.signal,
         stopHookActive: false,
@@ -690,7 +718,7 @@ test("parent cancellation relays to the child and always cleans materialization"
 test("report selection uses latest nonblank assistant text and last usage rather than accumulating child replies", async () => {
   const f = await setup();
   await f.runtime.execute(call(), signal());
-  const plan = f.children[0]!.plan;
+  const plan = first(f.children).plan;
   const report = foregroundSubagentReport(
     [
       assistant("earlier", 100, 30),
@@ -716,7 +744,9 @@ test("report selection uses latest nonblank assistant text and last usage rather
     42,
     "max_turns",
   );
-  assert.match(partial.content[0]!.text, /partial/);
+  const [partialText] = partial.content;
+  assert.ok(partialText);
+  assert.match(partialText.text, /partial/);
 });
 
 test("parent/child runAgent queries have independent turn/attempt accounting and isolated request history", async () => {
@@ -724,9 +754,15 @@ test("parent/child runAgent queries have independent turn/attempt accounting and
     childCalls = 0,
     globalInput = 0,
     globalOutput = 0;
-  const budgets: any[] = [],
-    childRequests: any[] = [],
-    parentRequests: any[] = [];
+  const budgets: CompletionRequest["attemptBudget"][] = [],
+    childRequests: Pick<
+      CompletionRequest,
+      "system" | "messages" | "tools" | "maxTokens"
+    >[] = [],
+    parentRequests: Pick<
+      CompletionRequest,
+      "messages" | "tools" | "maxTokens"
+    >[] = [];
   const f = await setup({
     runChild: async (request) => {
       const childProvider: Provider = {
@@ -761,6 +797,8 @@ test("parent/child runAgent queries have independent turn/attempt accounting and
           };
         },
       };
+      const { stopHook } = request;
+      assert.ok(request.plan.maxTurns);
       const result = await runAgent({
         provider: childProvider,
         tools: request.tools,
@@ -768,15 +806,15 @@ test("parent/child runAgent queries have independent turn/attempt accounting and
         model: request.plan.model,
         system: request.system,
         maxTokens: 32000,
-        maxTurns: request.plan.maxTurns!,
+        maxTurns: request.plan.maxTurns,
         maxApiAttempts: 3,
         autoCompact: false,
         signal: request.signal,
         onEvent() {},
-        ...(request.stopHook
+        ...(stopHook
           ? {
               stopHook: async (event) => {
-                const result = await request.stopHook!(event);
+                const result = await stopHook(event);
                 return {
                   ...result,
                   additionalContext: [...result.additionalContext],
@@ -840,11 +878,11 @@ test("parent/child runAgent queries have independent turn/attempt accounting and
   assert.notEqual(budgets[0], budgets[1]);
   assert.equal(budgets[0], budgets[3]);
   assert.equal(budgets[1], budgets[2]);
-  assert.equal(parentRequests[0].maxTokens, 17);
-  assert.equal(childRequests[0].maxTokens, 32000);
-  assert.equal(childRequests[0].system, "OWNED_AGENT_SYSTEM_READER");
+  assert.equal(parentRequests[0]?.maxTokens, 17);
+  assert.equal(childRequests[0]?.maxTokens, 32000);
+  assert.equal(childRequests[0]?.system, "OWNED_AGENT_SYSTEM_READER");
   assert.deepEqual(
-    childRequests[0].tools.map((t: ToolDefinition) => t.name),
+    childRequests[0]?.tools.map((t) => t.name),
     ["Read"],
   );
   assert.equal(
@@ -855,12 +893,11 @@ test("parent/child runAgent queries have independent turn/attempt accounting and
     .flatMap((m) => m.content)
     .filter((b) => b.type === "tool_use");
   assert.equal(parentTools.length, 1);
-  assert.equal(parentTools[0]!.name, "Agent");
-  assert.match(
-    (parentMessages[2]!.content[0] as any).content,
-    /subagent_tokens: 13/,
-  );
-  assert.match((parentMessages[2]!.content[0] as any).content, /tool_uses: 1/);
+  assert.equal(parentTools[0]?.name, "Agent");
+  const parentResult = parentMessages[2]?.content[0];
+  assert.ok(parentResult?.type === "tool_result");
+  assert.match(parentResult.content, /subagent_tokens: 13/);
+  assert.match(parentResult.content, /tool_uses: 1/);
 });
 
 const launchResult = (plan: Readonly<SubagentPlan>): SubagentAsyncLaunch => ({
@@ -892,7 +929,7 @@ const launchMode = (
 
 test("background dispatch shares admitted planning once and never materializes or runs the foreground branch", async () => {
   const order: string[] = [];
-  let admitted: Readonly<SubagentPlan> | undefined;
+  const admittedPlans: Readonly<SubagentPlan>[] = [];
   const original = call(input({ run_in_background: undefined })),
     before = structuredClone(original);
   const f = await setup({
@@ -915,7 +952,7 @@ test("background dispatch shares admitted planning once and never materializes o
     },
     authorize: (call) => {
       order.push("authorize");
-      assert.equal((call.input as any).prompt, "OWNED_PRE_REPLACEMENT");
+      assert.equal(field(call.input, "prompt"), "OWNED_PRE_REPLACEMENT");
       return true;
     },
     resolveModel: () => {
@@ -929,12 +966,13 @@ test("background dispatch shares admitted planning once and never materializes o
     },
     selectTools: (_definition, _parent, context) => {
       order.push("scope");
-      assert.equal(context!.isAsync, true);
+      assert.ok(context);
+      assert.equal(context.isAsync, true);
       return ["Read"];
     },
     admitChild: (plan) => {
       order.push("admit");
-      admitted = plan;
+      admittedPlans.push(plan);
       return true;
     },
     background: {
@@ -945,7 +983,7 @@ test("background dispatch shares admitted planning once and never materializes o
       },
       async launch(plan) {
         order.push("launch");
-        assert.equal(plan, admitted);
+        assert.equal(plan, admittedPlans.at(-1));
         assert.ok(Object.isFrozen(plan));
         return launchResult(plan);
       },
@@ -965,12 +1003,9 @@ test("background dispatch shares admitted planning once and never materializes o
   const result = await f.runtime.execute(original, signal());
   assert.equal(result.is_error, undefined);
   assert.deepEqual(original, before);
-  assert.equal(
-    (f.runtime.definitions[0]!.input_schema as any).required.includes(
-      "run_in_background",
-    ),
-    false,
-  );
+  const required = first(f.runtime.definitions).input_schema.required;
+  assert.ok(required);
+  assert.equal(required.includes("run_in_background"), false);
   assert.deepEqual(order, [
     "pre",
     "authorize",
@@ -982,17 +1017,16 @@ test("background dispatch shares admitted planning once and never materializes o
     "launch",
     "post",
   ]);
-  assert.equal(admitted!.isAsync, true);
-  assert.deepEqual(admitted!.selectedToolNames, ["Read"]);
-  assert.equal(admitted!.input.prompt, "OWNED_PRE_REPLACEMENT");
-  assert.equal(
-    (result.hookResponse as SubagentAsyncLaunch).status,
-    "async_launched",
-  );
+  const admitted = admittedPlans.at(-1);
+  assert.ok(admitted);
+  assert.equal(admitted.isAsync, true);
+  assert.deepEqual(admitted.selectedToolNames, ["Read"]);
+  assert.equal(admitted.input.prompt, "OWNED_PRE_REPLACEMENT");
+  assert.equal(field(result.hookResponse, "status"), "async_launched");
   assert.ok(Array.isArray(result.apiContent));
   assert.match(result.content, /task notification/);
   assert.equal(f.children.length, 0);
-  assert.equal((result.effectiveToolInput as any).run_in_background, true);
+  assert.equal(field(result.effectiveToolInput, "run_in_background"), true);
 });
 
 test("host launch resolver handles omitted/true/definition background and disabled fallback without changing tool input", async () => {
@@ -1025,8 +1059,9 @@ test("host launch resolver handles omitted/true/definition background and disabl
     assert.equal(launched, expected ? 1 : 0);
     assert.equal(f.children.length, expected ? 0 : 1);
     if (!expected) {
-      assert.equal(f.children[0]!.plan.isAsync, false);
-      assert.equal(f.children[0]!.plan.input.run_in_background, requested);
+      const child = first(f.children);
+      assert.equal(child.plan.isAsync, false);
+      assert.equal(child.plan.input.run_in_background, requested);
     }
   }
 });
@@ -1157,9 +1192,10 @@ test("PostToolUse validates both completed and async outputs while launch callba
       },
       async after(_call, result, _signal, validate) {
         post++;
-        return validate!(
+        assert.ok(validate);
+        return validate(
           {
-            ...(result.hookResponse as SubagentAsyncLaunch),
+            ...asObject(result.hookResponse),
             outputFile: "/owned/post.json",
           },
           result,
@@ -1180,9 +1216,10 @@ test("PostToolUse validates both completed and async outputs while launch callba
         return { additionalContext: [], preventContinuation: false };
       },
       async after(_call, result, _signal, validate) {
-        return validate!(
+        assert.ok(validate);
+        return validate(
           {
-            ...(result.hookResponse as object),
+            ...asObject(result.hookResponse),
             content: [{ type: "text", text: "OWNED_FOREGROUND_POST" }],
           },
           result,
@@ -1200,7 +1237,8 @@ test("PostToolUse validates both completed and async outputs while launch callba
         return { additionalContext: [], preventContinuation: false };
       },
       async after(_call, result, _signal, validate) {
-        return validate!(
+        assert.ok(validate);
+        return validate(
           { status: "async_launched", isAsync: "invalid" },
           result,
         );
@@ -1297,7 +1335,7 @@ test("shared background callback returns before a separately owned scheduler chi
   finish();
   await scheduler.settled();
   assert.equal(
-    scheduler.get("owned-agent-id").result!.content[0]!.text,
+    scheduler.get("owned-agent-id").result?.content[0]?.text,
     "OWNED_BACKGROUND_FINAL",
   );
 });

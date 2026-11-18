@@ -1,4 +1,4 @@
-import test from "node:test";
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   buildCatalogAttachments,
@@ -25,9 +25,31 @@ const base = (): CatalogProjectionOptions => ({
 const history = (
   value: ReturnType<typeof buildCatalogAttachments>,
 ): CatalogHistoryAttachment[] => value.attachments;
-const skill = (value: ReturnType<typeof buildCatalogAttachments>) =>
-  value.attachments.find((row) => row.type === "skill_listing") as
-    SkillCatalogAttachment | undefined;
+const skill = (
+  value: ReturnType<typeof buildCatalogAttachments>,
+): SkillCatalogAttachment | undefined => {
+  for (const row of value.attachments)
+    if (row.type === "skill_listing") return row;
+  return undefined;
+};
+const requiredSkill = (value: ReturnType<typeof buildCatalogAttachments>) => {
+  const row = skill(value);
+  assert.ok(row);
+  return row;
+};
+const blockText = (
+  value: ReturnType<typeof buildCatalogAttachments>,
+  index: number,
+) => {
+  const block = value.blocks[index];
+  assert.ok(block);
+  return block.text;
+};
+const baseSkill = () => {
+  const [definition] = base().skills;
+  assert.ok(definition);
+  return definition;
+};
 
 test("catalog metadata projects separate user text blocks in agent then skill order", () => {
   const result = buildCatalogAttachments(base());
@@ -36,16 +58,16 @@ test("catalog metadata projects separate user text blocks in agent then skill or
     ["agent", "skill"],
   );
   assert.match(
-    result.blocks[0]!.text,
+    blockText(result, 0),
     /<system-reminder>\n.*Agent[\s\S]*owned:reader/,
   );
-  assert.match(result.blocks[0]!.text, /Tools: Read/);
-  assert.match(result.blocks[1]!.text, /owned:prepare: Prepare owned fixture/);
+  assert.match(blockText(result, 0), /Tools: Read/);
+  assert.match(blockText(result, 1), /owned:prepare: Prepare owned fixture/);
   assert.deepEqual(
     result.attachments.map((row) => row.type),
     ["agent_listing_delta", "skill_listing"],
   );
-  assert.equal(result.attachments[0]!.isInitial, true);
+  assert.equal(result.attachments[0]?.isInitial, true);
 });
 test("prepare is pure; only explicit committed history suppresses future catalog emissions", () => {
   const options = base(),
@@ -71,27 +93,28 @@ test("agent updates use name presence, emit removed names, and return to initial
     history: saved,
     agents: [],
   });
-  const delta = removed.attachments[0]!;
+  const [delta] = removed.attachments;
+  assert.ok(delta);
   assert.equal(delta.type, "agent_listing_delta");
   if (delta.type !== "agent_listing_delta") throw Error("Expected agent delta");
   assert.deepEqual(delta.removedTypes, ["owned:reader"]);
   assert.equal(delta.isInitial, false);
-  assert.match(removed.blocks[0]!.text, /removed/);
+  assert.match(blockText(removed, 0), /removed/);
   const restored = buildCatalogAttachments({
     ...base(),
     history: [...saved, ...history(removed)],
   });
-  assert.equal(restored.attachments[0]!.isInitial, true);
+  assert.equal(restored.attachments[0]?.isInitial, true);
 });
 test("malformed legacy addedTypes without addedLines does not mark an agent as seen", () => {
   const result = buildCatalogAttachments({
     ...base(),
     history: [{ type: "agent_listing_delta", addedTypes: ["owned:reader"] }],
   });
-  assert.equal(result.attachments[0]!.isInitial, true);
+  assert.equal(result.attachments[0]?.isInitial, true);
 });
 test("skill digest tracks display name and description metadata but not body/model/tools", () => {
-  const definition = base().skills[0]!,
+  const definition = baseSkill(),
     digest = catalogSkillDigest(definition);
   assert.equal(digest.length, 16);
   assert.notEqual(
@@ -117,9 +140,9 @@ test("skill digest tracks display name and description metadata but not body/mod
     additiveSkillRefresh: true,
     skills: [{ ...definition, description: "Changed description" }],
   });
-  assert.equal(skill(refreshed)!.isInitial, false);
-  assert.equal(skill(refreshed)!.addsToEarlier, true);
-  assert.deepEqual(skill(refreshed)!.names, [definition.name]);
+  assert.equal(requiredSkill(refreshed).isInitial, false);
+  assert.equal(requiredSkill(refreshed).addsToEarlier, true);
+  assert.deepEqual(requiredSkill(refreshed).names, [definition.name]);
 });
 test("legacy missing digest suppresses all new descriptions; skills have no removal delta", () => {
   const prior: CatalogHistoryAttachment[] = [
@@ -142,7 +165,7 @@ test("legacy missing digest suppresses all new descriptions; skills have no remo
   );
 });
 test("feature-enabled legacy nonadditive refresh resets earlier skill history without including the reset record", () => {
-  const definition = base().skills[0]!;
+  const definition = baseSkill();
   const prior: CatalogHistoryAttachment[] = [
     {
       type: "skill_listing",
@@ -168,13 +191,13 @@ test("feature-enabled legacy nonadditive refresh resets earlier skill history wi
     undefined,
   );
   assert.equal(
-    skill(
+    requiredSkill(
       buildCatalogAttachments({
         ...base(),
         history: prior,
         additiveSkillRefresh: true,
       }),
-    )!.isInitial,
+    ).isInitial,
     true,
   );
 });
@@ -193,21 +216,21 @@ test("priority budget keeps all names and collapses descriptions without reorder
       priority: (name: string) => (name === "two" ? 100 : 0),
     },
   };
-  const result = skill(buildCatalogAttachments(options))!;
+  const result = requiredSkill(buildCatalogAttachments(options));
   assert.equal(result.content, "- one\n- two\n- three: description");
   // remaining cap makes bundled descriptions eligible for collapse and sets shortened only when output changes.
-  const capped = skill(
+  const capped = requiredSkill(
     buildCatalogAttachments({
       ...options,
       skillBudget: { ...options.skillBudget, remaining: 20 },
     }),
-  )!;
+  );
   assert.equal(capped.content, "- one\n- two\n- three");
   assert.equal(capped.shortened, true);
   assert.deepEqual(capped.names, ["one", "two", "three"]);
 });
 test("description clipping and name-only entries retain identity and direct-call metadata", () => {
-  const result = skill(
+  const result = requiredSkill(
     buildCatalogAttachments({
       ...base(),
       skills: [
@@ -217,7 +240,7 @@ test("description clipping and name-only entries retain identity and direct-call
       callsSkillToolDirectly: true,
       skillBudget: { maxDescriptionChars: 5 },
     }),
-  )!;
+  );
   assert.equal(result.content, "- long: abcd…\n- only");
   assert.equal(result.callsSkillToolDirectly, true);
 });
@@ -250,16 +273,18 @@ test("agent additions use source ASCII locale ordering while removals use JS cod
       { agentType: "a", whenToUse: "lower" },
     ],
   };
-  const first = buildCatalogAttachments(options).attachments[0]!;
+  const [first] = buildCatalogAttachments(options).attachments;
+  assert.ok(first);
   assert.equal(first.type, "agent_listing_delta");
   if (first.type !== "agent_listing_delta")
     throw Error("Expected agent catalog");
   assert.deepEqual(first.addedTypes, ["a", "Z"]);
-  const removed = buildCatalogAttachments({
+  const [removed] = buildCatalogAttachments({
     ...options,
     agents: [],
     history: [first],
-  }).attachments[0]!;
+  }).attachments;
+  assert.ok(removed);
   if (removed.type !== "agent_listing_delta")
     throw Error("Expected agent catalog");
   assert.deepEqual(removed.removedTypes, ["Z", "a"]);

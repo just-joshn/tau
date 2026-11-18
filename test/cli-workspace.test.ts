@@ -13,17 +13,28 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import test from "node:test";
+import { test, onTestFinished } from "bun:test";
+import { z } from "zod";
 import { fixtureSse } from "./sse-fixture.js";
+
+const bodySchema = z.object({
+  model: z.string(),
+  tools: z.array(z.object({ name: z.string() })),
+  messages: z.array(
+    z.object({
+      content: z.array(z.object({ is_error: z.boolean().optional() })),
+    }),
+  ),
+});
+const eventSchema = z.object({ pid: z.number(), event: z.string() });
 
 test(
   "compiled nested-Git coding uses canonical local settings and MCP project identity",
-  { timeout: 15000 },
-  async (t) => {
+  async () => {
     const root = await realpath(
       await mkdtemp(join(tmpdir(), "tau-cli-workspace-")),
     );
-    t.after(() => rm(root, { recursive: true, force: true }));
+    onTestFinished(() => rm(root, { recursive: true, force: true }));
     const repo = join(root, "repo"),
       cwd = join(repo, "packages/app"),
       user = join(root, "config"),
@@ -105,11 +116,11 @@ rl.on('line',line=>{const m=JSON.parse(line);
       },
       { name: "mcp__repo__who", input: {} },
     ];
-    const bodies: any[] = [];
+    const bodies: z.infer<typeof bodySchema>[] = [];
     const api = createServer(async (request, response) => {
       let raw = "";
       for await (const chunk of request) raw += chunk;
-      const body = JSON.parse(raw);
+      const body = bodySchema.parse(JSON.parse(raw));
       bodies.push(body);
       const call = calls[bodies.length - 1];
       const block = call
@@ -137,7 +148,7 @@ rl.on('line',line=>{const m=JSON.parse(line);
         ]),
       );
     });
-    t.after(
+    onTestFinished(
       () =>
         new Promise<void>((done) => {
           api.closeAllConnections();
@@ -155,7 +166,7 @@ rl.on('line',line=>{const m=JSON.parse(line);
       const child = spawn(
         process.execPath,
         [
-          fileURLToPath(new URL("../src/cli.js", import.meta.url)),
+          fileURLToPath(new URL("../src/cli.ts", import.meta.url)),
           "--cwd",
           cwd,
           "-p",
@@ -183,24 +194,27 @@ rl.on('line',line=>{const m=JSON.parse(line);
       child.on("close", (code) => done({ code, out, err }));
     });
     assert.equal(result.code, 0, result.err);
-    assert.equal(JSON.parse(result.out).result, "Done.");
+    assert.equal(
+      z.object({ result: z.string() }).parse(JSON.parse(result.out)).result,
+      "Done.",
+    );
     assert.equal(bodies.length, 4);
     assert.ok(
       bodies.every((body) => body.model === "claude-haiku-4-5-20251001"),
     );
+    assert.ok(bodies[0]?.tools.some((tool) => tool.name === "mcp__repo__who"));
     assert.ok(
-      bodies[0].tools.some((tool: any) => tool.name === "mcp__repo__who"),
-    );
-    assert.ok(
-      bodies
-        .slice(1)
-        .every((body) => !body.messages.at(-1).content[0].is_error),
+      bodies.slice(1).every((body) => {
+        const block = body.messages.at(-1)?.content[0];
+        assert.ok(block);
+        return !block.is_error;
+      }),
     );
     assert.equal(await readFile(join(cwd, "a.txt"), "utf8"), "beta\n");
     const events = (await readFile(log, "utf8"))
       .trim()
       .split("\n")
-      .map((line) => JSON.parse(line));
+      .map((line) => eventSchema.parse(JSON.parse(line)));
     assert.equal(events.filter((event) => event.event === "call").length, 1);
     assert.deepEqual(
       events
@@ -211,4 +225,5 @@ rl.on('line',line=>{const m=JSON.parse(line);
         .map((event) => event.pid),
     );
   },
+  { timeout: 15000 },
 );

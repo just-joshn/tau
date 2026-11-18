@@ -157,7 +157,7 @@ export interface HookResult {
 export interface BackgroundHook {
   id: string;
   completion: Promise<HookResult>;
-  cancel(): void;
+  cancel: () => void;
 }
 export interface HookBatchResult {
   results: HookResult[];
@@ -194,7 +194,7 @@ export interface HookRunOptions {
   validateUpdatedInput?: (
     input: Record<string, unknown>,
     context: { input: HookInput; origin: HookOrigin },
-  ) => unknown | Promise<unknown>;
+  ) => unknown;
   forceSyncExecution?: boolean;
   onBackgroundResult?: (result: HookResult) => void | Promise<void>;
 }

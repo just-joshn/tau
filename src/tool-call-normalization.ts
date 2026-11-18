@@ -162,7 +162,7 @@ export function normalizeEditCallInput(
 export function pureToolCallNormalizationBinding(
   name: string,
   options: {
-    editTransform?(input: Readonly<IngestEditInput>): IngestEditInput;
+    editTransform?: (input: Readonly<IngestEditInput>) => IngestEditInput;
   } = {},
 ): ToolCallNormalizationBinding | undefined {
   if (name === "Read") return { normalize: normalizeReadCallInput };

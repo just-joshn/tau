@@ -42,7 +42,7 @@ export function createGlobMatcher(
           break;
         default: {
           const exhaustive: never = token;
-          throw new Error(`Unknown Glob token: ${exhaustive}`);
+          throw new Error(`Unknown Glob token: ${String(exhaustive)}`);
         }
       }
     }
@@ -85,7 +85,7 @@ export function createGlobMatcher(
             break;
           default: {
             const exhaustive: never = token;
-            throw new Error(`Unknown Glob token: ${exhaustive}`);
+            throw new Error(`Unknown Glob token: ${String(exhaustive)}`);
           }
         }
       }

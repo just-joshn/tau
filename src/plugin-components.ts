@@ -1,13 +1,5 @@
 import { readdir, realpath, stat } from "node:fs/promises";
-import {
-  basename,
-  dirname,
-  isAbsolute,
-  join,
-  relative,
-  resolve,
-  sep,
-} from "node:path";
+import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import {
   readBoundedConfigurationText,
   type PathReadPolicy,
@@ -22,7 +14,6 @@ import type { LocalAgentDefinition } from "./agent-definitions.js";
 import {
   isPluginCacheDescendant,
   type CatalogPlugin,
-  type PluginComponent,
 } from "./plugin-catalog.js";
 
 export const PLUGIN_DOCUMENT_MAX_BYTES = 1_048_576;
@@ -82,7 +73,7 @@ export interface PluginComponentOptions {
     hooks: unknown,
     path: string,
     plugin: Readonly<CatalogPlugin>,
-  ) => unknown | Promise<unknown>;
+  ) => unknown;
   /** Source strips invalid skill hooks and grants. Hosts may explicitly refuse that definition instead. */
   rejectInvalidHooks?: boolean;
   normalizeModel?: (model: string) => string;
@@ -95,7 +86,14 @@ export interface PluginComponentOptions {
 const record = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value);
 const scalar = (value: unknown): string | undefined =>
-  value == null ? undefined : String(value);
+  value == null
+    ? undefined
+    : typeof value === "string" ||
+        typeof value === "number" ||
+        typeof value === "boolean" ||
+        typeof value === "bigint"
+      ? String(value)
+      : JSON.stringify(value);
 const flag = (value: unknown): boolean | undefined => {
   if (typeof value === "boolean") return value;
   if (typeof value !== "string" && typeof value !== "number") return;
@@ -120,8 +118,6 @@ const offered = (name: string): boolean =>
   name.length > 0 &&
   name.length <= 256 &&
   !/[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}<>]/u.test(name);
-const skillFile = (path: string): boolean =>
-  /^skill\.md$/i.test(basename(path));
 const named = (value: unknown): string | undefined => {
   const text = scalar(value);
   return text !== undefined && text.length <= 256 ? text : undefined;

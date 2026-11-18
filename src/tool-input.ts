@@ -74,5 +74,5 @@ export function normalizeToolInput(value: unknown): unknown {
 }
 
 export function normalizeToolName(name: string): string {
-  return [...name].slice(0, 200).join("");
+  return Array.from(name).slice(0, 200).join("");
 }

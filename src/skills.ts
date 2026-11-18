@@ -209,11 +209,26 @@ function boolean(value: unknown): boolean | undefined {
   return;
 }
 function scalar(value: unknown): string | undefined {
-  return value === null || value === undefined ? undefined : String(value);
+  if (value === null || value === undefined) return undefined;
+  if (
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint"
+  )
+    return String(value);
+  return JSON.stringify(value);
 }
 function effort(value: unknown): SkillEffort | undefined {
   if (value === undefined || value === null || value === "") return;
   if (typeof value === "number" && Number.isInteger(value)) return value;
+  if (
+    typeof value !== "string" &&
+    typeof value !== "number" &&
+    typeof value !== "boolean" &&
+    typeof value !== "bigint"
+  )
+    return;
   const text = String(value).toLowerCase(),
     level = text === "med" ? "medium" : text;
   const named = (["low", "medium", "high", "xhigh", "max"] as const).find(

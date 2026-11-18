@@ -35,7 +35,7 @@ export interface ExternalToolRegistry {
     | undefined;
   refreshTools?(): Promise<void>;
   /** The host's input validator; used again for a hook's complete replacement. */
-  validateInput?(name: string, input: unknown): unknown | Promise<unknown>;
+  validateInput?(name: string, input: unknown): unknown;
   callTool(
     name: string,
     input: unknown,

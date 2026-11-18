@@ -1,5 +1,6 @@
-import test from "node:test";
+import { onTestFinished, test } from "bun:test";
 import assert from "node:assert/strict";
+import { z } from "zod";
 import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -240,7 +241,7 @@ test("duplicate command updates keep order, stable IDs and the initial success c
   const plain = store.register(request({ hooks: hooks("c") }));
   store.register(request({ hooks: hooks("c", { once: true }) }));
   const next = store.snapshot("one");
-  next.observe(input(), success(plain.registrationIds[0]!));
+  next.observe(input(), success(head(plain.registrationIds)));
   assert.equal(
     store
       .snapshot("one")
@@ -272,7 +273,7 @@ test("one-shot success uses source getEntry lookup and removal spans same-root m
     }),
   );
   const snapshot = store.snapshot("one");
-  snapshot.observe(input(), success(snapshot.list()[0]!.id));
+  snapshot.observe(input(), success(head(snapshot.list()).id));
   assert.equal(
     store
       .snapshot("one")
@@ -290,7 +291,7 @@ test("one-shot success uses source getEntry lookup and removal spans same-root m
   const regex = new SessionSkillHookRegistry();
   regex.register(request({ hooks: hooks("owned", { once: true }, "^Read$") }));
   const regexSnapshot = regex.snapshot("one");
-  regexSnapshot.observe(input(), success(regexSnapshot.list()[0]!.id));
+  regexSnapshot.observe(input(), success(head(regexSnapshot.list()).id));
   assert.equal(
     regex.snapshot("one").list().length,
     1,
@@ -310,9 +311,20 @@ test("root removal preserves quota draws and clear resets exactly the selected s
   assert.equal(store.usage("two", "userSettings").hooks, 1);
 });
 
-async function execution(t: any) {
+function head<T>(items: readonly T[]): T {
+  const [item] = items;
+  assert.ok(item);
+  return item;
+}
+const logRow = z.looseObject({
+  root: z.unknown().optional(),
+  args: z.unknown().optional(),
+  data: z.unknown().optional(),
+  skillDir: z.unknown().optional(),
+});
+async function execution() {
   const cwd = await realpath(await mkdtemp(join(tmpdir(), "tau-skill-hook-")));
-  t.after(() => rm(cwd, { recursive: true, force: true }));
+  onTestFinished(() => rm(cwd, { recursive: true, force: true }));
   const file = join(cwd, "hook.mjs"),
     state = join(cwd, "state"),
     log = join(cwd, "log.jsonl");
@@ -335,7 +347,7 @@ async function execution(t: any) {
     }),
   );
   const registry = createSkillHookExecutionRegistry(store, "one");
-  t.after(() => registry.close());
+  onTestFinished(() => registry.close());
   const options: HookRunOptions = {
     cwd,
     projectDir: cwd,
@@ -346,9 +358,9 @@ async function execution(t: any) {
   return { cwd, log, store, registry, options, admitted };
 }
 
-test("dynamic skill executor keeps one-shot hook through failure, removes on success and exports only skill root origin", async (t) => {
-  const f = await execution(t),
-    id = f.admitted.registrationIds[0]!;
+test("dynamic skill executor keeps one-shot hook through failure, removes on success and exports only skill root origin", async () => {
+  const f = await execution(),
+    id = head(f.admitted.registrationIds);
   assert.equal(
     f.registry.list()[0]?.hook.once,
     true,
@@ -367,16 +379,17 @@ test("dynamic skill executor keeps one-shot hook through failure, removes on suc
   const rows = (await readFile(f.log, "utf8"))
     .trim()
     .split("\n")
-    .map((line) => JSON.parse(line));
+    .map((line) => logRow.parse(JSON.parse(line)));
   assert.equal(rows.length, 2);
-  assert.equal(rows[0].root, f.cwd);
-  assert.deepEqual(rows[0].args, [f.cwd]);
-  assert.equal(rows[0].data, undefined);
-  assert.equal(rows[0].skillDir, undefined);
+  const row = head(rows);
+  assert.equal(row.root, f.cwd);
+  assert.deepEqual(row.args, [f.cwd]);
+  assert.equal(row.data, undefined);
+  assert.equal(row.skillDir, undefined);
 });
 
-test("static registry once state survives separate dynamic skill snapshots", async (t) => {
-  const f = await execution(t);
+test("static registry once state survives separate dynamic skill snapshots", async () => {
+  const f = await execution();
   const base = createHookRegistry([
     {
       source: "userSettings",
@@ -394,7 +407,7 @@ test("static registry once state survives separate dynamic skill snapshots", asy
       },
     },
   ]);
-  t.after(() => base.close());
+  onTestFinished(() => base.close());
   assert.equal((await base.run(input(), f.options)).results.length, 1);
   await f.registry.run(input(), f.options);
   await f.registry.run(input(), f.options);
@@ -407,8 +420,8 @@ test("static registry once state survives separate dynamic skill snapshots", asy
   await assert.rejects(f.registry.run(input(), f.options), /closed/);
 });
 
-test("child dynamic hooks select a child scope while retaining the owning session payload", async (t) => {
-  const f = await execution(t);
+test("child dynamic hooks select a child scope while retaining the owning session payload", async () => {
+  const f = await execution();
   f.store.register(
     request({
       sessionId: "child",
@@ -432,10 +445,10 @@ test("child dynamic hooks select a child scope while retaining the owning sessio
   const registry = createSkillHookExecutionRegistry(f.store, "child", {
     ownerSessionId: "one",
   });
-  t.after(() => registry.close());
+  onTestFinished(() => registry.close());
   const first = await registry.run(input("one", "Write"), f.options);
   assert.equal(first.results.length, 1);
-  assert.equal(first.results[0]!.stdout, "child only");
+  assert.equal(head(first.results).stdout, "child only");
   assert.equal(f.store.snapshot("child").list().length, 0);
   assert.equal(f.store.snapshot("one").list().length, 1);
   await assert.rejects(
@@ -444,14 +457,14 @@ test("child dynamic hooks select a child scope while retaining the owning sessio
   );
 });
 
-test("closing active skill hooks cancels execution without consuming the success callback", async (t) => {
+test("closing active skill hooks cancels execution without consuming the success callback", async () => {
   const cwd = await realpath(
     await mkdtemp(join(tmpdir(), "tau-skill-hook-cancel-")),
   );
-  t.after(() => rm(cwd, { recursive: true, force: true }));
+  onTestFinished(() => rm(cwd, { recursive: true, force: true }));
   const store = new SessionSkillHookRegistry(),
     registry = createSkillHookExecutionRegistry(store, "one");
-  t.after(() => registry.close());
+  onTestFinished(() => registry.close());
   assert.equal(registry.list().length, 0);
   const admitted = store.register(
     request({

@@ -1,10 +1,18 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test } from "bun:test";
 import {
   composeFileManagedParentSettings,
   projectManagedParentSettings,
 } from "../src/managed-parent.js";
-import type { SettingsRecord } from "../src/configuration.js";
+import type { JsonValue, SettingsRecord } from "../src/configuration.js";
+
+const isRecord = (value: JsonValue | undefined): value is SettingsRecord =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+function permissions(settings: SettingsRecord): SettingsRecord {
+  const value = settings.permissions;
+  assert.ok(isRecord(value));
+  return value;
+}
 
 test("parent projection excludes model/instructions/environment while retaining conditional grants and restrictions", () => {
   assert.deepEqual(
@@ -65,23 +73,22 @@ test("higher managed locks filter grants without allowing a parent's own locks t
       },
     },
   );
-  assert.deepEqual(
-    (projectManagedParentSettings(parent).permissions as SettingsRecord).allow,
-    ["Read"],
-  );
+  assert.deepEqual(permissions(projectManagedParentSettings(parent)).allow, [
+    "Read",
+  ]);
   assert.equal(
-    (
+    permissions(
       projectManagedParentSettings(parent, {
         sandbox: { network: { allowManagedDomainsOnly: true } },
-      }).permissions as SettingsRecord
+      }),
     ).allow,
     undefined,
   );
   assert.deepEqual(
-    (
+    permissions(
       projectManagedParentSettings(parent, {
         sandbox: { network: { allowManagedDomainsOnly: true } },
-      }).permissions as SettingsRecord
+      }),
     ).additionalDirectories,
     ["/fixture"],
   );
@@ -270,8 +277,10 @@ test("projection is independent of inputs and legacy attribution precedence matc
   const result = projectManagedParentSettings(parent);
   assert.deepEqual(result.attribution, { sessionUrl: false });
   assert.deepEqual(result.remoteControl, { shareHostProfile: "basic" });
-  ((result.permissions as SettingsRecord).allow as string[]).push("Write");
-  assert.deepEqual((parent.permissions as SettingsRecord).allow, ["Read"]);
+  const allow = permissions(result).allow;
+  assert.ok(Array.isArray(allow));
+  allow.push("Write");
+  assert.deepEqual(permissions(parent).allow, ["Read"]);
   assert.deepEqual(
     projectManagedParentSettings({ includeCoAuthoredBy: false }).attribution,
     { commitTrailers: false },

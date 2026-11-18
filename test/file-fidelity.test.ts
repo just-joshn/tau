@@ -10,13 +10,13 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import test, { type TestContext } from "node:test";
+import { test, onTestFinished } from "bun:test";
 import { applyEdit } from "../src/edit.js";
 import { createTools } from "../src/tools.js";
 
-async function fixture(t: TestContext) {
+async function fixture() {
   const cwd = await mkdtemp(path.join(tmpdir(), "tau-file-fidelity-"));
-  t.after(() => rm(cwd, { recursive: true, force: true }));
+  onTestFinished(() => rm(cwd, { recursive: true, force: true }));
   const tools = createTools({
     cwd,
     mode: "acceptEdits",
@@ -129,8 +129,8 @@ test("Edit with empty old_string replaces whitespace and refuses nonempty conten
   assert.throws(() => applyEdit("", edit("", "")), /No changes/);
 });
 
-test("Edit creates missing parents with empty old_string and preserves prior-Read rules for existing files", async (t) => {
-  const { cwd, run, file } = await fixture(t);
+test("Edit creates missing parents with empty old_string and preserves prior-Read rules for existing files", async () => {
+  const { cwd, run, file } = await fixture();
   assert.equal(
     (await run("Edit", { file_path: "nested/new", ...edit("", "created") }))
       .content,
@@ -169,8 +169,8 @@ test("Edit creates missing parents with empty old_string and preserves prior-Rea
   );
 });
 
-test("Read supports BOM-marked UTF16LE, line windows, Unicode and BOM-only files", async (t) => {
-  const { run, file } = await fixture(t);
+test("Read supports BOM-marked UTF16LE, line windows, Unicode and BOM-only files", async () => {
+  const { run, file } = await fixture();
   await writeFile(
     file,
     Buffer.from("\uFEFFcafé 😀\r\nsecond\uFEFFline\r\n", "utf16le"),
@@ -187,8 +187,8 @@ test("Read supports BOM-marked UTF16LE, line windows, Unicode and BOM-only files
   assert.equal((await run("Read", { file_path: "a" })).content, "[empty file]");
 });
 
-test("UTF16 Read decodes a surrogate beyond the former byte-prefix boundary", async (t) => {
-  const { run, file } = await fixture(t);
+test("UTF16 Read decodes a surrogate beyond the former byte-prefix boundary", async () => {
+  const { run, file } = await fixture();
   const text = "\uFEFF" + "x".repeat(32763) + "\nhi😀";
   await writeFile(file, Buffer.from(text, "utf16le"));
   const result = await run("Read", { file_path: "a", offset: 2 });
@@ -200,8 +200,8 @@ test("UTF16 Read decodes a surrogate beyond the former byte-prefix boundary", as
   );
 });
 
-test("Read rejects malformed UTF16, UTF16BE and decoded NULs", async (t) => {
-  const { run, file } = await fixture(t);
+test("Read rejects malformed UTF16, UTF16BE and decoded NULs", async () => {
+  const { run, file } = await fixture();
   for (const bytes of [
     Buffer.from([255, 254, 65]),
     Buffer.from([255, 254, 0, 216]),
@@ -219,8 +219,8 @@ test("Read rejects malformed UTF16, UTF16BE and decoded NULs", async (t) => {
   }
 });
 
-test("Edit and Write preserve UTF16LE, BOM and mode across consecutive changes", async (t) => {
-  const { cwd, run, file } = await fixture(t);
+test("Edit and Write preserve UTF16LE, BOM and mode across consecutive changes", async () => {
+  const { cwd, run, file } = await fixture();
   await writeFile(file, Buffer.from("\uFEFF“one”\r\n“one”\r\n", "utf16le"));
   await chmod(file, 0o640);
   await run("Read", { file_path: "a" });
@@ -253,8 +253,8 @@ test("Edit and Write preserve UTF16LE, BOM and mode across consecutive changes",
   );
 });
 
-test("Write preserves existing UTF8 BOM, avoids duplicate BOM, and permits empty truncation", async (t) => {
-  const { run, file } = await fixture(t);
+test("Write preserves existing UTF8 BOM, avoids duplicate BOM, and permits empty truncation", async () => {
+  const { run, file } = await fixture();
   for (const encoding of ["utf8", "utf16le"] as const) {
     await writeFile(file, Buffer.from("\uFEFForiginal", encoding));
     await run("Read", { file_path: "a" });
@@ -276,8 +276,8 @@ test("Write preserves existing UTF8 BOM, avoids duplicate BOM, and permits empty
   }
 });
 
-test("stale checks compare normalized text across encodings and reject actual UTF16 changes", async (t) => {
-  const { run, file } = await fixture(t);
+test("stale checks compare normalized text across encodings and reject actual UTF16 changes", async () => {
+  const { run, file } = await fixture();
   await writeFile(file, "one\ntwo\n");
   await run("Read", { file_path: "a" });
   await writeFile(file, Buffer.from("\uFEFFone\r\ntwo\r\n", "utf16le"));
@@ -296,8 +296,8 @@ test("stale checks compare normalized text across encodings and reject actual UT
   );
 });
 
-test("invalid UTF16 replacement fails before committing and creation obeys plan/denial gates", async (t) => {
-  const { cwd, run, file } = await fixture(t);
+test("invalid UTF16 replacement fails before committing and creation obeys plan/denial gates", async () => {
+  const { cwd, run, file } = await fixture();
   const original = Buffer.from("\uFEFFone", "utf16le");
   await writeFile(file, original);
   await run("Read", { file_path: "a" });

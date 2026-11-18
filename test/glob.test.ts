@@ -3,13 +3,13 @@ import { spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import test, { type TestContext } from "node:test";
+import { test, onTestFinished } from "bun:test";
 import { createGlobMatcher, MAX_GLOB_PATTERN } from "../src/glob.js";
 import { createTools } from "../src/tools.js";
 
-async function fixture(t: TestContext) {
+async function fixture() {
   const base = await mkdtemp(path.join(os.tmpdir(), "tau-glob-"));
-  t.after(() => rm(base, { recursive: true, force: true }));
+  onTestFinished(() => rm(base, { recursive: true, force: true }));
   const cwd = path.join(base, "root");
   await mkdir(cwd);
   const tools = createTools({ cwd, mode: "plan", approve: async () => false });
@@ -236,8 +236,8 @@ test("Glob rejects a single candidate above its work limit with an explicit erro
   );
 });
 
-test("Glob dispatch searches a real workspace, scopes paths, and skips excluded trees and symlinks", async (t) => {
-  const { base, cwd, glob, file } = await fixture(t);
+test("Glob dispatch searches a real workspace, scopes paths, and skips excluded trees and symlinks", async () => {
+  const { base, cwd, glob, file } = await fixture();
   const visible = [
     "root.ts",
     ".hidden.ts",
@@ -303,8 +303,8 @@ test("Glob dispatch searches a real workspace, scopes paths, and skips excluded 
   }
 });
 
-test("Glob dispatch preserves exact matching and newline directory/file names", async (t) => {
-  const { glob, file } = await fixture(t);
+test("Glob dispatch preserves exact matching and newline directory/file names", async () => {
+  const { glob, file } = await fixture();
   await file("name");
   await file("name\n");
   await file("line\nbreak.ts");
@@ -315,8 +315,8 @@ test("Glob dispatch preserves exact matching and newline directory/file names", 
   assert.equal((await glob("**/child.ts")).content, "dir\nname/child.ts");
 });
 
-test("Glob dispatch surfaces oversize patterns and already-aborted signals as tool errors", async (t) => {
-  const { glob } = await fixture(t);
+test("Glob dispatch surfaces oversize patterns and already-aborted signals as tool errors", async () => {
+  const { glob } = await fixture();
   for (const pattern of ["a".repeat(MAX_GLOB_PATTERN + 1), "😀".repeat(513)]) {
     const result = await glob(pattern);
     assert.equal(result.is_error, true);
@@ -330,8 +330,8 @@ test("Glob dispatch surfaces oversize patterns and already-aborted signals as to
   assert.equal(cancelled.content, "Glob cancelled before dispatch");
 });
 
-test("Glob dispatch shares its matcher work limit across workspace files", async (t) => {
-  const { glob, file } = await fixture(t);
+test("Glob dispatch shares its matcher work limit across workspace files", async () => {
+  const { glob, file } = await fixture();
   for (let i = 0; i < 50; i++)
     await file(`${String(i).padStart(3, "0")}-${"a".repeat(196)}`);
   const result = await glob("a".repeat(MAX_GLOB_PATTERN));
@@ -342,8 +342,8 @@ test("Glob dispatch shares its matcher work limit across workspace files", async
   assert.equal(fresh.content.split("\n").length, 50);
 });
 
-test("Glob pathological wildcard dispatch completes normally in an isolated compiled child", async (t) => {
-  const { cwd, file } = await fixture(t);
+test("Glob pathological wildcard dispatch completes normally in an isolated compiled child", async () => {
+  const { cwd, file } = await fixture();
   await file("a".repeat(40));
   const toolsURL = new URL("../src/tools.js", import.meta.url).href;
   const source = `import { createTools } from ${JSON.stringify(toolsURL)};

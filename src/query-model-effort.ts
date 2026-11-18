@@ -16,6 +16,13 @@ export function isQueryEffortLevel(value: unknown): value is QueryEffortLevel {
 export function parseQueryEffort(value: unknown): QueryEffort | undefined {
   if (value === undefined || value === null || value === "") return;
   if (typeof value === "number" && Number.isInteger(value)) return value;
+  if (
+    typeof value !== "string" &&
+    typeof value !== "number" &&
+    typeof value !== "boolean" &&
+    typeof value !== "bigint"
+  )
+    return;
   const raw = String(value).toLowerCase(),
     named = raw === "med" ? "medium" : raw;
   if (isQueryEffortLevel(named)) return named;

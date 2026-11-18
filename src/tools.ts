@@ -1041,7 +1041,7 @@ export function createTools(options: {
                   break;
                 default: {
                   const exhaustive: never = input.output_mode;
-                  throw new Error(`Unknown Grep mode: ${exhaustive}`);
+                  throw new Error(`Unknown Grep mode: ${String(exhaustive)}`);
                 }
               }
               for (const text of entries) {
@@ -1134,7 +1134,7 @@ export function createTools(options: {
           }
           default: {
             const exhaustive: never = name;
-            throw new Error(`Unknown tool: ${exhaustive}`);
+            throw new Error(`Unknown tool: ${String(exhaustive)}`);
           }
         }
         inCall = false;

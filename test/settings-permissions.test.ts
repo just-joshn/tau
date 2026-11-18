@@ -1,4 +1,4 @@
-import test from "node:test";
+import { test, onTestFinished } from "bun:test";
 import assert from "node:assert/strict";
 import {
   mkdtemp,
@@ -14,11 +14,11 @@ import { resolveConfiguration } from "../src/configuration.js";
 import { combineToolPolicy, parseToolPolicy } from "../src/tool-policy.js";
 import { createTools } from "../src/tools.js";
 
-test("disposable settings files resolve trust/managed composition into actual permission dispatch", async (t) => {
+test("disposable settings files resolve trust/managed composition into actual permission dispatch", async () => {
   const root = await realpath(
     await mkdtemp(join(tmpdir(), "tau-settings-permissions-")),
   );
-  t.after(() => rm(root, { recursive: true, force: true }));
+  onTestFinished(() => rm(root, { recursive: true, force: true }));
   const cwd = join(root, "repo"),
     user = join(root, "user"),
     managed = join(root, "managed");

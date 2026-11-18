@@ -181,7 +181,10 @@ export function foldOrdinaryNativeResume(
       checkpoints.push({ leaf: row.leafUuid, explicit: row.explicit === true });
       continue;
     }
-    if (["system", "attachment"].includes(String(row.type)))
+    if (
+      typeof row.type === "string" &&
+      ["system", "attachment"].includes(row.type)
+    )
       throw new Error(
         "Native context/compaction rows require the full fold adapter",
       );
@@ -194,7 +197,8 @@ export function foldOrdinaryNativeResume(
       lastMain = row.uuid;
   }
   if (!lastMain) throw new Error("No native main-session conversation found");
-  const leaf = index.nodes.get(lastMain)!;
+  const leaf = index.nodes.get(lastMain);
+  if (!leaf) throw new Error("No native main-session conversation found");
   if (typeof leaf.row.sessionId !== "string" || !leaf.row.sessionId)
     throw new Error("Native transcript has no session identity");
   const children = [...index.nodes.values()].filter(
@@ -236,7 +240,7 @@ export function foldOrdinaryNativeResume(
 
 export interface NativeResumeEntryOptions {
   workingDirectory: string;
-  newSessionId(): string;
+  newSessionId: () => string;
   /** Already source-scoped/admitted native listings; this helper performs no personal directory scan. */
   continueCandidates(
     signal: AbortSignal,
@@ -264,7 +268,7 @@ export interface NativeResumeEntryOptions {
     signal: AbortSignal,
   ): NativeEntryFold | Promise<NativeEntryFold>;
   recovery: NativeHistoryOptions["recovery"];
-  registeredCustomSessionId?(id: string): boolean;
+  registeredCustomSessionId?: (id: string) => boolean;
   maxBytes?: number;
 }
 export interface NativeResumeEntryRequest {
@@ -335,6 +339,18 @@ export async function prepareNativePrintResume(
       source = "continue";
     }
   }
+  const resolveSessionPath = async (
+    sessionId: string,
+  ): Promise<string | undefined> => {
+    if (!request.forkSession) {
+      const ids = await options.liveBackgroundSessionIds(signal);
+      if (ids?.has(sessionId))
+        throw new Error(
+          `Native session is held by a background session: ${sessionId}`,
+        );
+    }
+    return options.resolveSessionId(sessionId, signal);
+  };
   if (!source && request.resume) {
     const target = parseNativeResumeTarget(
       request.resume,
@@ -357,6 +373,7 @@ export async function prepareNativePrintResume(
     } else if (target.kind === "id") {
       requestedSessionId = target.sessionId;
       source = "id";
+      path = await resolveSessionPath(target.sessionId);
     } else {
       const matches = matchNativeResumeTitle(
         await options.titleCandidates(signal),
@@ -366,20 +383,12 @@ export async function prepareNativePrintResume(
         throw new Error(
           `Native resume title is ambiguous; use a session ID: ${matches.map((candidate) => candidate.sessionId).join(", ")}`,
         );
-      if (!matches.length || !uuid.test(matches[0]!.sessionId))
+      const [match] = matches;
+      if (!match || !uuid.test(match.sessionId))
         throw new Error("Native resume target not found");
-      requestedSessionId = matches[0]!.sessionId;
+      requestedSessionId = match.sessionId;
       source = "title";
-    }
-    if (source !== "file") {
-      if (!request.forkSession) {
-        const ids = await options.liveBackgroundSessionIds(signal);
-        if (ids?.has(requestedSessionId!))
-          throw new Error(
-            `Native session is held by a background session: ${requestedSessionId}`,
-          );
-      }
-      path = await options.resolveSessionId(requestedSessionId!, signal);
+      path = await resolveSessionPath(match.sessionId);
     }
   }
   if (!source) return;

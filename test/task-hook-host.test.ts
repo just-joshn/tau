@@ -2,15 +2,23 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test, onTestFinished } from "bun:test";
+import { z } from "zod";
 import { createHookRegistry } from "../src/hooks.js";
 import { createSessionHookHost } from "../src/session-hooks.js";
 
-test("task lifecycle hooks deliver task fields and consume blocking feedback without Stop flags", async (t) => {
+const hookRow = z.object({
+  hook_event_name: z.string(),
+  task_id: z.string(),
+  task_subject: z.string(),
+  task_description: z.string().optional(),
+});
+
+test("task lifecycle hooks deliver task fields and consume blocking feedback without Stop flags", async () => {
   const cwd = await realpath(
     await mkdtemp(join(tmpdir(), "tau-task-hook-host-")),
   );
-  t.after(() => rm(cwd, { recursive: true, force: true }));
+  onTestFinished(() => rm(cwd, { recursive: true, force: true }));
   const script = join(cwd, "hook.cjs"),
     log = join(cwd, "events.jsonl");
   await writeFile(
@@ -40,7 +48,7 @@ test("task lifecycle hooks deliver task fields and consume blocking feedback wit
     }),
     runOptions: () => ({ cwd, projectDir: cwd, env: {} }),
   });
-  t.after(() => host.close());
+  onTestFinished(() => host.close());
   assert.equal(host.hasToolHooks, false);
   assert.deepEqual(
     await host.task(
@@ -56,12 +64,14 @@ test("task lifecycle hooks deliver task fields and consume blocking feedback wit
     new AbortController().signal,
   );
   assert.equal(held.length, 1);
-  assert.match(held[0]!, /owned completion hold/);
-  assert.ok(held[0]!.includes(`[${process.execPath} ${script} ${log}]:`));
+  const [heldText] = held;
+  assert.ok(heldText);
+  assert.match(heldText, /owned completion hold/);
+  assert.ok(heldText.includes(`[${process.execPath} ${script} ${log}]:`));
   const rows = (await readFile(log, "utf8"))
     .trim()
     .split("\n")
-    .map((line) => JSON.parse(line));
+    .map((line) => hookRow.parse(JSON.parse(line)));
   assert.deepEqual(
     rows.map((row) => [row.hook_event_name, row.task_id, row.task_subject]),
     [
@@ -69,8 +79,10 @@ test("task lifecycle hooks deliver task fields and consume blocking feedback wit
       ["TaskCompleted", "1", "owned"],
     ],
   );
-  assert.equal(rows[0].task_description, "description");
-  assert.equal(Object.hasOwn(rows[1], "task_description"), false);
+  const [first, second] = rows;
+  assert.ok(first && second);
+  assert.equal(first.task_description, "description");
+  assert.equal(Object.hasOwn(second, "task_description"), false);
   await assert.rejects(
     registry.run(
       {

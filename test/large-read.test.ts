@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import test, { type TestContext } from "node:test";
+import { test, onTestFinished } from "bun:test";
 import {
   ModelContextRoom,
   readAllowance,
@@ -37,11 +37,17 @@ const reply = (calls: ToolUse[] = [], input = 1000): Completion => ({
   model,
   usage: { input_tokens: input, output_tokens: 0 },
 });
-async function fixture(t: TestContext, tokens = 1000) {
+function testSignal(): AbortSignal {
+  const controller = new AbortController();
+  onTestFinished(() => controller.abort());
+  return controller.signal;
+}
+async function fixture(tokens = 1000) {
   const cwd = await realpath(
     await mkdtemp(path.join(tmpdir(), "tau-large-read-")),
   );
-  t.after(() => rm(cwd, { recursive: true, force: true }));
+  onTestFinished(() => rm(cwd, { recursive: true, force: true }));
+  const defaultSignal = testSignal();
   const state = new ReadState(),
     tools = createTools({
       cwd,
@@ -51,7 +57,7 @@ async function fixture(t: TestContext, tokens = 1000) {
       approve: async () => true,
     });
   const file = path.join(cwd, "a"),
-    read = (input = {}, signal = t.signal) =>
+    read = (input = {}, signal = defaultSignal) =>
       tools.execute(
         {
           type: "tool_use",
@@ -61,7 +67,11 @@ async function fixture(t: TestContext, tokens = 1000) {
         },
         signal,
       );
-  return { cwd, file, tools, state, read };
+  const setReadContext = (context: ReadToolContext | undefined) => {
+    assert.ok("setReadContext" in tools);
+    tools.setReadContext?.(context);
+  };
+  return { cwd, file, tools, state, read, setReadContext };
 }
 function context(
   threshold = 20000,
@@ -117,7 +127,9 @@ test("parent usage with zero inputs is ignored and normalized fallback iteration
 test("raised raw bytes use three times the source model byte ratio", () => {
   const ctx = context(1000000, 0);
   ctx.bytesPerToken = 3;
-  assert.equal(readAllowance(ctx, 25000, 262144).raised!.maxSizeBytes, 6300000);
+  const { raised } = readAllowance(ctx, 25000, 262144);
+  assert.ok(raised);
+  assert.equal(raised.maxSizeBytes, 6300000);
   for (const name of [
     model,
     "claude-opus-4-6",
@@ -146,8 +158,8 @@ test("missing, remote and another-machine contexts do not lift caps", () => {
   });
 });
 
-test("allow_large has normal-cap behavior with no room, and strict boolean input", async (t) => {
-  const f = await fixture(t);
+test("allow_large has normal-cap behavior with no room, and strict boolean input", async () => {
+  const f = await fixture();
   await writeFile(f.file, "x".repeat(8000));
   const result = await f.read({ allow_large: true });
   assert.match(result.content, /truncated by token limit/);
@@ -157,19 +169,19 @@ test("allow_large has normal-cap behavior with no room, and strict boolean input
   assert.equal((await f.read({ allow_large: false })).is_error, undefined);
 });
 
-test("normal overflow recommends opting in only when the current room can fit it", async (t) => {
-  const f = await fixture(t);
+test("normal overflow recommends opting in only when the current room can fit it", async () => {
+  const f = await fixture();
   await writeFile(f.file, "x".repeat(8000));
-  f.tools.setReadContext!(context());
+  f.setReadContext(context());
   assert.match((await f.read()).content, /Retry with allow_large: true/);
-  f.tools.setReadContext!(context(1000, 0));
+  f.setReadContext(context(1000, 0));
   assert.match((await f.read()).content, /exceeds the available context room/);
 });
 
-test("lifted counting includes line numbers and a UTF8 byte/2 estimate floor", async (t) => {
-  const f = await fixture(t),
+test("lifted counting includes line numbers and a UTF8 byte/2 estimate floor", async () => {
+  const f = await fixture(),
     ctx = context(20000, 0);
-  f.tools.setReadContext!(ctx);
+  f.setReadContext(ctx);
   await writeFile(f.file, "🌍".repeat(4000));
   const result = await f.read({ allow_large: true });
   assert.equal(result.content, "1\t" + "🌍".repeat(4000));
@@ -177,14 +189,14 @@ test("lifted counting includes line numbers and a UTF8 byte/2 estimate floor", a
   f.state.assertCurrent(f.file, Buffer.from("🌍".repeat(4000)));
 });
 
-test("successful raised reads share claims and exhausted whole reads page to the base token cap", async (t) => {
-  const f = await fixture(t),
+test("successful raised reads share claims and exhausted whole reads page to the base token cap", async () => {
+  const f = await fixture(),
     ctx = context(20000, 0);
   ctx.countTokens = async (text) => {
     assert.match(text, /^1\t/);
     return 6000;
   };
-  f.tools.setReadContext!(ctx);
+  f.setReadContext(ctx);
   await writeFile(f.file, "x".repeat(20000));
   for (let i = 0; i < 2; i++)
     assert.doesNotMatch(
@@ -195,7 +207,8 @@ test("successful raised reads share claims and exhausted whole reads page to the
   const third = await f.read({ allow_large: true });
   assert.match(third.content, /truncated by token limit/);
   assert.equal(ctx.room.claimed(), 12000);
-  const shown = third.content.split("\t")[1]!;
+  const shown = third.content.split("\t")[1];
+  assert.ok(shown !== undefined);
   assert.ok(shown.length < 4000);
   assert.throws(
     () => f.state.assertCurrent(f.file, Buffer.from("x".repeat(20000))),
@@ -203,14 +216,14 @@ test("successful raised reads share claims and exhausted whole reads page to the
   );
 });
 
-test("ordinary and unraised opted-in reads do not claim room", async (t) => {
-  const f = await fixture(t),
+test("ordinary and unraised opted-in reads do not claim room", async () => {
+  const f = await fixture(),
     ctx = context();
-  f.tools.setReadContext!(ctx);
+  f.setReadContext(ctx);
   await writeFile(f.file, "small");
   await f.read();
   assert.equal(ctx.room.claimed(), 0);
-  f.tools.setReadContext!({
+  f.setReadContext({
     ...ctx,
     room: new ModelContextRoom(
       () => 1000,
@@ -221,10 +234,10 @@ test("ordinary and unraised opted-in reads do not claim room", async (t) => {
   assert.equal((await f.read({ allow_large: true })).content, "1\tsmall");
 });
 
-test("a raised explicit range lifts its byte budget but still rejects token overflow", async (t) => {
-  const f = await fixture(t, 10),
+test("a raised explicit range lifts its byte budget but still rejects token overflow", async () => {
+  const f = await fixture(10),
     ctx = context(10000, 0);
-  f.tools.setReadContext!(ctx);
+  f.setReadContext(ctx);
   await writeFile(f.file, "x".repeat(2000));
   assert.equal((await f.read({ limit: 1 })).is_error, true);
   assert.equal(
@@ -236,11 +249,11 @@ test("a raised explicit range lifts its byte budget but still rejects token over
   assert.equal((await f.read({ limit: 1, allow_large: true })).is_error, true);
 });
 
-test("a lifted whole read can exceed262144 raw bytes", async (t) => {
-  const f = await fixture(t, 25000),
+test("a lifted whole read can exceed262144 raw bytes", async () => {
+  const f = await fixture(25000),
     ctx = context(300000, 0);
   ctx.countTokens = async () => 80000;
-  f.tools.setReadContext!(ctx);
+  f.setReadContext(ctx);
   const text = "x".repeat(300000);
   await writeFile(f.file, text);
   const refusal = await f.read();
@@ -252,8 +265,8 @@ test("a lifted whole read can exceed262144 raw bytes", async (t) => {
   assert.equal(await readFile(f.file, "utf8"), text);
 });
 
-test("parallel counted reads recheck room after awaiting and do not both claim the initial allowance", async (t) => {
-  const f = await fixture(t),
+test("parallel counted reads recheck room after awaiting and do not both claim the initial allowance", async () => {
+  const f = await fixture(),
     ctx = context(10000, 0);
   await writeFile(f.file, "x".repeat(10000));
   let arrived = 0,
@@ -266,7 +279,7 @@ test("parallel counted reads recheck room after awaiting and do not both claim t
     await barrier;
     return 5000;
   };
-  f.tools.setReadContext!(ctx);
+  f.setReadContext(ctx);
   const results = await Promise.all([
     f.read({ allow_large: true }),
     f.read({ allow_large: true }),
@@ -279,15 +292,15 @@ test("parallel counted reads recheck room after awaiting and do not both claim t
   );
 });
 
-test("post-count loss of a raised allowance falls back to the source base-cap recheck", async (t) => {
-  const f = await fixture(t),
+test("post-count loss of a raised allowance falls back to the source base-cap recheck", async () => {
+  const f = await fixture(),
     ctx = context(10000, 0);
   await writeFile(f.file, "x".repeat(10000));
   ctx.countTokens = async () => {
     ctx.room.claim(9500);
     return 800;
   };
-  f.tools.setReadContext!(ctx);
+  f.setReadContext(ctx);
   assert.doesNotMatch(
     (await f.read({ allow_large: true })).content,
     /truncated/,
@@ -295,8 +308,8 @@ test("post-count loss of a raised allowance falls back to the source base-cap re
   assert.equal(ctx.room.claimed(), 10300);
 });
 
-test("abort during counting creates neither a claim nor a baseline", async (t) => {
-  const f = await fixture(t),
+test("abort during counting creates neither a claim nor a baseline", async () => {
+  const f = await fixture(),
     ctx = context(20000, 0),
     controller = new AbortController();
   await writeFile(f.file, "x".repeat(20000));
@@ -304,7 +317,7 @@ test("abort during counting creates neither a claim nor a baseline", async (t) =
     controller.abort();
     return 5000;
   };
-  f.tools.setReadContext!(ctx);
+  f.setReadContext(ctx);
   assert.equal(
     (await f.read({ allow_large: true }, controller.signal)).is_error,
     true,
@@ -316,7 +329,7 @@ test("abort during counting creates neither a claim nor a baseline", async (t) =
   );
 });
 
-test("agent room is shared within a reply, reset on the next round and cleared on exit", async (t) => {
+test("agent room is shared within a reply, reset on the next round and cleared on exit", async () => {
   const claimed: number[] = [],
     thresholds: number[] = [];
   let current: ReadToolContext | undefined,
@@ -341,7 +354,13 @@ test("agent room is shared within a reply, reset on the next round and cleared o
     reply([readCall("c")]),
     reply(),
   ];
-  const provider: Provider = { complete: async () => replies[calls++]! };
+  const provider: Provider = {
+    complete: async () => {
+      const next = replies[calls++];
+      assert.ok(next);
+      return next;
+    },
+  };
   await runAgent({
     provider,
     tools,
@@ -353,7 +372,7 @@ test("agent room is shared within a reply, reset on the next round and cleared o
     contextWindowTokens: 200000,
     autoCompact: false,
     autoCompactWindow: "100k",
-    signal: t.signal,
+    signal: testSignal(),
     onEvent: () => {},
   });
   assert.deepEqual(claimed, [0, 1000, 0]);
@@ -362,7 +381,7 @@ test("agent room is shared within a reply, reset on the next round and cleared o
   assert.equal(resets, 3);
 });
 
-test("agent held history includes cleared tokens and uses current parent usage for admission", async (t) => {
+test("agent held history includes cleared tokens and uses current parent usage for admission", async () => {
   let observed = 0;
   const messages: Message[] = [
     user("task"),
@@ -382,7 +401,8 @@ test("agent held history includes cleared tokens and uses current parent usage f
       context = value;
     },
     execute: async (call) => {
-      observed = context!.room!.held();
+      assert.ok(context?.room);
+      observed = context.room.held();
       assert.equal(
         readAllowance(context, 25000, 262144).roomTokens,
         Math.floor((167000 - 51051) * 0.7),
@@ -404,14 +424,14 @@ test("agent held history includes cleared tokens and uses current parent usage f
     maxTurns: 2,
     contextWindowTokens: 200000,
     autoCompact: false,
-    signal: t.signal,
+    signal: testSignal(),
     onEvent: () => {},
   });
   assert.equal(observed, 51051);
 });
 
-test("actual agent tools use the shared room across three large Reads in one reply", async (t) => {
-  const f = await fixture(t);
+test("actual agent tools use the shared room across three large Reads in one reply", async () => {
+  const f = await fixture();
   await writeFile(f.file, "x".repeat(20000));
   let completions = 0,
     counts = 0;
@@ -438,7 +458,7 @@ test("actual agent tools use the shared room across three large Reads in one rep
     maxTurns: 2,
     contextWindowTokens: 50000,
     autoCompact: false,
-    signal: t.signal,
+    signal: testSignal(),
     onEvent: () => {},
   });
   const results = messages.flatMap((row) =>

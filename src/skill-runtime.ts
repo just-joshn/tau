@@ -15,10 +15,10 @@ import {
 import {
   hookAttachmentSchema,
   type Message,
-  ToolDefinition,
-  ToolExecutor,
-  ToolResult,
-  ToolUse,
+  type ToolDefinition,
+  type ToolExecutor,
+  type ToolResult,
+  type ToolUse,
 } from "./types.js";
 
 export const skillToolInputSchema = z.object({
@@ -630,16 +630,19 @@ export class SkillRuntime {
     messages: Message[],
   ): ToolExecutor {
     const tools = () => (typeof base === "function" ? base() : base);
-    const thisRuntime = this;
+    const ownDefinitions = () => this.definitions;
+    const flushContext = () => {
+      this.flushContext(messages);
+    };
     const initial = tools();
     return {
       get definitions() {
-        return [...tools().definitions, ...thisRuntime.definitions];
+        return [...tools().definitions, ...ownDefinitions()];
       },
-      async beforeModelRequest(signal) {
+      beforeModelRequest: async (signal) => {
         await tools().beforeModelRequest?.(signal);
         signal.throwIfAborted();
-        thisRuntime.flushContext(messages);
+        flushContext();
       },
       setReadContext(context) {
         tools().setReadContext?.(context);
@@ -651,7 +654,7 @@ export class SkillRuntime {
                 NonNullable<ToolExecutor["prepareCompaction"]>
               >[0],
             ) => {
-              thisRuntime.flushContext(messages);
+              flushContext();
               const prepare = tools().prepareCompaction;
               if (!prepare)
                 throw new Error(
