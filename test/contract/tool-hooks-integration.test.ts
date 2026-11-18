@@ -408,11 +408,13 @@ test("Read/Edit post payloads use execution data and Bash nonzero is failure, no
   assert.deepEqual(records[3], {
     event: "post",
     name: "Bash",
+    // stdout and stderr share one output file, as in the original.
     response: {
-      stdout: "owned success",
-      stderr: "error",
+      stdout: "owned success\nerror",
+      stderr: "",
       interrupted: false,
       isImage: false,
+      noOutputExpected: false,
     },
   });
 });

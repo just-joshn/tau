@@ -5,10 +5,13 @@ import { join } from "node:path";
 import { resetProviderProcessLatches } from "../../src/provider.js";
 
 const state = mkdtempSync(join(tmpdir(), "tau-test-environment-"));
-for (const name of ["user", "managed", "state"]) mkdirSync(join(state, name));
+for (const name of ["user", "managed", "state", "tmp"])
+  mkdirSync(join(state, name));
 process.env.CLAUDE_CONFIG_DIR = join(state, "user");
 process.env.TAU_MANAGED_ROOT = join(state, "managed");
 process.env.TAU_HOME = join(state, "state");
+// Bash task output lives under CLAUDE_CODE_TMPDIR (default /tmp), not TMPDIR.
+process.env.CLAUDE_CODE_TMPDIR = join(state, "tmp");
 process.once("exit", () => rmSync(state, { recursive: true, force: true }));
 
 // Bun 1.4 ignores bunfig's restoreMocks/clearMocks/unstubEnvs.

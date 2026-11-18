@@ -298,36 +298,47 @@ test("Glob rejects NUL inputs, unsupported fields and non-directory search roots
   );
 });
 
-test("Bash drains large bounded output and preserves nonzero status", async () => {
+test("Bash keeps output up to 30000 bytes inline, persists larger output and reports exit codes", async () => {
   const { tools, run } = await fixture();
-  for (let attempt = 0; attempt < 20; attempt++) {
-    const length = 40000 + Math.floor(Math.random() * 20000);
-    const expected = "x".repeat(length);
-    const result = await run(tools(), "Bash", {
-      command: `${JSON.stringify(process.execPath)} -e 'process.stdout.write("x".repeat(${length}))'`,
-    });
-    assert.equal(result.content, `${expected}\n[exit 0]`);
-    assert.equal(result.is_error, undefined);
-  }
+  const write = (length: number) =>
+    `${JSON.stringify(process.execPath)} -e 'process.stdout.write("x".repeat(${length}))'`;
+  const inline = await run(tools(), "Bash", { command: write(30000) });
+  assert.equal(inline.content, "x".repeat(30000));
+  assert.equal(inline.is_error, undefined);
+  const large = await run(tools(), "Bash", { command: write(45000) });
+  const saved = /Full output saved to: (\S+\.txt)\n/.exec(
+    String(large.content),
+  );
+  assert.ok(saved, String(large.content).slice(0, 300));
+  assert.equal(
+    large.content,
+    `<persisted-output>\nOutput too large (43.9KB). Full output saved to: ${saved[1]}\n\nPreview (first 2KB):\n${"x".repeat(2000)}\n...\n</persisted-output>`,
+  );
+  assert.equal((await readFile(saved[1] ?? "", "utf8")).length, 45000);
   const failed = await run(tools(), "Bash", {
     command: "printf failure; exit 7",
   });
-  assert.equal(failed.content, "failure\n[exit 7]");
+  assert.equal(failed.content, "Exit code 7\nfailure");
   assert.equal(failed.is_error, true);
 });
 
 test("Bash timeouts and aborts return promptly even with inherited pipes", async () => {
   const { tools, run } = await fixture();
   const start = Date.now();
-  assert.match(
-    (await run(tools(), "Bash", { command: "sleep 30", timeout: 50 })).content,
-    /timed out/,
+  assert.deepEqual(
+    await run(tools(), "Bash", { command: "sleep 20", timeout: 50 }),
+    {
+      type: "tool_result",
+      tool_use_id: "test",
+      content: "Exit code 143\nCommand timed out after 0s",
+      is_error: true,
+    },
   );
   const controller = new AbortController();
   const pending = run(
     tools(),
     "Bash",
-    { command: "sleep 30" },
+    { command: "sleep 20" },
     controller.signal,
   );
   setTimeout(() => controller.abort(), 50);

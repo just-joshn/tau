@@ -1,3 +1,4 @@
+import { createShellHost } from "./bash-tool.js";
 import {
   createLocalAgentRegistry,
   agentDefinitionLocations,
@@ -712,6 +713,11 @@ export async function createSessionAgentHost(options: {
         await instructions.announce(initial, contexts);
         signal.throwIfAborted();
         if (initial.content.length) contexts.push(initial);
+        // A subagent's `cd` never carries to its next call.
+        const shell = createShellHost({
+          startCwd: options.cwd,
+          mainThread: false,
+        });
         let cached: ToolExecutor | undefined, cachedKey: string | undefined;
         let readContext: Parameters<
           NonNullable<ToolExecutor["setReadContext"]>
@@ -731,6 +737,7 @@ export async function createSessionAgentHost(options: {
           );
           const builtins = createTools({
             cwd: options.cwd,
+            shell,
             mode,
             policy: current,
             readState,
