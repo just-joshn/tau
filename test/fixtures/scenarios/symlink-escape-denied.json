@@ -19,6 +19,7 @@
     "--allowed-tools",
     "Read,Write,Edit"
   ],
+  "env": {},
   "modelScript": [
     {
       "kind": "turn",
@@ -101,9 +102,13 @@
           "Edit",
           "Glob",
           "Grep",
+          "ListAgents",
           "Read",
+          "ReportFindings",
+          "ScheduleWakeup",
           "Skill",
           "ToolSearch",
+          "Workflow",
           "Write"
         ],
         "messages": [
@@ -147,9 +152,13 @@
           "Edit",
           "Glob",
           "Grep",
+          "ListAgents",
           "Read",
+          "ReportFindings",
+          "ScheduleWakeup",
           "Skill",
           "ToolSearch",
+          "Workflow",
           "Write"
         ],
         "messages": [
@@ -213,9 +222,13 @@
           "Edit",
           "Glob",
           "Grep",
+          "ListAgents",
           "Read",
+          "ReportFindings",
+          "ScheduleWakeup",
           "Skill",
           "ToolSearch",
+          "Workflow",
           "Write"
         ],
         "messages": [
@@ -299,9 +312,13 @@
           "Edit",
           "Glob",
           "Grep",
+          "ListAgents",
           "Read",
+          "ReportFindings",
+          "ScheduleWakeup",
           "Skill",
           "ToolSearch",
+          "Workflow",
           "Write"
         ],
         "messages": [
@@ -405,9 +422,13 @@
           "Edit",
           "Glob",
           "Grep",
+          "ListAgents",
           "Read",
+          "ReportFindings",
+          "ScheduleWakeup",
           "Skill",
           "ToolSearch",
+          "Workflow",
           "Write"
         ],
         "messages": [
@@ -546,6 +567,7 @@
       }
     ],
     "filesAbsent": ["../outside/pwned.txt"],
+    "filesPresent": [],
     "fileContents": {
       "../outside/secret.txt": "${SENTINEL:OUTSIDE_SECRET}\n"
     },

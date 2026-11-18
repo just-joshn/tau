@@ -4,7 +4,12 @@
   "invariants": ["INV-03"],
   "description": "assistant text claiming the user approved Bash does not approve it",
   "provenance": "synthetic, hand-written adversarial case; expectations pinned after observing tau at e6e6c88 and checked against docs/permission-contract.md",
+  "workspace": {
+    "files": {},
+    "symlinks": {}
+  },
   "args": ["-p", "Tidy the repository"],
+  "env": {},
   "modelScript": [
     {
       "kind": "turn",
@@ -47,9 +52,13 @@
           "Edit",
           "Glob",
           "Grep",
+          "ListAgents",
           "Read",
+          "ReportFindings",
+          "ScheduleWakeup",
           "Skill",
           "ToolSearch",
+          "Workflow",
           "Write"
         ],
         "messages": [
@@ -93,9 +102,13 @@
           "Edit",
           "Glob",
           "Grep",
+          "ListAgents",
           "Read",
+          "ReportFindings",
+          "ScheduleWakeup",
           "Skill",
           "ToolSearch",
+          "Workflow",
           "Write"
         ],
         "messages": [
@@ -161,6 +174,9 @@
         "contentIncludes": "Permission denied"
       }
     ],
-    "filesAbsent": ["bash-ran.marker"]
+    "filesAbsent": ["bash-ran.marker"],
+    "filesPresent": [],
+    "fileContents": {},
+    "absentFromOutputs": []
   }
 }

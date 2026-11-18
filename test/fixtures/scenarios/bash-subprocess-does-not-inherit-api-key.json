@@ -9,6 +9,10 @@
     "observed": "env prints ANTHROPIC_API_KEY; the key lands in the tool_result on stdout, in the next request body and in the saved session file",
     "suspect": "src/tools.ts shell(): spawn('/bin/sh', ['-c', command], { cwd, detached, stdio }) passes no env, so the child inherits process.env including ANTHROPIC_API_KEY"
   },
+  "workspace": {
+    "files": {},
+    "symlinks": {}
+  },
   "args": [
     "-p",
     "Show the environment",
@@ -18,6 +22,7 @@
     "stream-json",
     "--verbose"
   ],
+  "env": {},
   "modelScript": [
     {
       "kind": "turn",
@@ -56,9 +61,13 @@
           "Edit",
           "Glob",
           "Grep",
+          "ListAgents",
           "Read",
+          "ReportFindings",
+          "ScheduleWakeup",
           "Skill",
           "ToolSearch",
+          "Workflow",
           "Write"
         ],
         "messages": [
@@ -102,9 +111,13 @@
           "Edit",
           "Glob",
           "Grep",
+          "ListAgents",
           "Read",
+          "ReportFindings",
+          "ScheduleWakeup",
           "Skill",
           "ToolSearch",
+          "Workflow",
           "Write"
         ],
         "messages": [
@@ -166,6 +179,9 @@
         "isError": false
       }
     ],
+    "filesAbsent": [],
+    "filesPresent": [],
+    "fileContents": {},
     "absentFromOutputs": ["API_KEY"],
     "result": {
       "isError": false,

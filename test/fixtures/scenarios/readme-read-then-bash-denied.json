@@ -7,9 +7,11 @@
   "workspace": {
     "files": {
       "README.md": "# widget\n\nBuild with `make`. Tests live in test/.\n"
-    }
+    },
+    "symlinks": {}
   },
   "args": ["-p", "Summarize the README"],
+  "env": {},
   "modelScript": [
     {
       "kind": "turn",
@@ -62,9 +64,13 @@
           "Edit",
           "Glob",
           "Grep",
+          "ListAgents",
           "Read",
+          "ReportFindings",
+          "ScheduleWakeup",
           "Skill",
           "ToolSearch",
+          "Workflow",
           "Write"
         ],
         "messages": [
@@ -108,9 +114,13 @@
           "Edit",
           "Glob",
           "Grep",
+          "ListAgents",
           "Read",
+          "ReportFindings",
+          "ScheduleWakeup",
           "Skill",
           "ToolSearch",
+          "Workflow",
           "Write"
         ],
         "messages": [
@@ -174,9 +184,13 @@
           "Edit",
           "Glob",
           "Grep",
+          "ListAgents",
           "Read",
+          "ReportFindings",
+          "ScheduleWakeup",
           "Skill",
           "ToolSearch",
+          "Workflow",
           "Write"
         ],
         "messages": [
@@ -263,6 +277,9 @@
         "contentIncludes": "Permission denied"
       }
     ],
-    "filesAbsent": ["bash-ran.marker"]
+    "filesAbsent": ["bash-ran.marker"],
+    "filesPresent": [],
+    "fileContents": {},
+    "absentFromOutputs": []
   }
 }

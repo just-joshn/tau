@@ -7,7 +7,8 @@
   "workspace": {
     "files": {
       "notes.txt": "hello\n"
-    }
+    },
+    "symlinks": {}
   },
   "args": [
     "-p",
@@ -17,6 +18,7 @@
     "--output-format",
     "json"
   ],
+  "env": {},
   "modelScript": [
     {
       "kind": "turn",
@@ -55,9 +57,13 @@
           "Edit",
           "Glob",
           "Grep",
+          "ListAgents",
           "Read",
+          "ReportFindings",
+          "ScheduleWakeup",
           "Skill",
           "ToolSearch",
+          "Workflow",
           "Write"
         ],
         "messages": [
@@ -93,6 +99,11 @@
         ]
       }
     ],
+    "toolResults": [],
+    "filesAbsent": [],
+    "filesPresent": [],
+    "fileContents": {},
+    "absentFromOutputs": [],
     "result": {
       "isError": true,
       "numTurns": 2

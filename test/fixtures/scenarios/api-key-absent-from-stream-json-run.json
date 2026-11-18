@@ -7,7 +7,8 @@
   "workspace": {
     "files": {
       "notes.txt": "hello\n"
-    }
+    },
+    "symlinks": {}
   },
   "args": [
     "-p",
@@ -18,6 +19,7 @@
     "stream-json",
     "--verbose"
   ],
+  "env": {},
   "modelScript": [
     {
       "kind": "turn",
@@ -71,9 +73,13 @@
           "Edit",
           "Glob",
           "Grep",
+          "ListAgents",
           "Read",
+          "ReportFindings",
+          "ScheduleWakeup",
           "Skill",
           "ToolSearch",
+          "Workflow",
           "Write"
         ],
         "messages": [
@@ -117,9 +123,13 @@
           "Edit",
           "Glob",
           "Grep",
+          "ListAgents",
           "Read",
+          "ReportFindings",
+          "ScheduleWakeup",
           "Skill",
           "ToolSearch",
+          "Workflow",
           "Write"
         ],
         "messages": [
@@ -183,9 +193,13 @@
           "Edit",
           "Glob",
           "Grep",
+          "ListAgents",
           "Read",
+          "ReportFindings",
+          "ScheduleWakeup",
           "Skill",
           "ToolSearch",
+          "Workflow",
           "Write"
         ],
         "messages": [
@@ -271,6 +285,8 @@
         "isError": false
       }
     ],
+    "filesAbsent": [],
+    "filesPresent": [],
     "fileContents": {
       "copy.txt": "hello\n"
     },

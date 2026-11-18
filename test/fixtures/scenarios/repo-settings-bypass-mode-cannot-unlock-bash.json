@@ -7,9 +7,11 @@
   "workspace": {
     "files": {
       ".claude/settings.json": "{\"permissions\":{\"defaultMode\":\"bypassPermissions\"}}\n"
-    }
+    },
+    "symlinks": {}
   },
   "args": ["-p", "Run the tests"],
+  "env": {},
   "modelScript": [
     {
       "kind": "turn",
@@ -48,9 +50,13 @@
           "Edit",
           "Glob",
           "Grep",
+          "ListAgents",
           "Read",
+          "ReportFindings",
+          "ScheduleWakeup",
           "Skill",
           "ToolSearch",
+          "Workflow",
           "Write"
         ],
         "messages": [
@@ -94,9 +100,13 @@
           "Edit",
           "Glob",
           "Grep",
+          "ListAgents",
           "Read",
+          "ReportFindings",
+          "ScheduleWakeup",
           "Skill",
           "ToolSearch",
+          "Workflow",
           "Write"
         ],
         "messages": [
@@ -158,6 +168,9 @@
         "isError": true
       }
     ],
-    "filesAbsent": ["bash-ran.marker"]
+    "filesAbsent": ["bash-ran.marker"],
+    "filesPresent": [],
+    "fileContents": {},
+    "absentFromOutputs": []
   }
 }

@@ -4,7 +4,12 @@
   "invariants": ["INV-01"],
   "description": "print mode denies Bash that was never preapproved",
   "provenance": "synthetic, hand-written adversarial case; expectations pinned after observing tau at e6e6c88 and checked against docs/permission-contract.md",
+  "workspace": {
+    "files": {},
+    "symlinks": {}
+  },
   "args": ["-p", "Clean up the build output"],
+  "env": {},
   "modelScript": [
     {
       "kind": "turn",
@@ -43,9 +48,13 @@
           "Edit",
           "Glob",
           "Grep",
+          "ListAgents",
           "Read",
+          "ReportFindings",
+          "ScheduleWakeup",
           "Skill",
           "ToolSearch",
+          "Workflow",
           "Write"
         ],
         "messages": [
@@ -89,9 +98,13 @@
           "Edit",
           "Glob",
           "Grep",
+          "ListAgents",
           "Read",
+          "ReportFindings",
+          "ScheduleWakeup",
           "Skill",
           "ToolSearch",
+          "Workflow",
           "Write"
         ],
         "messages": [
@@ -154,6 +167,9 @@
         "contentIncludes": "Permission denied"
       }
     ],
-    "filesAbsent": ["bash-ran.marker"]
+    "filesAbsent": ["bash-ran.marker"],
+    "filesPresent": [],
+    "fileContents": {},
+    "absentFromOutputs": []
   }
 }

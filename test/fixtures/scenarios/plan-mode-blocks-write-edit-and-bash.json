@@ -7,7 +7,8 @@
   "workspace": {
     "files": {
       "app.txt": "original\n"
-    }
+    },
+    "symlinks": {}
   },
   "args": [
     "-p",
@@ -17,6 +18,7 @@
     "--allowed-tools",
     "Write,Edit,Bash"
   ],
+  "env": {},
   "modelScript": [
     {
       "kind": "turn",
@@ -100,9 +102,13 @@
           "Edit",
           "Glob",
           "Grep",
+          "ListAgents",
           "Read",
+          "ReportFindings",
+          "ScheduleWakeup",
           "Skill",
           "ToolSearch",
+          "Workflow",
           "Write"
         ],
         "messages": [
@@ -149,9 +155,13 @@
           "Edit",
           "Glob",
           "Grep",
+          "ListAgents",
           "Read",
+          "ReportFindings",
+          "ScheduleWakeup",
           "Skill",
           "ToolSearch",
+          "Workflow",
           "Write"
         ],
         "messages": [
@@ -218,9 +228,13 @@
           "Edit",
           "Glob",
           "Grep",
+          "ListAgents",
           "Read",
+          "ReportFindings",
+          "ScheduleWakeup",
           "Skill",
           "ToolSearch",
+          "Workflow",
           "Write"
         ],
         "messages": [
@@ -307,9 +321,13 @@
           "Edit",
           "Glob",
           "Grep",
+          "ListAgents",
           "Read",
+          "ReportFindings",
+          "ScheduleWakeup",
           "Skill",
           "ToolSearch",
+          "Workflow",
           "Write"
         ],
         "messages": [
@@ -416,9 +434,13 @@
           "Edit",
           "Glob",
           "Grep",
+          "ListAgents",
           "Read",
+          "ReportFindings",
+          "ScheduleWakeup",
           "Skill",
           "ToolSearch",
+          "Workflow",
           "Write"
         ],
         "messages": [
@@ -558,8 +580,10 @@
       }
     ],
     "filesAbsent": ["new.txt", "bash-ran.marker"],
+    "filesPresent": [],
     "fileContents": {
       "app.txt": "original\n"
-    }
+    },
+    "absentFromOutputs": []
   }
 }

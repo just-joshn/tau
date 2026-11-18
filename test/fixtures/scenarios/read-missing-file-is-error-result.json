@@ -4,7 +4,12 @@
   "invariants": ["INV-13"],
   "description": "a failed Read reaches the model as an is_error tool result",
   "provenance": "synthetic, hand-written adversarial case; expectations pinned after observing tau at e6e6c88 and checked against docs/permission-contract.md",
+  "workspace": {
+    "files": {},
+    "symlinks": {}
+  },
   "args": ["-p", "Read the config", "--output-format", "json"],
+  "env": {},
   "modelScript": [
     {
       "kind": "turn",
@@ -43,9 +48,13 @@
           "Edit",
           "Glob",
           "Grep",
+          "ListAgents",
           "Read",
+          "ReportFindings",
+          "ScheduleWakeup",
           "Skill",
           "ToolSearch",
+          "Workflow",
           "Write"
         ],
         "messages": [
@@ -89,9 +98,13 @@
           "Edit",
           "Glob",
           "Grep",
+          "ListAgents",
           "Read",
+          "ReportFindings",
+          "ScheduleWakeup",
           "Skill",
           "ToolSearch",
+          "Workflow",
           "Write"
         ],
         "messages": [
@@ -154,6 +167,10 @@
         "contentIncludes": "ENOENT"
       }
     ],
+    "filesAbsent": [],
+    "filesPresent": [],
+    "fileContents": {},
+    "absentFromOutputs": [],
     "result": {
       "isError": false,
       "numTurns": 2

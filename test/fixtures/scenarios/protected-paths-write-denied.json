@@ -7,9 +7,11 @@
   "workspace": {
     "files": {
       ".git/HEAD": "ref: refs/heads/main\n"
-    }
+    },
+    "symlinks": {}
   },
   "args": ["-p", "Set up tooling", "--permission-mode", "acceptEdits"],
+  "env": {},
   "modelScript": [
     {
       "kind": "turn",
@@ -94,9 +96,13 @@
           "Edit",
           "Glob",
           "Grep",
+          "ListAgents",
           "Read",
+          "ReportFindings",
+          "ScheduleWakeup",
           "Skill",
           "ToolSearch",
+          "Workflow",
           "Write"
         ],
         "messages": [
@@ -140,9 +146,13 @@
           "Edit",
           "Glob",
           "Grep",
+          "ListAgents",
           "Read",
+          "ReportFindings",
+          "ScheduleWakeup",
           "Skill",
           "ToolSearch",
+          "Workflow",
           "Write"
         ],
         "messages": [
@@ -206,9 +216,13 @@
           "Edit",
           "Glob",
           "Grep",
+          "ListAgents",
           "Read",
+          "ReportFindings",
+          "ScheduleWakeup",
           "Skill",
           "ToolSearch",
+          "Workflow",
           "Write"
         ],
         "messages": [
@@ -292,9 +306,13 @@
           "Edit",
           "Glob",
           "Grep",
+          "ListAgents",
           "Read",
+          "ReportFindings",
+          "ScheduleWakeup",
           "Skill",
           "ToolSearch",
+          "Workflow",
           "Write"
         ],
         "messages": [
@@ -398,9 +416,13 @@
           "Edit",
           "Glob",
           "Grep",
+          "ListAgents",
           "Read",
+          "ReportFindings",
+          "ScheduleWakeup",
           "Skill",
           "ToolSearch",
+          "Workflow",
           "Write"
         ],
         "messages": [
@@ -540,8 +562,10 @@
       ".mcp.json",
       ".bashrc"
     ],
+    "filesPresent": [],
     "fileContents": {
       ".git/HEAD": "ref: refs/heads/main\n"
-    }
+    },
+    "absentFromOutputs": []
   }
 }

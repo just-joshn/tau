@@ -4,7 +4,12 @@
   "invariants": ["INV-13", "INV-04"],
   "description": "500s that echo the key exhaust the retry budget into an error envelope, never success",
   "provenance": "synthetic, hand-written adversarial case; expectations pinned after observing tau at e6e6c88 and checked against docs/permission-contract.md",
+  "workspace": {
+    "files": {},
+    "symlinks": {}
+  },
   "args": ["-p", "hello", "--max-retries", "1", "--output-format", "json"],
+  "env": {},
   "modelScript": [
     {
       "kind": "error",
@@ -41,9 +46,13 @@
           "Edit",
           "Glob",
           "Grep",
+          "ListAgents",
           "Read",
+          "ReportFindings",
+          "ScheduleWakeup",
           "Skill",
           "ToolSearch",
+          "Workflow",
           "Write"
         ],
         "messages": [
@@ -87,9 +96,13 @@
           "Edit",
           "Glob",
           "Grep",
+          "ListAgents",
           "Read",
+          "ReportFindings",
+          "ScheduleWakeup",
           "Skill",
           "ToolSearch",
+          "Workflow",
           "Write"
         ],
         "messages": [
@@ -125,6 +138,10 @@
         ]
       }
     ],
+    "toolResults": [],
+    "filesAbsent": [],
+    "filesPresent": [],
+    "fileContents": {},
     "absentFromOutputs": ["API_KEY"],
     "result": {
       "isError": true,

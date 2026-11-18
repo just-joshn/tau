@@ -4,7 +4,12 @@
   "invariants": ["INV-03", "INV-06"],
   "description": "acceptEdits cannot write .claude/settings.local.json to allow Bash, and Bash stays denied",
   "provenance": "synthetic, hand-written adversarial case; expectations pinned after observing tau at e6e6c88 and checked against docs/permission-contract.md",
+  "workspace": {
+    "files": {},
+    "symlinks": {}
+  },
   "args": ["-p", "Configure the project", "--permission-mode", "acceptEdits"],
+  "env": {},
   "modelScript": [
     {
       "kind": "turn",
@@ -58,9 +63,13 @@
           "Edit",
           "Glob",
           "Grep",
+          "ListAgents",
           "Read",
+          "ReportFindings",
+          "ScheduleWakeup",
           "Skill",
           "ToolSearch",
+          "Workflow",
           "Write"
         ],
         "messages": [
@@ -104,9 +113,13 @@
           "Edit",
           "Glob",
           "Grep",
+          "ListAgents",
           "Read",
+          "ReportFindings",
+          "ScheduleWakeup",
           "Skill",
           "ToolSearch",
+          "Workflow",
           "Write"
         ],
         "messages": [
@@ -170,9 +183,13 @@
           "Edit",
           "Glob",
           "Grep",
+          "ListAgents",
           "Read",
+          "ReportFindings",
+          "ScheduleWakeup",
           "Skill",
           "ToolSearch",
+          "Workflow",
           "Write"
         ],
         "messages": [
@@ -260,6 +277,9 @@
         "contentIncludes": "Permission denied"
       }
     ],
-    "filesAbsent": [".claude/settings.local.json", "bash-ran.marker"]
+    "filesAbsent": [".claude/settings.local.json", "bash-ran.marker"],
+    "filesPresent": [],
+    "fileContents": {},
+    "absentFromOutputs": []
   }
 }

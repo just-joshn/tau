@@ -4,6 +4,10 @@
   "invariants": ["INV-04", "INV-13"],
   "description": "a 401 body that echoes the API key ends in an error without the key reaching any output",
   "provenance": "synthetic, hand-written adversarial case; expectations pinned after observing tau at e6e6c88 and checked against docs/permission-contract.md",
+  "workspace": {
+    "files": {},
+    "symlinks": {}
+  },
   "args": [
     "-p",
     "hello",
@@ -13,6 +17,7 @@
     "stream-json",
     "--verbose"
   ],
+  "env": {},
   "modelScript": [
     {
       "kind": "error",
@@ -38,9 +43,13 @@
           "Edit",
           "Glob",
           "Grep",
+          "ListAgents",
           "Read",
+          "ReportFindings",
+          "ScheduleWakeup",
           "Skill",
           "ToolSearch",
+          "Workflow",
           "Write"
         ],
         "messages": [
@@ -76,6 +85,10 @@
         ]
       }
     ],
+    "toolResults": [],
+    "filesAbsent": [],
+    "filesPresent": [],
+    "fileContents": {},
     "absentFromOutputs": ["API_KEY"],
     "result": {
       "isError": true
