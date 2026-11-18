@@ -27,8 +27,10 @@ SKIPPED_FIELDS = {"messages", "system", "tools", "metadata"}
 
 def normalize(text, roots):
     for root in roots:
-        text = text.replace(root, "<ROOT>")
+        text = text.replace(root, "<ROOT>").replace(re.sub(r"[^a-zA-Z0-9]", "-", root), "<SANITIZED_ROOT>")
     text = re.sub(r"/(?:private/)?(?:var/folders/[^\s`'\"]+?/T/|tmp/)tau-differential-[A-Za-z0-9_]+", "<ROOT>", text)
+    # Project folder names (auto memory, transcripts) spell the root with '-' for every non-alphanumeric.
+    text = re.sub(r"-(?:private-)?tmp-tau-differential-[A-Za-z0-9-]{8}", "<SANITIZED_ROOT>", text)
     text = re.sub(r"(cc_version=\d+\.\d+\.\d+)\.[0-9a-f]{3}", r"\1.<FP>", text)
     text = re.sub(r"\b\d{4}-\d{2}-\d{2}\b", "<DATE>", text)
     return re.sub(r"127\.0\.0\.1:\d+", "127.0.0.1:<PORT>", text)

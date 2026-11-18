@@ -49,7 +49,7 @@ export const apiToolContentSchema = z.discriminatedUnion("type", [
 export type ApiToolContent = z.infer<typeof apiToolContentSchema>;
 export const instructionRecordSchema = z.object({
   path: z.string(),
-  kind: z.enum(["Managed", "User", "Project", "Local"]),
+  kind: z.enum(["Managed", "User", "Project", "Local", "AutoMem"]),
   contentHash: z.string(),
   partial: z.boolean(),
   removed: z.boolean().optional(),

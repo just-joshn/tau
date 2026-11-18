@@ -46,6 +46,7 @@ export interface SdkSystemInit extends Envelope {
   agents: string[];
   skills: string[];
   plugins: SdkPlugin[];
+  memory_paths?: { auto: string };
 }
 export interface SdkMcpServer {
   name: string;
@@ -225,6 +226,8 @@ export interface SdkInitFacts {
   agents: readonly string[];
   skills: readonly string[];
   plugins: readonly SdkPlugin[];
+  /** Source LFn: present while auto memory is enabled. */
+  memoryPaths?: { auto: string };
 }
 
 export interface SdkSessionOptions {
@@ -384,6 +387,7 @@ export class SdkSession {
       skills: [...facts.skills],
       plugins: facts.plugins.map((plugin) => ({ ...plugin })),
       uuid: this.#options.uuid(),
+      ...(facts.memoryPaths ? { memory_paths: { ...facts.memoryPaths } } : {}),
     };
   }
 

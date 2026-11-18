@@ -329,7 +329,7 @@ function excludesProtectedChild(
     (filenames && sensitiveFilenames.has(parts.at(-1) ?? ""))
   );
 }
-function plainMemory(path: string, root: string | null): boolean {
+export function plainMemory(path: string, root: string | null): boolean {
   if (root === null || !root.endsWith("/")) return false;
   const base = root.replace(/[/\\]+$/, "");
   if (
