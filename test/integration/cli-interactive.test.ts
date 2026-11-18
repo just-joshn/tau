@@ -613,3 +613,101 @@ describe("workspace trust", () => {
     expect(existsSync(join(tau.cwd, "hook-ran.txt"))).toBe(false);
   });
 });
+
+describe("approvals that start outside a turn", () => {
+  const project = {
+    ".mcp.json": JSON.stringify({
+      mcpServers: {
+        marker: {
+          command: process.execPath,
+          args: [
+            "-e",
+            "require('node:fs').writeFileSync('server-started.txt','yes')",
+          ],
+        },
+      },
+    }),
+  };
+
+  test("a declined project MCP server is never started", async () => {
+    const tau = startPty({
+      env: { ANTHROPIC_API_KEY: "unused" },
+      files: project,
+    });
+    await tau.expect(
+      `Connect project MCP server marker from ${join(tau.cwd, ".mcp.json")}?\nAllow once? [y/N] `,
+    );
+    tau.write("n\r");
+    await exit(tau);
+    expect(existsSync(join(tau.cwd, "server-started.txt"))).toBe(false);
+  });
+
+  test("an approved project MCP server is started", async () => {
+    const tau = startPty({
+      env: { ANTHROPIC_API_KEY: "unused" },
+      files: project,
+    });
+    await tau.expect("Allow once? [y/N] ");
+    tau.write("y\r");
+    await exit(tau);
+    expect(existsSync(join(tau.cwd, "server-started.txt"))).toBe(true);
+  });
+
+  test("a subagent leaving plan mode asks at the terminal", async () => {
+    const provider = await startMockProvider([
+      {
+        kind: "turn",
+        content: [
+          {
+            type: "tool_use",
+            id: "agent-1",
+            name: "Agent",
+            input: {
+              description: "Plan it",
+              prompt: "make a plan",
+              subagent_type: "planner",
+              run_in_background: false,
+            },
+          },
+        ],
+        stopReason: "tool_use",
+      },
+      {
+        kind: "turn",
+        content: [
+          {
+            type: "tool_use",
+            id: "child-exit",
+            name: "ExitPlanMode",
+            input: { plan: "# Child plan" },
+          },
+        ],
+        stopReason: "tool_use",
+      },
+      said("child done"),
+      said("parent done"),
+    ]);
+    const tau = startPty({
+      provider,
+      env: {
+        CLAUDE_CODE_FORK_SUBAGENT: "0",
+        CLAUDE_CODE_SUBAGENT_MODEL: "inherit",
+      },
+      configFiles: {
+        "agents/planner.md":
+          "---\nname: planner\ndescription: Plans work\ntools: ExitPlanMode, Read\npermissionMode: plan\n---\nPLANNER_SYSTEM",
+      },
+      args: ["--tools", "Agent,ExitPlanMode,Read"],
+    });
+    await submit(tau, "delegate");
+    await tau.expect(
+      /Approve ExitPlanMode for planner\?\nAllow once\? \[y\/N\] /,
+    );
+    tau.write("y\r");
+    await tau.expect("parent done");
+    await exit(tau);
+    expect(JSON.stringify(body(provider.requests[2]).messages)).toContain(
+      "Plan approval completed for this agent.",
+    );
+  });
+});
