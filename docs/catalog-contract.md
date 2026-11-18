@@ -104,8 +104,11 @@ keeps Glob and Grep.
 
 ## Known differences
 
-- The tool order is tau's own and is not alphabetical. The eager set differs
-  because tau lacks ListAgents, ReportFindings, ScheduleWakeup and Workflow.
+- The tool order is tau's own and is not alphabetical. ListAgents,
+  ReportFindings, ScheduleWakeup and Workflow are eager on the ordinary first
+  request. ReportFindings and Workflow sit in the original rare-builtin set
+  and defer only when `tengu_shiny_stardust` is on. That flag defaults off,
+  and tau keeps both eager. See `docs/eager-catalog-tools.md`.
 - "Already available" notes are appended to the ToolSearch result. The original
   sends them as a separate meta user message.
 - Not ported: the `auto:N` context threshold (tool search stays on), MCP pending
