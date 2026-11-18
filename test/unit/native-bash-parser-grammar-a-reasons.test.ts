@@ -205,3 +205,45 @@ test("a heredoc with an unscannable delimiter or terminator is refused", () => {
     assert.equal(engine.parse(input), null, input);
   assert.ok(engine.parse("cat <<E\nb\nE\n"));
 });
+
+// A subscript or array element is a bracket word only when its bracketed text
+// holds code, blanks or quoting another shell could end somewhere else.
+const bracketWords: readonly [input: string, isBracketWord: boolean][] = [
+  ["a=(x[$y] x[${y}] x[$((1))])", false],
+  ['a=(x["k"])', false],
+  ["a=(x['k'])", false],
+  ["a=(x[${#y}])", false],
+  ['a=(x["$y"])', false],
+  ['a=(x[$y]z "q" $w ${v} $((1)))', false],
+  ["a=([0]=a [1]+=b)", false],
+  ["a=(x[${y:-a b}])", true],
+  ["a=(x[${y:+$z}])", true],
+  ["a=(x[$(id)])", true],
+  ['a=(x["$(id)"])', true],
+  ["a=(x[`id`])", true],
+  ["a=(x[$((1+(2)))])", true],
+  ['a["x y"]=1', false],
+  ["a[$((1+2))]=1", false],
+  ["a[${x}]=1", false],
+  ["a[${#x}]=1", false],
+  ["a[${!x}]=1", false],
+  ["a[${x:-y}]=1", false],
+  ['a["$x"]=1', false],
+  ["a['k]']=1", true],
+  ["a[$(id)]=1", true],
+  ["a[x y]=1", true],
+  ['a["`id`"]=1', true],
+  ["a[${ x}]=1", true],
+  ["a[{x}]=1", true],
+  ["a[(( 1 ))]=2", true],
+];
+
+test("bracketed subscripts and array elements are bracket words only when another shell could end them elsewhere", () => {
+  const engine = parser();
+  for (const [input, isBracketWord] of bracketWords)
+    assert.equal(
+      present(engine.parse(input)).misreading,
+      isBracketWord ? "bracket_word" : undefined,
+      input,
+    );
+});

@@ -117,6 +117,22 @@ const corpus: readonly string[] = [
   "echo $(( (1) ))",
   "echo a $'\\r' b",
   "echo a\r\necho b\r\n",
+  "exec {a['x]']}>f",
+  'exec {a["k\\"]"]}>f',
+  "exec {a[\\]]}>f",
+  "exec {a[[1]]}>f",
+  "exec {a[1]}>f",
+  "exec {fd}<&-",
+  "cat <(ls) >(wc)",
+  "cat <<-\tEOF\n\tx\n\tEOF\n",
+  'x=$((1))$((2)) y=${a}b"c"$d',
+  "f() { :; } >out",
+  "! { :; } >out",
+  "time ! ls",
+  "((a[1]))",
+  "echo ${a[((1))]}",
+  "a[((1 + 2))]=3",
+  "echo $[ a[1] ] $(( ${#a} + $$ ))",
 ];
 
 test("every corpus snippet parses to spans that are exact byte slices of the input", () => {
