@@ -40,6 +40,7 @@ export function wrapCatalogTools(
     get definitions() {
       return base.definitions;
     },
+    deferredToolNames: () => search?.deferredNames() ?? [],
     execute: (call, signal) => base.execute(call, signal),
     setReadContext: (context) => base.setReadContext?.(context),
     prepareCompaction: (request) =>

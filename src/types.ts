@@ -324,6 +324,8 @@ export interface ToolExecutor {
   beforeModelRequest?(signal: AbortSignal): Promise<void>;
   prepareCompaction?: PrepareCompaction;
   setReadContext?(context: ReadToolContext | undefined): void;
+  /** Enabled tools withheld behind ToolSearch; prompt gates see them as available. */
+  deferredToolNames?(): string[];
 }
 
 export type PrepareCompaction = (options: {

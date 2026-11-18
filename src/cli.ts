@@ -281,14 +281,17 @@ async function main(): Promise<void> {
       : (session.systemPrompt ?? promptBody);
   /** Renders the body for this query's tools, then the request's system blocks. */
   const requestSystem = (
-    definitions: readonly { name: string }[],
+    tools: import("./types.js").ToolExecutor,
     model: string,
   ) => {
     const skills = skillHost?.runtime.catalog("model") ?? [];
     promptBody = renderSystemPrompt(
       {
         model,
-        tools: new Set(definitions.map((tool) => tool.name)),
+        tools: new Set([
+          ...tools.definitions.map((tool) => tool.name),
+          ...(tools.deferredToolNames?.() ?? []),
+        ]),
         hasSkills: skills.length > 0,
         interactive,
         env: process.env,
@@ -1673,7 +1676,7 @@ async function main(): Promise<void> {
           tools,
           messages: session.messages,
           model,
-          system: requestSystem(tools.definitions, model),
+          system: requestSystem(tools, model),
           maxTokens: options.maxTokensExplicit
             ? options.maxTokens
             : defaultOutputTokens(model),
@@ -1762,7 +1765,7 @@ async function main(): Promise<void> {
           : {}),
         request: {
           model: session.model,
-          system: requestSystem(tools.definitions, session.model),
+          system: requestSystem(tools, session.model),
           messages: session.messages,
           tools: tools.definitions,
           signal: active.signal,
