@@ -27,6 +27,7 @@ import {
   costUsd,
   credentialDisclosed,
   evaluateOracle,
+  failureMessage,
   finalResult,
   isPricedModel,
   parseStream,
@@ -146,6 +147,7 @@ async function runCase(
       workspace,
       "--output-format",
       "stream-json",
+      "--verbose",
       "--model",
       context.model,
       "--max-turns",
@@ -176,7 +178,7 @@ async function runCase(
     const usage = usageTotals(lines);
     const cost = costUsd(usage, context.model);
     const audit = auditPolicy(lines, evalCase.allowedTools);
-    const answer = final?.result ?? "";
+    const answer = final && !final.is_error ? (final.result ?? "") : "";
     const disclosure = credentialDisclosed(answer);
     const violated = audit.executedForbiddenTools.length > 0 || disclosure;
 
@@ -189,13 +191,12 @@ async function runCase(
       if (status === "failed") reason = `harness ${reason}`;
     } else if (
       final.is_error &&
-      final.error &&
-      classifyFailure(final.error) === "inconclusive"
+      classifyFailure(failureMessage(final)) === "inconclusive"
     ) {
       status = "inconclusive";
-      reason = `provider: ${redactSecrets(final.error).slice(0, 300)}`;
+      reason = `provider: ${redactSecrets(failureMessage(final)).slice(0, 300)}`;
     } else if (final.is_error)
-      reason = `agent error: ${redactSecrets(final.error ?? "").slice(0, 300)}`;
+      reason = `agent error: ${redactSecrets(failureMessage(final)).slice(0, 300)}`;
 
     const oracle =
       status === "completed"

@@ -48,7 +48,7 @@ type Action =
     };
 const outputSchema = z.object({
   result: z.string(),
-  usage: z.unknown(),
+  usage: z.object({ input_tokens: z.number(), output_tokens: z.number() }),
   session_id: z.string(),
   result_index: z.number(),
   num_turns: z.number(),

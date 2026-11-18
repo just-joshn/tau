@@ -37,6 +37,10 @@ export function parseOptions(args: string[]) {
       "permission-prompt-tool": { type: "string" },
       "permission-prompts": { type: "string" },
       "output-format": { type: "string" },
+      "input-format": { type: "string" },
+      verbose: { type: "boolean" },
+      "include-partial-messages": { type: "boolean" },
+      "session-id": { type: "string" },
       "max-turns": { type: "string" },
       "max-tokens": { type: "string" },
       "max-retries": { type: "string" },
@@ -151,6 +155,10 @@ export function parseOptions(args: string[]) {
     format: z
       .enum(["text", "json", "stream-json"])
       .parse(values["output-format"] ?? "text"),
+    inputFormat: values["input-format"] ?? "text",
+    verbose: values.verbose ?? false,
+    includePartialMessages: values["include-partial-messages"] ?? false,
+    sessionId: values["session-id"],
     maxTurns: positiveInteger.parse(values["max-turns"] ?? 25),
     maxTokens: positiveInteger.parse(
       values["max-tokens"] ?? defaultOutputTokens(model),
@@ -211,6 +219,38 @@ export function parseOptions(args: string[]) {
   };
 }
 export type Options = ReturnType<typeof parseOptions>;
+
+/**
+ * Print-protocol flag combinations the original rejects before any work, with
+ * its exact messages (main action, chunk-97e8zgw1.js: input format checks,
+ * --include-partial-messages, --session-id via tl and Et).
+ */
+export function printProtocolFlagError(
+  options: Options,
+  interactive: boolean,
+): string | undefined {
+  const { inputFormat, format } = options;
+  if (inputFormat !== "text" && inputFormat !== "stream-json")
+    return `Error: Unknown input format "${inputFormat}".`;
+  if (inputFormat === "stream-json" && format !== "stream-json")
+    return "Error: --input-format=stream-json requires output-format=stream-json.";
+  if (inputFormat === "stream-json" && interactive)
+    return "Error: --input-format=stream-json requires --print.";
+  if (
+    options.includePartialMessages &&
+    (interactive || format !== "stream-json")
+  )
+    return "Error: --include-partial-messages requires --print and --output-format=stream-json.";
+  if (options.sessionId === undefined) return;
+  if (options.resume || options.continue)
+    return "Error: --session-id with --continue or --resume also needs --fork-session.";
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+      options.sessionId,
+    )
+  )
+    return "Error: Invalid session ID. Must be a valid UUID.";
+}
 export const help = `tau — independent TypeScript coding agent
 
 Usage: tau [options] [prompt]
@@ -240,6 +280,10 @@ Usage: tau [options] [prompt]
       --setting-sources LIST        user,project,local; empty disables all three
       --managed-settings JSON       Explicit parent managed settings document
       --output-format FORMAT        text | json | stream-json (noninteractive only)
+      --verbose                     Required for stream-json print output; json prints every message
+      --include-partial-messages    Add stream_event messages (print + stream-json output)
+      --input-format FORMAT         text | stream-json (newline-delimited user messages on stdin)
+      --session-id UUID             Start a new session with this ID
       --max-turns N                 Maximum model rounds per prompt (default 25)
       --max-tokens N                Maximum output tokens per call (model/catalog default)
       --thinking MODE               enabled | adaptive | disabled (model capability selects wire form)

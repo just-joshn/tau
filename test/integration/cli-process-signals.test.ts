@@ -23,9 +23,10 @@ const posixOnly = process.platform === "win32";
 const resultSchema = z.object({
   type: z.literal("result"),
   session_id: z.uuid(),
-  result: z.string(),
+  subtype: z.string(),
+  result: z.string().optional(),
   is_error: z.boolean(),
-  error: z.string().optional(),
+  errors: z.array(z.string()).optional(),
 });
 
 const answer = (text: string) => ({
@@ -157,7 +158,8 @@ test.skipIf(posixOnly)(
     assert.equal(run.stdout.trimEnd().split("\n").length, 1);
     const result = resultSchema.parse(JSON.parse(run.stdout));
     assert.equal(result.is_error, true);
-    assert.equal(result.error, "Interrupted");
+    assert.equal(result.subtype, "error_during_execution");
+    assert.deepEqual(result.errors, ["Interrupted"]);
     assert.match(run.stderr, /^(\nCancelling…\n)+$/);
     assert.equal(provider.requests.length, 1);
   },

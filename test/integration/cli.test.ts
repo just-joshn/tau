@@ -119,7 +119,7 @@ const requestBody = z.looseObject({
 type RequestBody = z.infer<typeof requestBody>;
 const streamEvent = z.looseObject({
   type: z.string().optional(),
-  stage: z.string().optional(),
+  subtype: z.string().optional(),
 });
 const storedSession = z.looseObject({
   model: z.string().optional(),
@@ -361,7 +361,7 @@ test(
     );
     assert.equal(await readFile(join(temp, "created.txt"), "utf8"), "hello");
     const streaming = await cli(
-      ["--cwd", temp, "--output-format", "stream-json"],
+      ["--cwd", temp, "--output-format", "stream-json", "--verbose"],
       env,
       "create it",
     );
@@ -381,10 +381,11 @@ test(
           input_tokens: z.literal(10),
           output_tokens: z.literal(4),
         }),
-        error: z.string(),
+        subtype: z.literal("error_max_turns"),
+        errors: z.array(z.string()),
       })
       .parse(JSON.parse(exhausted.out));
-    assert.match(failed.error, /maxTurns/);
+    assert.deepEqual(failed.errors, ["Reached maximum number of turns (1)"]);
   },
   { timeout: 15000 },
 );
@@ -469,6 +470,7 @@ test(
         initial.session_id,
         "--output-format",
         "stream-json",
+        "--verbose",
         "--max-api-attempts",
         "3",
       ],
@@ -734,6 +736,7 @@ test(
         temp,
         "--output-format",
         "stream-json",
+        "--verbose",
         "--max-api-attempts",
         "2",
       ],
@@ -746,7 +749,8 @@ test(
       .map((line) => streamEvent.parse(JSON.parse(line)));
     assert.ok(
       events.some(
-        (event) => event.type === "compaction" && event.stage === "complete",
+        (event) =>
+          event.type === "system" && event.subtype === "compact_boundary",
       ),
     );
     assert.equal(resultSchema.parse(events.at(-1)).result, "Done.");
@@ -959,6 +963,7 @@ test(
         initial.session_id,
         "--output-format",
         "stream-json",
+        "--verbose",
         "--max-retries",
         "0",
       ],
@@ -970,7 +975,6 @@ test(
       .trim()
       .split("\n")
       .map((line) => streamEvent.parse(JSON.parse(line)));
-    assert.ok(events.some((event) => event.type === "thinking_stripped"));
     assert.equal(resultSchema.parse(events.at(-1)).result, "Again.");
     assert.equal(betas[3], "thinking-resumption-2026-07-17");
     assert.ok(
@@ -1062,6 +1066,7 @@ test(
         "acceptEdits",
         "--output-format",
         "stream-json",
+        "--verbose",
       ],
       {
         ...process.env,
@@ -1168,6 +1173,7 @@ test(
         "acceptEdits",
         "--output-format",
         "stream-json",
+        "--verbose",
       ],
       {
         ...process.env,
@@ -1201,7 +1207,7 @@ test(
       .split("\n")
       .map((line) => streamEvent.parse(JSON.parse(line)));
     assert.equal(
-      events.filter((event) => event.type === "tool_result").length,
+      events.filter((event) => event.type === "user").length,
       actions.length,
     );
     assert.equal(resultSchema.parse(events.at(-1)).result, "Done.");
@@ -1307,6 +1313,7 @@ test(
       temp,
       "--output-format",
       "stream-json",
+      "--verbose",
       "--max-api-attempts",
     ];
     const blocked = await cli([...args, "2"], env);
@@ -1316,18 +1323,19 @@ test(
       .trim()
       .split("\n")
       .map((line) => streamEvent.parse(JSON.parse(line)));
-    assert.equal(
-      events.filter((event) => event.type === "tool_result").length,
-      1,
-    );
+    assert.equal(events.filter((event) => event.type === "user").length, 1);
     const result = z
       .looseObject({
-        error: z.string(),
-        usage: z.unknown(),
+        is_error: z.literal(true),
+        result: z.string(),
+        usage: z.object({
+          input_tokens: z.number(),
+          output_tokens: z.number(),
+        }),
         session_id: z.string(),
       })
       .parse(events.at(-1));
-    assert.match(result.error, /API attempt budget exhausted/);
+    assert.match(result.result, /API attempt budget exhausted/);
     assert.deepEqual(result.usage, { input_tokens: 10, output_tokens: 4 });
     const directory = join(temp, "state", "sessions");
     // Resuming must have a replayable completed tool result, not an unclosed assistant call.
@@ -1420,6 +1428,7 @@ test(
         temp,
         "--output-format",
         "stream-json",
+        "--verbose",
         "--max-retries",
         "0",
         "--max-api-attempts",
@@ -1439,12 +1448,16 @@ test(
       .trim()
       .split("\n")
       .map((line) => streamEvent.parse(JSON.parse(line)));
-    assert.equal(
-      events.filter((event) => event.type === "tool_result").length,
-      1,
-    );
+    assert.equal(events.filter((event) => event.type === "user").length, 1);
     assert.deepEqual(
-      z.looseObject({ usage: z.unknown() }).parse(events.at(-1)).usage,
+      z
+        .looseObject({
+          usage: z.object({
+            input_tokens: z.number(),
+            output_tokens: z.number(),
+          }),
+        })
+        .parse(events.at(-1)).usage,
       {
         input_tokens: 17,
         output_tokens: 7,
@@ -1602,6 +1615,8 @@ test(
         temp,
         "--output-format",
         "stream-json",
+        "--verbose",
+        "--include-partial-messages",
         "--max-api-attempts",
         "4",
       ],
@@ -1619,11 +1634,24 @@ test(
     const result = resultSchema.parse(events.at(-1));
     assert.equal(result.result, "After.");
     assert.equal(result.is_error, false);
+    // The interrupted round's text streamed but never became an assistant message.
+    const committed = z.object({
+      message: z.object({
+        content: z.array(z.looseObject({ type: z.string() })),
+      }),
+    });
     assert.deepEqual(
-      events.filter((e) => e.type === "text_reset"),
-      [{ type: "text_reset", text: "" }],
+      events
+        .filter((e) => e.type === "assistant")
+        .map((e) => committed.parse(e).message.content[0]?.type),
+      ["text", "tool_use", "thinking", "text"],
     );
-    assert.equal(events.filter((e) => e.type === "tool_start").length, 1);
+    assert.ok(
+      !JSON.stringify(events.filter((e) => e.type === "assistant")).includes(
+        "obsolete",
+      ),
+    );
+    assert.equal(events.filter((e) => e.type === "user").length, 1);
     assert.equal(requests, 3);
     const saved = await readStored(temp, result.session_id);
     assert.equal(JSON.stringify(saved.messages).includes("obsolete"), false);

@@ -10,7 +10,8 @@
     "--max-retries",
     "0",
     "--output-format",
-    "stream-json"
+    "stream-json",
+    "--verbose"
   ],
   "modelScript": [
     {

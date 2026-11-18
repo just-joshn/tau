@@ -55,9 +55,9 @@ const call = (
 });
 
 const resultSchema = z.looseObject({
-  result: z.string(),
+  result: z.string().optional(),
   is_error: z.boolean(),
-  error: z.string().optional(),
+  errors: z.array(z.string()).optional(),
 });
 const toolResultSchema = z.looseObject({
   type: z.literal("tool_result"),
@@ -188,7 +188,11 @@ describe("plan approval through --permission-prompt-tool", () => {
       ],
     });
     expect(run.exitCode).toBe(1);
-    expect(parsed(run)).toMatchObject({ is_error: true, error: "Interrupted" });
+    expect(parsed(run)).toMatchObject({
+      is_error: true,
+      subtype: "error_during_execution",
+      errors: ["Interrupted"],
+    });
     expect(provider.requests).toHaveLength(1);
   });
 
@@ -283,7 +287,11 @@ describe("subagent plan approval through --permission-prompt-tool", () => {
       args: [...args, "--mcp-config", bridge.config],
     });
     expect(run.exitCode).toBe(1);
-    expect(parsed(run)).toMatchObject({ is_error: true, error: "Interrupted" });
+    expect(parsed(run)).toMatchObject({
+      is_error: true,
+      subtype: "error_during_execution",
+      errors: ["Interrupted"],
+    });
     expect(provider.requests).toHaveLength(2);
   });
 });

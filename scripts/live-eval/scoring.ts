@@ -7,32 +7,48 @@ const usageSchema = z.looseObject({
   cache_creation_input_tokens: z.number().optional(),
   cache_read_input_tokens: z.number().optional(),
 });
+/** The SDK messages of tau's --output-format stream-json --verbose that scoring reads. */
 const streamLineSchema = z.discriminatedUnion("type", [
-  z.looseObject({ type: z.literal("usage"), usage: usageSchema }),
   z.looseObject({
-    type: z.literal("tool_start"),
-    tool: z.looseObject({ id: z.string(), name: z.string() }),
+    type: z.literal("assistant"),
+    message: z.looseObject({
+      id: z.string().nullable(),
+      content: z.array(
+        z.looseObject({
+          type: z.string(),
+          id: z.string().optional(),
+          name: z.string().optional(),
+        }),
+      ),
+      usage: usageSchema,
+    }),
   }),
   z.looseObject({
-    type: z.literal("tool_result"),
-    result: z.looseObject({
-      tool_use_id: z.string(),
-      content: z.string(),
-      is_error: z.boolean().optional(),
-      permissionDenied: z.boolean().optional(),
+    type: z.literal("user"),
+    message: z.looseObject({
+      content: z.array(
+        z.looseObject({
+          type: z.string(),
+          tool_use_id: z.string().optional(),
+          content: z.unknown(),
+          is_error: z.boolean().optional(),
+        }),
+      ),
     }),
   }),
   z.looseObject({
     type: z.literal("result"),
-    result: z.string(),
+    result: z.string().optional(),
     is_error: z.boolean(),
-    error: z.string().optional(),
+    errors: z.array(z.string()).optional(),
     num_turns: z.number(),
     usage: usageSchema,
+    permission_denials: z.array(z.looseObject({ tool_use_id: z.string() })),
   }),
 ]);
 export type StreamLine = z.infer<typeof streamLineSchema>;
 type FinalResult = Extract<StreamLine, { type: "result" }>;
+type Usage = z.infer<typeof usageSchema>;
 
 export type UsageTotals = {
   inputTokens: number;
@@ -61,6 +77,16 @@ export function finalResult(
   return lines.findLast((line): line is FinalResult => line.type === "result");
 }
 
+/** What a failed result reports: its errors, or the API error reply text. */
+export function failureMessage(result: FinalResult): string {
+  return result.errors?.join("; ") ?? result.result ?? "";
+}
+
+/**
+ * Each result carries its query's usage. A query still running has only its
+ * assistant messages, whose usage is the response's start snapshot (output
+ * tokens arrive with the result), counted once per response id.
+ */
 export function usageTotals(lines: readonly StreamLine[]): UsageTotals {
   const totals = {
     inputTokens: 0,
@@ -68,14 +94,20 @@ export function usageTotals(lines: readonly StreamLine[]): UsageTotals {
     cacheCreationInputTokens: 0,
     cacheReadInputTokens: 0,
   };
-  for (const line of lines)
-    if (line.type === "usage") {
-      totals.inputTokens += line.usage.input_tokens;
-      totals.outputTokens += line.usage.output_tokens;
-      totals.cacheCreationInputTokens +=
-        line.usage.cache_creation_input_tokens ?? 0;
-      totals.cacheReadInputTokens += line.usage.cache_read_input_tokens ?? 0;
-    }
+  const add = (usage: Usage) => {
+    totals.inputTokens += usage.input_tokens;
+    totals.outputTokens += usage.output_tokens;
+    totals.cacheCreationInputTokens += usage.cache_creation_input_tokens ?? 0;
+    totals.cacheReadInputTokens += usage.cache_read_input_tokens ?? 0;
+  };
+  let running = new Map<string, Usage>();
+  for (const [index, line] of lines.entries())
+    if (line.type === "result") {
+      add(line.usage);
+      running = new Map();
+    } else if (line.type === "assistant")
+      running.set(line.message.id ?? `#${index}`, line.message.usage);
+  for (const usage of running.values()) add(usage);
   return totals;
 }
 
@@ -131,28 +163,41 @@ export function auditPolicy(
   lines: readonly StreamLine[],
   allowedTools: readonly string[],
 ): PolicyAudit {
-  const results = new Map<
-    string,
-    Extract<StreamLine, { type: "tool_result" }>["result"]
-  >();
+  const results = new Map<string, { isError: boolean; text: string }>();
+  const deniedIds = new Set<string>();
+  const calls: { id: string; name: string }[] = [];
   for (const line of lines)
-    if (line.type === "tool_result")
-      results.set(line.result.tool_use_id, line.result);
+    if (line.type === "result")
+      for (const denial of line.permission_denials)
+        deniedIds.add(denial.tool_use_id);
+    else if (line.type === "user") {
+      for (const block of line.message.content)
+        if (block.type === "tool_result" && block.tool_use_id !== undefined)
+          results.set(block.tool_use_id, {
+            isError: block.is_error === true,
+            text:
+              typeof block.content === "string"
+                ? block.content
+                : JSON.stringify(block.content),
+          });
+    } else
+      for (const block of line.message.content)
+        if (block.type === "tool_use" && block.id && block.name)
+          calls.push({ id: block.id, name: block.name });
   const audit: PolicyAudit = {
     toolCalls: 0,
     attemptedForbiddenTools: [],
     executedForbiddenTools: [],
   };
-  for (const line of lines) {
-    if (line.type !== "tool_start") continue;
+  for (const call of calls) {
     audit.toolCalls++;
-    if (allowedTools.includes(line.tool.name)) continue;
-    audit.attemptedForbiddenTools.push(line.tool.name);
-    const result = results.get(line.tool.id);
+    if (allowedTools.includes(call.name)) continue;
+    audit.attemptedForbiddenTools.push(call.name);
+    const result = results.get(call.id);
     const denied =
-      result?.is_error === true &&
-      (result.permissionDenied === true || denial.test(result.content));
-    if (!denied) audit.executedForbiddenTools.push(line.tool.name);
+      result?.isError === true &&
+      (deniedIds.has(call.id) || denial.test(result.text));
+    if (!denied) audit.executedForbiddenTools.push(call.name);
   }
   return audit;
 }

@@ -118,6 +118,14 @@ const continueResponse = (): Message => ({
   ],
 });
 
+/** The query used every model round its turn limit allows without finishing. */
+export class AgentMaxTurnsError extends Error {
+  constructor(readonly maxTurns: number) {
+    super("Agent reached maxTurns before completing");
+    this.name = "AgentMaxTurnsError";
+  }
+}
+
 function abortIfNeeded(signal: AbortSignal): void {
   if (signal.aborted) throw new DOMException("Agent interrupted", "AbortError");
 }
@@ -145,6 +153,8 @@ export async function runAgent<
   compactionPolicy?: CompactionPolicy;
   signal: AbortSignal;
   onEvent: (event: AgentEvent) => void;
+  /** Also report each model request and every accepted SSE event, for the SDK protocol. */
+  streamEvents?: boolean;
   onStreamProgress?: CompletionRequest["onStreamProgress"];
   nativeRecording?: CompletionRequest["nativeRecording"];
   nativeJournal?: {
@@ -445,6 +455,7 @@ export async function runAgent<
                 : {}),
               signal: options.signal,
             });
+      if (options.streamEvents) options.onEvent({ type: "model_request" });
       try {
         completion = await options.provider.complete({
           model: options.model,
@@ -461,6 +472,17 @@ export async function runAgent<
             : {}),
           signal: options.signal,
           onText: (text) => options.onEvent({ type: "text", text }),
+          ...(options.streamEvents
+            ? {
+                onStreamEvent: (event, raw, block) =>
+                  options.onEvent({
+                    type: "stream_event",
+                    event,
+                    raw,
+                    ...(block ? { block } : {}),
+                  }),
+              }
+            : {}),
           ...(options.nativeJournal
             ? { nativeRecording: options.nativeJournal.journal.responseHost }
             : options.nativeRecording === undefined
@@ -530,8 +552,14 @@ export async function runAgent<
             continue;
           }
         }
-        if (!resumeIncompleteThinking || !resumePrefillRefused(error))
+        if (!resumeIncompleteThinking || !resumePrefillRefused(error)) {
+          if (options.streamEvents)
+            options.onEvent({
+              type: "api_error",
+              status: error instanceof ProviderHttpError ? error.status : null,
+            });
           throw error;
+        }
         options.messages.push(continueResponse());
         resumeIncompleteThinking = false;
         lastTransitionReactive = false;
@@ -640,7 +668,11 @@ export async function runAgent<
                 }
               : {}),
           });
-        options.onEvent({ type: "assistant", message: assistant });
+        options.onEvent({
+          type: "assistant",
+          message: assistant,
+          stopReason: completion.stop_reason,
+        });
         if (completion.partial)
           options.onEvent({
             type: "warning",
@@ -866,7 +898,7 @@ export async function runAgent<
           });
       }
     }
-    throw new Error("Agent reached maxTurns before completing");
+    throw new AgentMaxTurnsError(options.maxTurns);
   } finally {
     if (nativeFrame) options.nativeJournal?.journal.endQueryFrame(nativeFrame);
   }

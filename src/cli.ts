@@ -5,7 +5,12 @@ import { createInterface } from "node:readline/promises";
 import { stdin, stdout, stderr } from "node:process";
 import { terminalText as safe, replaceProvisional } from "./terminal.js";
 import { runAgent } from "./agent.js";
-import { help, parseOptions, permissionModeSchema } from "./options.js";
+import {
+  help,
+  parseOptions,
+  permissionModeSchema,
+  printProtocolFlagError,
+} from "./options.js";
 import { buildBaseSystemPrompt } from "./prompt.js";
 import { AnthropicProvider } from "./provider.js";
 import { newSession, SessionStore } from "./session.js";
@@ -77,6 +82,15 @@ import {
   type QueryEffortSettingsLayer,
 } from "./query-model-effort.js";
 import type { AgentEvent } from "./types.js";
+import {
+  SdkSession,
+  sdkQueryOutcome,
+  type SdkMessage,
+  type SdkQuery,
+} from "./sdk-messages.js";
+import { SdkInputFatal, sdkUserTurns, type SdkUserTurn } from "./sdk-input.js";
+
+const TAU_VERSION = "0.1.0";
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Unknown error";
@@ -100,11 +114,18 @@ async function main(): Promise<void> {
     return;
   }
   if (options.version) {
-    stdout.write("tau 0.1.0\n");
+    stdout.write(`tau ${TAU_VERSION}\n`);
     return;
   }
   const cwd = await realpath(options.cwd);
   const interactive = !options.print && Boolean(stdin.isTTY && stdout.isTTY);
+  const flagError = printProtocolFlagError(options, interactive);
+  if (flagError) {
+    stderr.write(`${flagError}\n`);
+    process.exitCode = 1;
+    return;
+  }
+  const streamInput = options.inputFormat === "stream-json";
   const launch = await loadLaunchConfiguration(options, {
     cwd,
     nonInteractive: !interactive,
@@ -127,12 +148,21 @@ async function main(): Promise<void> {
     throw new Error("Structured output requires --print or piped input");
   if (interactive && options.maxThinkingTokens !== undefined)
     throw new Error("--max-thinking-tokens requires print or piped mode");
-  const prompt = [options.prompt, !stdin.isTTY ? await readStdin() : ""]
-    .filter(Boolean)
-    .join("\n\n")
-    .trim();
-  if (!interactive && !prompt)
+  const prompt = streamInput
+    ? ""
+    : [options.prompt, !stdin.isTTY ? await readStdin() : ""]
+        .filter(Boolean)
+        .join("\n\n")
+        .trim();
+  if (!interactive && !prompt && !streamInput)
     throw new Error("Provide a prompt with -p or on stdin");
+  if (!interactive && options.format === "stream-json" && !options.verbose) {
+    stderr.write(
+      "Error: When using --print, --output-format=stream-json requires --verbose\n",
+    );
+    process.exitCode = 1;
+    return;
+  }
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey)
     throw new Error(
@@ -185,6 +215,11 @@ async function main(): Promise<void> {
     },
   });
   const store = await SessionStore.create(cwd);
+  if (options.sessionId !== undefined && (await store.has(options.sessionId))) {
+    stderr.write(`Error: Session ID ${options.sessionId} is already in use.\n`);
+    process.exitCode = 1;
+    return;
+  }
   let session = options.resume
     ? options.resume.trim().toLowerCase().endsWith(".jsonl")
       ? (
@@ -198,7 +233,7 @@ async function main(): Promise<void> {
       : await store.load(options.resume)
     : options.continue
       ? await store.latest()
-      : newSession(cwd, launch.model);
+      : newSession(cwd, launch.model, options.sessionId);
   if (options.modelExplicit) session.model = options.model;
   let queryModelForTools = session.model;
   let mode =
@@ -220,6 +255,7 @@ async function main(): Promise<void> {
     : undefined;
   let active: AbortController | undefined;
   let mcp: McpManager | undefined;
+  let mcpServerNames: string[] = [];
   let permissionPrompt:
     ReturnType<typeof createMcpPermissionPrompt> | undefined;
   let closing = false;
@@ -1299,29 +1335,51 @@ async function main(): Promise<void> {
       },
     });
   };
-  const turn = async (input: string): Promise<void> => {
+  const sdk =
+    options.format === "text"
+      ? undefined
+      : new SdkSession({
+          version: TAU_VERSION,
+          includePartialMessages: options.includePartialMessages,
+          usageSinceLastResult: options.format === "stream-json",
+          limits: (model) => ({
+            contextWindow: provider.contextWindowTokens(model),
+            maxOutputTokens: defaultOutputTokens(model),
+          }),
+        });
+  const sdkTranscript: SdkMessage[] = [];
+  const emit = (messages: readonly SdkMessage[]) => {
+    for (const message of messages)
+      if (options.format === "stream-json")
+        stdout.write(JSON.stringify(message) + "\n");
+      else if (options.verbose) sdkTranscript.push(message);
+  };
+  const turn = async (
+    input: string | SdkUserTurn["content"],
+  ): Promise<void> => {
     active = new AbortController();
     const turnSignal = active.signal;
     const historyStart = session.messages.length;
     let text = "";
     let committedText = "";
     let provisionalText = "";
-    let partial = false;
-    let resultUsage = { input_tokens: 0, output_tokens: 0 },
-      resultTurns = 0,
-      resultIndex = -1;
-    const started = Date.now();
-    let failure: string | undefined;
+    let failure: string | undefined, failureError: unknown;
+    // Each query (the prompt's, then one per drained notification) ends in its own result.
+    let sdkQuery: SdkQuery | undefined,
+      queryStart = historyStart;
+    const finalText = (start: number) => {
+      const last = session.messages
+        .slice(start)
+        .findLast((message) => message.role === "assistant")
+        ?.content.at(-1);
+      return last?.type === "text" ? last.text : "";
+    };
     const onEvent = (event: AgentEvent) => {
-      if (options.format === "stream-json")
-        stdout.write(JSON.stringify(event) + "\n");
+      if (sdkQuery) emit(sdkQuery.accept(event));
       switch (event.type) {
         case "usage":
           session.usage.input_tokens += event.usage.input_tokens;
           session.usage.output_tokens += event.usage.output_tokens;
-          resultUsage.input_tokens += event.usage.input_tokens;
-          resultUsage.output_tokens += event.usage.output_tokens;
-          resultTurns++;
           break;
         case "text":
           text += event.text;
@@ -1349,10 +1407,12 @@ async function main(): Promise<void> {
           provisionalText = "";
           break;
         case "warning":
-          partial = true;
           stderr.write(`\n${safe(event.message)}\n`);
           break;
         case "thinking_stripped":
+        case "model_request":
+        case "stream_event":
+        case "api_error":
           break;
         case "compaction":
           if (options.format === "text") {
@@ -1390,12 +1450,16 @@ async function main(): Promise<void> {
       skillHost?.runtime.resetQuery(session.messages);
       const userMessage: import("./types.js").Message = {
         role: "user",
-        content: [{ type: "text", text: input }],
+        content:
+          typeof input === "string" ? [{ type: "text", text: input }] : input,
       };
       await instructions.announce(userMessage, session.messages);
       turnSignal.throwIfAborted();
       session.messages.push(userMessage);
-      const command = /^\/([^\s]+)(?:\s+([\s\S]*))?$/.exec(input);
+      const command =
+        typeof input === "string"
+          ? /^\/([^\s]+)(?:\s+([\s\S]*))?$/.exec(input)
+          : null;
       const commandName = command?.[1];
       if (command && commandName !== undefined && skillHost?.has(commandName)) {
         const execution = await skillHost.runtime.invokeUser(
@@ -1412,13 +1476,47 @@ async function main(): Promise<void> {
       const tools = await createSessionTools();
       const available =
         tools.definitions.map((tool) => tool.name).join(", ") || "none";
+      if (sdk) {
+        const skills =
+          skillHost?.runtime.catalog().map((skill) => skill.name) ?? [];
+        const connected = new Set(mcp?.connectedServers);
+        emit([
+          sdk.init(session.id, {
+            cwd,
+            tools: tools.definitions.map((tool) => tool.name),
+            mcpServers: mcpServerNames.map((name) => ({
+              name,
+              status: connected.has(name) ? "connected" : "failed",
+            })),
+            model: queryModel,
+            permissionMode: mode,
+            slashCommands: skills,
+            agents:
+              (await agentHost?.catalog())?.map(
+                (definition) => definition.agentType,
+              ) ?? [],
+            skills,
+            plugins: plugins.plugins.map((plugin) => ({
+              name: plugin.name,
+              path: plugin.root,
+              source: plugin.source,
+            })),
+          }),
+        ]);
+      }
       const runQuery = async (fresh = false) => {
         const model = fresh ? currentModel() : queryModel;
         queryModelForTools = model;
-        resultUsage = { input_tokens: 0, output_tokens: 0 };
-        resultTurns = 0;
-        resultIndex++;
-        const outcome = await runAgent({
+        if (sdkQuery)
+          emit([
+            sdkQuery.finish({
+              kind: "completed",
+              result: finalText(queryStart),
+            }),
+          ]);
+        sdkQuery = sdk?.query(session.id, model);
+        queryStart = session.messages.length;
+        await runAgent({
           provider,
           tools,
           messages: session.messages,
@@ -1436,6 +1534,7 @@ async function main(): Promise<void> {
             : { maxApiAttempts: options.maxApiAttempts }),
           signal: turnSignal,
           onEvent,
+          streamEvents: sdk !== undefined,
           stopHook: (context) => {
             const { runtime } = activeHooks();
             if (!runtime.stop)
@@ -1445,12 +1544,6 @@ async function main(): Promise<void> {
             return runtime.stop(context);
           },
         });
-        resultUsage = {
-          input_tokens: outcome.usage.input_tokens,
-          output_tokens: outcome.usage.output_tokens,
-        };
-        resultTurns = outcome.turns;
-        return outcome;
       };
       await runQuery();
       // Terminal output is held until child settlement and notification queries have drained.
@@ -1467,6 +1560,7 @@ async function main(): Promise<void> {
         await runQuery(true);
       }
     } catch (error) {
+      failureError = error;
       failure = turnSignal.aborted ? "Interrupted" : errorMessage(error);
     } finally {
       skillHost?.runtime.flushContext(session.messages);
@@ -1478,30 +1572,24 @@ async function main(): Promise<void> {
         failure = failure ? `${failure}; ${saveError}` : saveError;
       }
     }
-    const lastBlock = session.messages
-      .slice(historyStart)
-      .findLast((message) => message.role === "assistant")
-      ?.content.at(-1);
-    const answer =
-      failure === undefined
-        ? lastBlock?.type === "text"
-          ? lastBlock.text
-          : ""
-        : text;
-    const result = {
-      type: "result",
-      session_id: session.id,
-      result: answer,
-      is_error: failure !== undefined,
-      ...(partial ? { is_partial: true } : {}),
-      ...(failure ? { error: failure } : {}),
-      usage: resultUsage,
-      num_turns: resultTurns,
-      result_index: Math.max(0, resultIndex),
-      duration_ms: Date.now() - started,
-    };
-    if (options.format !== "text") stdout.write(JSON.stringify(result) + "\n");
-    else {
+    const answer = failure === undefined ? finalText(historyStart) : text;
+    if (sdk) {
+      const result = (sdkQuery ?? sdk.query(session.id, currentModel())).finish(
+        sdkQueryOutcome(
+          failure === undefined
+            ? undefined
+            : { error: failureError, message: failure },
+          answer,
+        ),
+      );
+      if (options.format === "stream-json") emit([result]);
+      else
+        stdout.write(
+          JSON.stringify(
+            options.verbose ? sdkTranscript.splice(0).concat(result) : result,
+          ) + "\n",
+        );
+    } else {
       if (!interactive) stdout.write(safe(answer));
       stdout.write("\n");
       if (failure) stderr.write(`tau: ${safe(failure)}\n`);
@@ -1585,7 +1673,8 @@ async function main(): Promise<void> {
           ),
         onDiagnostic: (message) => stderr.write(`MCP: ${safe(message)}\n`),
       });
-      if (Object.keys(configs).length) {
+      mcpServerNames = Object.keys(configs);
+      if (mcpServerNames.length) {
         mcp = await McpManager.connect(configs, {
           cwd,
           signal: active.signal,
@@ -1618,6 +1707,16 @@ async function main(): Promise<void> {
       );
     }
     if (prompt) await turn(prompt);
+    if (streamInput) {
+      stdin.setEncoding("utf8");
+      try {
+        for await (const next of sdkUserTurns(stdin)) await turn(next.content);
+      } catch (error) {
+        if (!(error instanceof SdkInputFatal)) throw error;
+        stderr.write(`${error.message}\n`);
+        process.exitCode = 1;
+      }
+    }
     while (terminal && !closing) {
       let input: string;
       try {

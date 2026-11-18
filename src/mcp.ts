@@ -692,6 +692,11 @@ export class McpManager {
       throw error;
     }
   }
+  /** Names of the servers that connected; configured servers absent here failed. */
+  get connectedServers(): string[] {
+    return this.servers.map((server) => server.name);
+  }
+
   get definitions(): ToolDefinition[] {
     return [...this.tools.values()].map((entry) => entry.definition);
   }
