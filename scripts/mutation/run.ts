@@ -114,8 +114,6 @@ await Promise.all(
 );
 rmSync(scratch, { recursive: true, force: true });
 
-const detected = (status: Status) =>
-  status === "killed" || status === "timeout";
 const summarize = (subset: readonly Result[]) => {
   const count = (status: Status) =>
     subset.filter((result) => result.status === status).length;
@@ -264,6 +262,10 @@ function runTests(
       resolvePromise({ code, timedOut, ms: performance.now() - begun });
     });
   });
+}
+
+function detected(status: Status): boolean {
+  return status === "killed" || status === "timeout";
 }
 
 function format(summary: ReturnType<typeof summarize>): string {
