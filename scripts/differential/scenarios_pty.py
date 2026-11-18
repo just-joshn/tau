@@ -31,6 +31,11 @@ class PtyMock:
         text = "".join(b.get("text", "") for b in blocks if isinstance(b, dict) and b.get("type") == "text")
         if not body.get("tools"):
             return [{"type": "text", "text": "ok"}], "end_turn"
+        if EDIT in text:
+            return [{"type": "tool_use", "id": f"pty-read-{self.edits + 1}", "name": "Read",
+                     "input": {"file_path": str(self.work / "a.txt")}}], "tool_use"
+        if TEXT in text:
+            return [{"type": "text", "text": TEXT_REPLY + " mock done"}], "end_turn"
         if results:
             done = results[-1]
             if done.get("tool_use_id", "").startswith("pty-read-"):
@@ -39,11 +44,6 @@ class PtyMock:
                 return [{"type": "tool_use", "id": f"pty-edit-{self.edits}", "name": "Edit",
                          "input": {"file_path": str(self.work / "a.txt"), "old_string": old, "new_string": new}}], "tool_use"
             return [{"type": "text", "text": f"{EDIT_REPLY} error={bool(done.get('is_error'))}"}], "end_turn"
-        if EDIT in text:
-            return [{"type": "tool_use", "id": f"pty-read-{self.edits + 1}", "name": "Read",
-                     "input": {"file_path": str(self.work / "a.txt")}}], "tool_use"
-        if TEXT in text:
-            return [{"type": "text", "text": TEXT_REPLY + " mock done"}], "end_turn"
         return [{"type": "text", "text": "ok"}], "end_turn"
 
     def handler(self):
@@ -77,12 +77,15 @@ class PtyMock:
                     if path != "/v1/messages":
                         return self.reply(404, b'{"error":{"type":"not_found_error","message":"mock"}}')
                     content, stop = state.respond(body)
+                    message_id = f"msg_pty_mock_{len(state.requests)}"
                 model = body.get("model", MODEL)
                 if body.get("stream"):
+                    stream = events(content, stop, model)
+                    stream[0]["message"]["id"] = message_id
                     self.reply(200, "".join("event: " + e["type"] + "\ndata: " + json.dumps(e) + "\n\n"
-                                            for e in events(content, stop, model)).encode(), "text/event-stream")
+                                            for e in stream).encode(), "text/event-stream")
                 else:
-                    self.reply(200, json.dumps({"id": "msg_pty_mock", "type": "message", "role": "assistant", "model": model,
+                    self.reply(200, json.dumps({"id": message_id, "type": "message", "role": "assistant", "model": model,
                                                 "content": content, "stop_reason": stop, "stop_sequence": None,
                                                 "usage": {"input_tokens": 10, "output_tokens": 3}}).encode())
         return Handler
@@ -146,7 +149,8 @@ def command(name):
 
 
 def exit_twice():
-    return [Step("ctrl-c-1", send="\x03", quiet=0.8, timeout=5),
+    # The second press must land within the original's 800ms window.
+    return [Step("ctrl-c-1", send="\x03", quiet=0.2, timeout=0.5),
             Step("ctrl-c-2", send="\x03", exit=True, timeout=10)]
 
 
