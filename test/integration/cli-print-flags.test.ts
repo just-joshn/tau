@@ -228,3 +228,60 @@ describe("results", () => {
     expect(provider.requests()).toBe(1);
   });
 });
+
+describe("paths outside the workspace", () => {
+  const use = (name: string, input: Record<string, unknown>) => ({
+    kind: "turn" as const,
+    content: [{ type: "tool_use" as const, id: "outside", name, input }],
+    stopReason: "tool_use" as const,
+  });
+  const outcome = (request: { body: unknown } | undefined) =>
+    z
+      .looseObject({
+        messages: z.array(z.looseObject({ content: z.unknown() })),
+      })
+      .parse(request?.body)
+      .messages.flatMap((message): unknown[] =>
+        Array.isArray(message.content) ? message.content : [],
+      )
+      .flatMap((block) => {
+        const parsed = z
+          .looseObject({
+            type: z.literal("tool_result"),
+            tool_use_id: z.literal("outside"),
+            is_error: z.boolean().optional(),
+          })
+          .safeParse(block);
+        return parsed.success ? [parsed.data] : [];
+      })
+      .at(0);
+
+  test("Read of a file outside the workspace is refused without its content", async () => {
+    const provider = await startMockProvider([
+      use("Read", { file_path: "../outside.txt" }),
+      said("done"),
+    ]);
+    const run = await runCli({
+      provider,
+      files: { "../outside.txt": "OUTSIDE_SECRET" },
+      args: ["-p", "read it", "--tools", "Read"],
+    });
+    expect(run.exitCode).toBe(0);
+    expect(outcome(provider.requests[1])?.is_error).toBe(true);
+    expect(sent(provider.requests[1])).not.toContain("OUTSIDE_SECRET");
+  });
+
+  test("Write to a file outside the workspace is refused and nothing is written", async () => {
+    const provider = await startMockProvider([
+      use("Write", { file_path: "../written.txt", content: "nope" }),
+      said("done"),
+    ]);
+    const run = await runCli({
+      provider,
+      args: ["-p", "write it", "--tools", "Write"],
+    });
+    expect(run.exitCode).toBe(0);
+    expect(outcome(provider.requests[1])?.is_error).toBe(true);
+    expect(existsSync(join(run.root, "written.txt"))).toBe(false);
+  });
+});
