@@ -49,7 +49,7 @@ def clone_file(source, destination):
     return str(destination)
 
 
-def profile(root: Path, port: int, tag: str, ancestor_metadata=True) -> str:
+def profile(root: Path, port: int, tag: str, ancestor_metadata=True, tty_paths=()) -> str:
     read_paths = ["(literal \"/\")"] + [f"(subpath {sb_string(p)})" for p in SYSTEM_READ]
     read_paths += [f"(literal {sb_string(p)})" for p in SYSTEM_PROGRAMS + ["/usr/share/icu/icudt78l.dat", "/dev/null", "/dev/random", "/dev/urandom"]]
     read_paths += [f"(subpath {sb_string(str(root))})"]
@@ -59,6 +59,8 @@ def profile(root: Path, port: int, tag: str, ancestor_metadata=True) -> str:
         "(allow file-read* file-map-executable " + " ".join(read_paths) + ")",
         '(allow file-read-metadata (literal "/private") (literal "/private/tmp"))' if ancestor_metadata else '',
         f"(allow file-write* (subpath {sb_string(str(root))}) (literal \"/dev/null\"))",
+        # Interactive runs only: the one PTY slave the harness opened, and /dev/tty, which names it.
+        "(allow file-read* file-write* file-ioctl " + " ".join(f"(literal {sb_string(p)})" for p in tty_paths) + ")" if tty_paths else "",
         "(allow process-exec " + " ".join(execute) + ")", "(allow process-fork)",
         "(allow signal (target self))", "(allow process-info* (target self))", "(allow sysctl-read)",
         f"(allow network-outbound (remote ip \"localhost:{port}\"))", "",
@@ -129,7 +131,7 @@ class EmptyMock(http.server.BaseHTTPRequestHandler):
 
 
 class Isolation:
-    def __init__(self, artifact_dir: Path, handler=EmptyMock, *, ancestor_metadata=True):
+    def __init__(self, artifact_dir: Path, handler=EmptyMock, *, ancestor_metadata=True, tty_paths=()):
         headroom = shutil.disk_usage("/private/tmp").free
         if headroom < 1024 * 1024 * 1024:
             raise RuntimeError("Differential context requires at least 1 GiB free disk space; no context created")
@@ -148,7 +150,7 @@ class Isolation:
         for name in ["work", "home", "tmp", "config", "cache", "data", "xdg-config", "bin", "tau-state"]:
             (self.root / name).mkdir(mode=0o700)
         self.sb_path = self.root / "profile.sb"
-        self.sb_path.write_text(profile(self.root, self.port, self.tag, ancestor_metadata))
+        self.sb_path.write_text(profile(self.root, self.port, self.tag, ancestor_metadata, tty_paths))
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True); self.thread.start()
 
     def sandbox(self, command: list[str], timeout=20) -> dict:
