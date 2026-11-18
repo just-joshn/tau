@@ -9,6 +9,16 @@ import type {
   NativeBashSecurityReason as Reason,
 } from "../../../src/native-bash-security/security-types.js";
 
+/** Settles a promise and returns its rejection, or "resolved" when it fulfils. */
+async function rejection(pending: unknown): Promise<unknown> {
+  try {
+    await Promise.resolve(pending);
+  } catch (error) {
+    return error;
+  }
+  return "resolved";
+}
+
 const El = (_tool: string, reason?: Reason) =>
   reason?.type === "other" ? reason.reason : "prompt";
 const sandboxReason =
@@ -101,21 +111,23 @@ test("pipeline construction refuses owners that do not share one semantic instan
 
 test("pipeline checks outside a policy scope fail instead of reading unscoped features", async () => {
   const f = owner();
-  await expect(
-    f.pipeline.native.AMr(
-      { command: "cat a | cat b" },
-      ["cat a", "cat b"],
-      ["cat a", "cat b"],
-      allow,
-      {
-        isNormalizedCdCommand: () => false,
-        isNormalizedGitCommand: () => false,
-      },
-      undefined,
-      undefined,
-      undefined,
+  expect(
+    await rejection(
+      f.pipeline.native.AMr(
+        { command: "cat a | cat b" },
+        ["cat a", "cat b"],
+        ["cat a", "cat b"],
+        allow,
+        {
+          isNormalizedCdCommand: () => false,
+          isNormalizedGitCommand: () => false,
+        },
+        undefined,
+        undefined,
+        undefined,
+      ),
     ),
-  ).rejects.toThrow("Missing native pipeline invariant");
+  ).toMatchObject({ message: "Missing native pipeline invariant" });
 });
 
 test("a bare redirect span that the path layer asks about keeps the ask and its suggestions", async () => {
