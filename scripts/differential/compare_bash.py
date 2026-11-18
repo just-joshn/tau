@@ -33,6 +33,7 @@ def normalizer(record):
     root = record["root"]
     def norm(text):
         text = text.replace(root, "ROOT")
+        text = re.sub(r"tau-differential-[a-z0-9_]+", "DISPOSABLE", text)
         text = re.sub(r"\bb[0-9a-z]{8}\b", "TASK", text)
         text = re.sub(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", "SESSION", text)
         return TOKENS.sub("", text)
