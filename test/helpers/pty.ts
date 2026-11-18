@@ -90,6 +90,7 @@ export function startPty(options: PtyOptions = {}): PtySession {
     TAU_HOME: dirs.state,
     TAU_MANAGED_ROOT: dirs.managed,
     TMPDIR: dirs.tmp,
+    CLAUDE_CODE_TMPDIR: dirs.tmp,
     TERM: "xterm-256color",
     ...(options.provider === undefined
       ? {}

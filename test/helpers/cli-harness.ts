@@ -73,6 +73,7 @@ export async function runCli(options: RunCliOptions = {}): Promise<CliRun> {
     TAU_HOME: dirs.state,
     TAU_MANAGED_ROOT: dirs.managed,
     TMPDIR: dirs.tmp,
+    CLAUDE_CODE_TMPDIR: dirs.tmp,
     CI: "true",
     ...(options.provider === undefined
       ? {}

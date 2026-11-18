@@ -56,7 +56,6 @@ import { createSessionAgentHost } from "./agent-session.js";
 import { wrapCatalogTools } from "./catalog-session.js";
 import { TOOL_SEARCH, toolSearchEnabled } from "./tool-search.js";
 import { formatBackgroundNotification } from "./background-notifications.js";
-import type { BackgroundAgentCompletion } from "./background-agent-runtime.js";
 import { createBackgroundTaskTools } from "./background-task-tools.js";
 import { createWebTools } from "./web-tools.js";
 import { webFetchModel } from "./web-fetch.js";
@@ -94,6 +93,8 @@ import {
   type SdkQuery,
 } from "./sdk-messages.js";
 import { SdkInputFatal, sdkUserTurns, type SdkUserTurn } from "./sdk-input.js";
+import { createBackgroundShells } from "./background-shells.js";
+import { createShellHost, interpretExit } from "./bash-tool.js";
 
 const TAU_VERSION = "0.1.0";
 
@@ -647,10 +648,7 @@ async function main(): Promise<void> {
   const agentHosts: Awaited<ReturnType<typeof createSessionAgentHost>>[] = [];
   const agentConcurrencySlots = new Set<string>();
   const retiredHookHosts: ReturnType<typeof createHookHost>[] = [];
-  const notifications: {
-    sessionId: string;
-    notification: Readonly<BackgroundAgentCompletion>;
-  }[] = [];
+  const notifications: { sessionId: string; text: string }[] = [];
   const notificationSessions = new Map<string, string>();
   const commitNotifications = () => {
     const ready = notifications
@@ -659,14 +657,27 @@ async function main(): Promise<void> {
     if (ready.length)
       session.messages.push({
         role: "user",
-        content: ready.map((entry) => ({
-          type: "text",
-          text: formatBackgroundNotification(entry.notification),
-        })),
+        content: ready.map((entry) => ({ type: "text", text: entry.text })),
       });
     return ready.length;
   };
+  const shells = createBackgroundShells({
+    interpret: interpretExit,
+    enqueueNotification: (text) =>
+      notifications.push({ sessionId: session.id, text }),
+    onDiagnostic: (message) => stderr.write(`Tasks: ${safe(message)}\n`),
+  });
+  const shellHost = createShellHost({
+    startCwd: cwd,
+    sessionId: () => session.id,
+    session: {
+      nonInteractive: !interactive,
+      singleShot: !interactive && !streamInput,
+    },
+    shells,
+  });
   const hasBackgroundWork = () =>
+    shells.hasRunning ||
     agentHosts.some(
       (host) =>
         host.background?.hasUnsettled ||
@@ -685,6 +696,7 @@ async function main(): Promise<void> {
         reject(signal.reason ?? new Error("Interrupted"));
       };
       signal.addEventListener("abort", abort, { once: true });
+      unsubscribers.push(shells.subscribe(finish));
       for (const host of agentHosts)
         if (host.background)
           unsubscribers.push(host.background.subscribe(finish));
@@ -697,12 +709,17 @@ async function main(): Promise<void> {
   ) =>
     createBackgroundTaskTools({
       get: (id) =>
+        shells.get(id) ??
         agentHosts
           .flatMap((host) => host.background?.list() ?? [])
           .find((task) => task.id === id),
-      list: () => agentHosts.flatMap((host) => host.background?.list() ?? []),
+      list: () => [
+        ...shells.list(),
+        ...agentHosts.flatMap((host) => host.background?.list() ?? []),
+      ],
       stop: async (id, request) => {
         request.signal.throwIfAborted();
+        if (shells.get(id)) return shells.stop(id);
         const owner = agentHosts.find((host) =>
           host.background?.list().some((task) => task.id === id),
         );
@@ -920,7 +937,7 @@ async function main(): Promise<void> {
           notifications.push({
             sessionId:
               notificationSessions.get(ownerSessionId) ?? ownerSessionId,
-            notification,
+            text: formatBackgroundNotification(notification),
           });
         },
       },
@@ -1312,9 +1329,10 @@ async function main(): Promise<void> {
           if (memory !== undefined) return memory;
           if (request.operation !== "Read") return undefined;
           const path = resolve(request.requestedPath);
-          return agentHosts.some((host) =>
-            host.background?.list().some((task) => task.outputFile === path),
-          )
+          return shells.list().some((task) => task.outputFile === path) ||
+            agentHosts.some((host) =>
+              host.background?.list().some((task) => task.outputFile === path),
+            )
             ? path
             : undefined;
         },
@@ -1335,6 +1353,7 @@ async function main(): Promise<void> {
         readTokenCounter: (text, signal) =>
           provider.countFileTokens({ model: currentModel(), text, signal }),
         approve,
+        shell: shellHost,
       });
       const external = visibleMcp();
       const combined = external
@@ -1932,6 +1951,7 @@ async function main(): Promise<void> {
   } finally {
     terminal?.close();
     process.removeListener("SIGINT", interrupt);
+    await shells.close();
     await Promise.all(agentHosts.map((host) => host.close()));
     await Promise.all(retiredHookHosts.map((host) => host.close()));
     await hookHost?.close();

@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import { constants } from "node:fs";
 import { lstat, mkdir, open, opendir, realpath, stat } from "node:fs/promises";
 import path from "node:path";
@@ -51,6 +50,17 @@ import { parseNativePermissionRule } from "./native-permission-rules.js";
 import type { FilePermissionSessionResult } from "./file-permission-session.js";
 import type { BashPermissionSessionResult } from "./bash-permission-session.js";
 import { unparsedToolInput } from "./tool-input.js";
+import {
+  bashDescription,
+  bashInputSchema,
+  bashPromptFacts,
+} from "./bash-description.js";
+import { describedShell } from "./bash-shell.js";
+import {
+  createShellHost,
+  parseBashInput,
+  type ShellHost,
+} from "./bash-tool.js";
 import { decodeTextFile, encodeTextFile } from "./text-file.js";
 import {
   inheritedReadDeny,
@@ -92,10 +102,6 @@ const schemas = {
   }),
   Grep: grepInputSchema,
   NotebookEdit: notebookEditInputSchema,
-  Bash: z.object({
-    command: z.string().min(1),
-    timeout: z.number().int().min(1).max(120000).default(30000),
-  }),
 };
 function bounded(text: string): string {
   const bytes = Buffer.from(text);
@@ -180,92 +186,25 @@ function textPatch(
     },
   ];
 }
-function shell(
-  command: string,
-  cwd: string,
-  timeout: number,
-  signal: AbortSignal,
-): Promise<{
-  content: string;
-  stdout: string;
-  stderr: string;
-  is_error: boolean;
-}> {
-  signal.throwIfAborted();
-  return new Promise((resolve, reject) => {
-    const child = spawn("/bin/sh", ["-c", command], {
-      cwd,
-      detached: true,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    const chunks: Buffer[] = [];
-    const stdout: Buffer[] = [],
-      stderr: Buffer[] = [];
-    let size = 0;
-    let truncated = false;
-    let finished = false;
-    const collect = (stream: Buffer[]) => (chunk: Buffer) => {
-      if (size + chunk.length > MAX_BYTES) truncated = true;
-      const part = chunk.subarray(0, Math.max(0, MAX_BYTES - size));
-      if (part.length) {
-        chunks.push(part);
-        stream.push(part);
-      }
-      size += part.length;
-    };
-    child.stdout.on("data", collect(stdout));
-    child.stderr.on("data", collect(stderr));
-    const kill = () => {
-      if (child.pid) {
-        try {
-          process.kill(-child.pid, "SIGKILL");
-        } catch {
-          /* Already exited. */
-        }
-      }
-    };
-    const finish = (error?: Error, code?: number | null) => {
-      if (finished) return;
-      finished = true;
-      clearTimeout(timer);
-      signal.removeEventListener("abort", abort);
-      kill();
-      if (error) {
-        child.stdout.destroy();
-        child.stderr.destroy();
-        reject(error);
-      } else
-        resolve({
-          content:
-            Buffer.concat(chunks).toString() +
-            (truncated ? "\n[output truncated]" : "") +
-            `\n[exit ${code}]`,
-          stdout: Buffer.concat(stdout).toString(),
-          stderr: Buffer.concat(stderr).toString(),
-          is_error: code !== 0,
-        });
-    };
-    const abort = () => finish(new Error("Bash aborted"));
-    const timer = setTimeout(
-      () => finish(new Error("Bash timed out")),
-      timeout,
-    );
-    signal.addEventListener("abort", abort, { once: true });
-    child.on("error", (error) => finish(error));
-    child.on("exit", kill);
-    child.on("close", (code) => finish(undefined, code));
-    if (signal.aborted) abort();
-  });
-}
-
-export function toolDefinitions(names: readonly ToolName[]): ToolDefinition[] {
-  return names.map((name) => ({
-    name,
-    description:
-      name === "NotebookEdit"
-        ? NOTEBOOK_EDIT_DESCRIPTION
-        : name === "Bash"
-          ? "Run an unsandboxed shell command in the workspace."
+export function toolDefinitions(
+  names: readonly ToolName[],
+  bash?: ShellHost,
+): ToolDefinition[] {
+  return names.map((name) => {
+    if (name === "Bash") {
+      if (bash) return bash.definition();
+      const facts = bashPromptFacts(process.env, describedShell(process.env));
+      return {
+        name,
+        description: bashDescription(facts),
+        input_schema: bashInputSchema(facts),
+      };
+    }
+    return {
+      name,
+      description:
+        name === "NotebookEdit"
+          ? NOTEBOOK_EDIT_DESCRIPTION
           : name === "Grep"
             ? "Regex search using standalone rg. Defaults to files_with_matches; also content/count. Supports -i, -n and pagination. Searches bounded file prefixes; no multiline/context/glob/type filters."
             : name === "Read"
@@ -273,11 +212,12 @@ export function toolDefinitions(names: readonly ToolName[]): ToolDefinition[] {
               : name === "Write" || name === "Edit"
                 ? `${name} workspace files, preserving existing encoding and BOM. Existing files require a complete, untruncated Read first; reread after external changes.${name === "Edit" ? " Empty old_string creates a file or replaces whitespace-only content. Literal matching first, then curly-quote matching." : ""}`
                 : `${name} workspace files. Glob supports *, ** and ?.`,
-    input_schema: {
-      ...z.toJSONSchema(schemas[name], { io: "input" }),
-      type: "object",
-    },
-  }));
+      input_schema: {
+        ...z.toJSONSchema(schemas[name], { io: "input" }),
+        type: "object",
+      },
+    };
+  });
 }
 
 /** The local file call has passed input/hook/permission guards, but filesystem work may still fail. */
@@ -418,8 +358,11 @@ export function createTools(options: {
     signal: AbortSignal;
   }) => BashPermissionSessionResult | undefined;
   approve: (description: string) => Promise<boolean>;
+  /** The session's shell; a standalone executor gets its own. */
+  shell?: ShellHost;
 }): ToolExecutor {
   const readState = options.readState ?? new ReadState();
+  const shell = options.shell ?? createShellHost({ startCwd: options.cwd });
   let readContext: ReadToolContext | undefined;
   const readMaxTokens = options.fileReadMaxTokens ?? fileReadTokenLimit();
   if (!Number.isFinite(readMaxTokens) || readMaxTokens <= 0)
@@ -874,7 +817,10 @@ export function createTools(options: {
     value: unknown,
     signal: AbortSignal,
   ): Promise<unknown> {
-    const input = schemas[name].parse(value);
+    const input =
+      name === "Bash"
+        ? parseBashInput(value, shell.facts().backgroundDisabled)
+        : schemas[name].parse(value);
     if (name === "Write" || name === "Edit") {
       protectReadDeniedFile(name === "Write" ? "written" : "edited");
       const mutation =
@@ -937,7 +883,9 @@ export function createTools(options: {
     return normalized;
   }
   return {
-    definitions: toolDefinitions(toolNameSchema.options.filter(available)),
+    get definitions() {
+      return toolDefinitions(toolNameSchema.options.filter(available), shell);
+    },
     setReadContext(context) {
       readContext = context;
     },
@@ -1549,7 +1497,19 @@ export function createTools(options: {
             break;
           }
           case "Bash": {
-            const input = schemas.Bash.parse(effectiveCall.input);
+            const input = shell.parse(effectiveCall.input);
+            const refusal = shell.refusal(input);
+            if (refusal !== undefined)
+              return appendPreHookContext(
+                {
+                  type: "tool_result",
+                  tool_use_id: call.id,
+                  content: refusal,
+                  is_error: true,
+                },
+                pre,
+                effectiveCall,
+              );
             await permit(
               name,
               `Run Bash (shell is NOT sandboxed and can access files outside the workspace): ${input.command}`,
@@ -1559,15 +1519,12 @@ export function createTools(options: {
               effectiveCall.input,
             );
             inCall = true;
-            const result = await shell(
-              input.command,
-              await workspaceRoot(),
-              input.timeout,
+            const outcome = await shell.run(input, {
+              toolUseId: call.id,
               signal,
-            );
+            });
             inCall = false;
-            const lines = result.stdout.trimEnd().split("\n");
-            while (lines[0]?.trim() === "") lines.shift();
+            const result = shell.render(outcome);
             const mapped: ToolResult = {
               type: "tool_result",
               tool_use_id: call.id,
@@ -1576,17 +1533,27 @@ export function createTools(options: {
               ...(options.hooks
                 ? {
                     hookResponse: {
-                      stdout: lines.join("\n"),
-                      stderr: result.stderr,
+                      stdout:
+                        outcome.kind === "completed" ||
+                        outcome.kind === "background"
+                          ? outcome.output
+                          : "",
+                      stderr:
+                        outcome.kind === "completed"
+                          ? (outcome.cwdNote ?? "")
+                          : "",
                       interrupted: false,
                       isImage: false,
+                      noOutputExpected: shell.noOutputExpected(input.command),
+                      ...(outcome.kind === "background"
+                        ? { backgroundTaskId: outcome.taskId }
+                        : {}),
                     },
                   }
                 : {}),
             };
-            // The original Bash call treats nonzero command exit as a thrown
-            // tool failure, although our legacy shell adapter returns an error
-            // result. Preserve that hook outcome distinction explicitly.
+            // A failed command is a thrown ShellError in the original, so
+            // failure hooks run instead of PostToolUse.
             if (result.is_error) {
               const failure = await options.hooks?.failure?.(
                 effectiveCall,
