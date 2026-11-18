@@ -6,13 +6,14 @@ from pathlib import Path
 import subprocess
 from isolation import REPO, TARGET_SHA256, verified_isolation
 from mock_api import MODEL, SCENARIOS, RECOVERY_SCENARIO, MockState
+from scenarios_catalog import CATALOG_SCENARIO, setup as setup_catalog
 
 PINNED_TARGET = Path("/Users/josh-desktop/.local/share/claude/versions/2.1.326")
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("scenario", choices=["version", "help", *SCENARIOS, RECOVERY_SCENARIO])
+    parser.add_argument("scenario", choices=["version", "help", *SCENARIOS, RECOVERY_SCENARIO, CATALOG_SCENARIO])
     parser.add_argument("--artifacts", type=Path, default=REPO / "artifacts/differential-pass")
     parser.add_argument("--ordinary", action="store_true", help="Exercise ordinary startup with empty disposable settings instead of --bare")
     parser.add_argument("--sse-framing", choices=["named", "data-only"], default="named")
@@ -35,6 +36,11 @@ def main():
             arguments = ["--print", "OWNED_TRANSPORT_RECOVERY_PROMPT", "--model", MODEL,
                          "--output-format", "json", "--no-session-persistence", "--dangerously-skip-permissions",
                          "--tools", "Read,Edit,Write"]
+        elif args.scenario == CATALOG_SCENARIO:
+            # Ordinary startup, full default catalog: discovery must go through ToolSearch.
+            state.work = isolation.root / "work"; setup_catalog(state.work)
+            arguments = ["--print", "TAU_DIFFERENTIAL_CATALOG", "--model", MODEL, "--output-format", "stream-json", "--verbose",
+                         "--no-session-persistence", "--dangerously-skip-permissions"]
         else:
             (isolation.root / "work" / "a.txt").write_text("alpha\n")
             arguments = ([] if args.ordinary else ["--bare"]) + ["--print", "TAU_DIFFERENTIAL_"+args.scenario.upper(), "--model", MODEL,
@@ -51,7 +57,7 @@ def main():
         result = isolation.sandbox(command, timeout=20)
         record = {"scenario": args.scenario, "sse_framing": args.sse_framing, "mode": "ordinary" if args.ordinary else "bare", "target_sha256": TARGET_SHA256, "original_executed": True,
                   "isolation": isolation.report, "arguments": arguments, "result": result, "requests": state.requests,
-                  "final_file": (isolation.root / "work" / "a.txt").read_text() if args.scenario not in ["version", "help"] else None}
+                  "final_file": (isolation.root / "work" / ("nb.ipynb" if args.scenario == CATALOG_SCENARIO else "a.txt")).read_text() if args.scenario not in ["version", "help"] else None}
         (artifact_dir / ("original-" + args.scenario + args.label + ".json")).write_text(json.dumps(record, indent=2) + "\n")
         (artifact_dir / ("original-" + args.scenario + args.label + ".stdout.txt")).write_text(result["stdout"])
         (artifact_dir / ("original-" + args.scenario + args.label + ".stderr.txt")).write_text(result["stderr"])

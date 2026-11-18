@@ -23,6 +23,13 @@ import { createGlobMatcher, MAX_GLOB_PATTERN } from "./glob.js";
 import { applyEdit, editInputFields } from "./edit.js";
 import { writeAtomic } from "./write.js";
 import { readInputSchema } from "./read.js";
+import {
+  applyNotebookEdit,
+  MAX_NOTEBOOK_BYTES,
+  NOTEBOOK_EDIT_DESCRIPTION,
+  notebookEditInputSchema,
+  renderNotebook,
+} from "./notebook-edit.js";
 import { ReadState } from "./read-state.js";
 import { prepareFileRestoration } from "./file-restoration.js";
 import {
@@ -83,6 +90,7 @@ const schemas = {
       .default("."),
   }),
   Grep: grepInputSchema,
+  NotebookEdit: notebookEditInputSchema,
   Bash: z.object({
     command: z.string().min(1),
     timeout: z.number().int().min(1).max(120000).default(30000),
@@ -253,15 +261,17 @@ export function toolDefinitions(names: readonly ToolName[]): ToolDefinition[] {
   return names.map((name) => ({
     name,
     description:
-      name === "Bash"
-        ? "Run an unsandboxed shell command in the workspace."
-        : name === "Grep"
-          ? "Regex search using standalone rg. Defaults to files_with_matches; also content/count. Supports -i, -n and pagination. Searches bounded file prefixes; no multiline/context/glob/type filters."
-          : name === "Read"
-            ? "Read UTF-8 or BOM-marked UTF-16LE regular text. Whole-file byte limit 262144; default token limit 25000, with partial pages on whole-read token overflow. Optional allow_large uses available context room shared by this reply's large reads. Numbered lines; offset defaults to 1 (0 labels the first line 0), optional positive limit scans that range. No media or PDF pages."
-            : name === "Write" || name === "Edit"
-              ? `${name} workspace files, preserving existing encoding and BOM. Existing files require a complete, untruncated Read first; reread after external changes.${name === "Edit" ? " Empty old_string creates a file or replaces whitespace-only content. Literal matching first, then curly-quote matching." : ""}`
-              : `${name} workspace files. Glob supports *, ** and ?.`,
+      name === "NotebookEdit"
+        ? NOTEBOOK_EDIT_DESCRIPTION
+        : name === "Bash"
+          ? "Run an unsandboxed shell command in the workspace."
+          : name === "Grep"
+            ? "Regex search using standalone rg. Defaults to files_with_matches; also content/count. Supports -i, -n and pagination. Searches bounded file prefixes; no multiline/context/glob/type filters."
+            : name === "Read"
+              ? "Read UTF-8 or BOM-marked UTF-16LE regular text. Whole-file byte limit 262144; default token limit 25000, with partial pages on whole-read token overflow. Optional allow_large uses available context room shared by this reply's large reads. Numbered lines; offset defaults to 1 (0 labels the first line 0), optional positive limit scans that range. No media or PDF pages."
+              : name === "Write" || name === "Edit"
+                ? `${name} workspace files, preserving existing encoding and BOM. Existing files require a complete, untruncated Read first; reread after external changes.${name === "Edit" ? " Empty old_string creates a file or replaces whitespace-only content. Literal matching first, then curly-quote matching." : ""}`
+                : `${name} workspace files. Glob supports *, ** and ?.`,
     input_schema: {
       ...z.toJSONSchema(schemas[name], { io: "input" }),
       type: "object",
@@ -620,12 +630,16 @@ export function createTools(options: {
     });
     let asks = wholeToolAsk !== undefined || hookPermission === "ask";
     const root = fileContext === undefined ? undefined : await workspaceRoot();
+    // Edit file rules govern every built-in file-editing tool, NotebookEdit included.
+    const fileOperation = name === "NotebookEdit" ? "Edit" : name;
     const fileRules =
       fileContext !== undefined &&
       root !== undefined &&
-      (name === "Read" || name === "Write" || name === "Edit")
+      (fileOperation === "Read" ||
+        fileOperation === "Write" ||
+        fileOperation === "Edit")
         ? options.filePermissionCandidates?.({
-            operation: name,
+            operation: fileOperation,
             requestedPath: path.resolve(root, fileContext.input),
             canonicalPath: fileContext.canonical,
             signal,
@@ -718,9 +732,11 @@ export function createTools(options: {
       !asks &&
       fileContext !== undefined &&
       root !== undefined &&
-      (name === "Read" || name === "Write" || name === "Edit") &&
+      (fileOperation === "Read" ||
+        fileOperation === "Write" ||
+        fileOperation === "Edit") &&
       (await options.memoryFileAllowance?.({
-        operation: name,
+        operation: fileOperation,
         requestedPath: path.resolve(root, fileContext.input),
         canonicalPath: fileContext.canonical,
         signal,
@@ -820,6 +836,36 @@ export function createTools(options: {
         `File is covered by a Read deny rule and cannot be ${operation}`,
       );
   }
+  /** NotebookEdit's validateInput order: extension, insert type, prior Read, existence, cell. */
+  async function notebookSnapshot(
+    file: string,
+    input: z.infer<typeof notebookEditInputSchema>,
+    signal: AbortSignal,
+  ): Promise<{ bytes: Buffer; text: string }> {
+    if (path.extname(file) !== ".ipynb")
+      throw new ToolInputRejected(
+        "File must be a Jupyter notebook (.ipynb file). For editing other file types, use the FileEdit tool.",
+      );
+    if (input.edit_mode === "insert" && !input.cell_type)
+      throw new ToolInputRejected(
+        "Cell type is required when using edit_mode=insert.",
+      );
+    if (!readState.has(file))
+      throw new ToolInputRejected(
+        "File has not been read yet. Read it first before writing to it.",
+      );
+    await refuseSymlink(file);
+    const bytes = await readFileSnapshot(file, signal, {
+      maximum: MAX_NOTEBOOK_BYTES,
+      requireRead: () => readState.requireComplete(file),
+    });
+    if (bytes === null)
+      throw new ToolInputRejected("Notebook file does not exist.");
+    readState.assertCurrent(file, bytes);
+    const text = decodeTextFile(bytes).text.replace(/^\uFEFF/, "");
+    applyNotebookEdit(text, input, file);
+    return { bytes, text };
+  }
   async function validateInput(
     name: ToolName,
     value: unknown,
@@ -847,6 +893,11 @@ export function createTools(options: {
           );
         applyEdit(previous === null ? "" : decodeTextFile(previous).text, edit);
       }
+    } else if (name === "NotebookEdit") {
+      protectReadDeniedFile("edited");
+      const edit = schemas.NotebookEdit.parse(input);
+      const file = await safePath(edit.notebook_path, name, signal);
+      await notebookSnapshot(file, edit, signal);
     } else if (name === "Read")
       await safePath(schemas.Read.parse(input).file_path, name, signal);
     else if (name === "Glob")
@@ -863,6 +914,14 @@ export function createTools(options: {
       if (name === "Bash" && !Object.hasOwn(value, "timeout"))
         delete normalized.timeout;
     }
+    if (name === "NotebookEdit")
+      return {
+        ...normalized,
+        notebook_path: path.resolve(
+          await workspaceRoot(),
+          schemas.NotebookEdit.parse(input).notebook_path,
+        ),
+      };
     if (name === "Write" || name === "Edit" || name === "Read") {
       return {
         ...normalized,
@@ -1025,6 +1084,30 @@ export function createTools(options: {
             inCall = true;
             await options.onFileToolCall?.({ name, path: file, signal });
             signal.throwIfAborted();
+            if (path.extname(file) === ".ipynb") {
+              const info = await stat(file);
+              if (info.size > MAX_NOTEBOOK_BYTES)
+                throw new Error(
+                  `Notebook file exceeds the maximum size this tool can read (${MAX_NOTEBOOK_BYTES} bytes).`,
+                );
+              const bytes = await readFileSnapshot(file, signal);
+              if (bytes === null) throw new Error("File does not exist.");
+              const blocks = renderNotebook(
+                decodeTextFile(bytes).text.replace(/^\uFEFF/, ""),
+              );
+              readState.remember(file, bytes, info.mtimeMs);
+              inCall = false;
+              return await finish({
+                type: "tool_result",
+                tool_use_id: call.id,
+                content: blocks
+                  .flatMap((block) =>
+                    block.type === "text" ? [block.text] : [],
+                  )
+                  .join("\n"),
+                apiContent: blocks,
+              });
+            }
             const context = readContext,
               initial = input.allow_large
                 ? readAllowance(context, readMaxTokens, FILE_READ_BYTES)
@@ -1273,6 +1356,52 @@ export function createTools(options: {
                 replaceAll: input.replace_all,
               };
             content = "File edited";
+            break;
+          }
+          case "NotebookEdit": {
+            protectReadDeniedFile("edited");
+            const input = schemas.NotebookEdit.parse(effectiveCall.input);
+            const file = await safePath(input.notebook_path, name, signal);
+            await checkSensitiveReadPrecondition(file, input.notebook_path);
+            await permit(
+              name,
+              `NotebookEdit ${file}\n${bounded(`${input.edit_mode ?? "replace"} cell ${input.cell_id ?? "(start)"}:\n${input.new_source}`)}`,
+              signal,
+              { canonical: file, input: input.notebook_path },
+              pre?.permission,
+              effectiveCall.input,
+            );
+            inCall = true;
+            await options.onFileToolCall?.({
+              name: "Edit",
+              path: file,
+              signal,
+            });
+            signal.throwIfAborted();
+            const previous = await notebookSnapshot(file, input, signal);
+            const edit = applyNotebookEdit(previous.text, input, file);
+            const updated = encodeTextFile(
+              edit.updated,
+              decodeTextFile(previous.bytes),
+            );
+            if (updated.length > MAX_NOTEBOOK_BYTES)
+              throw new Error(
+                `Edit rejected: the updated notebook would exceed the maximum size this tool can read (${MAX_NOTEBOOK_BYTES} bytes). The file was left unchanged.`,
+              );
+            const mtimeMs = await writeAtomic(
+              file,
+              updated,
+              recheck(
+                input.notebook_path,
+                file,
+                previous.bytes,
+                signal,
+                "Edit",
+              ),
+            );
+            readState.remember(file, updated, mtimeMs);
+            if (options.hooks) hookResponse = edit.hookResponse;
+            content = edit.message;
             break;
           }
           case "Glob": {

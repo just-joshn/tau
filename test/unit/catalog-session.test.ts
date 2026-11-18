@@ -80,7 +80,9 @@ test("catalogs follow the retained user history, refresh after compaction and su
     contextBoundary: { beforeTokens: 100, afterTokens: 20, reason: "manual" },
   });
   await wrapper.beforeModelRequest(signal);
-  assert.equal(at(messages, -1).catalogAttachments?.[0]?.isInitial, true);
+  const [first] = at(messages, -1).catalogAttachments ?? [];
+  assert.ok(first && first.type !== "deferred_tools_delta");
+  assert.equal(first.isInitial, true);
   assert.deepEqual(
     base.definitions.map((tool) => tool.description),
     ["static", "static"],

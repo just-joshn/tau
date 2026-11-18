@@ -14,6 +14,7 @@ export const toolNameSchema = z.enum([
   "Glob",
   "Grep",
   "Bash",
+  "NotebookEdit",
 ]);
 export type ToolName = z.infer<typeof toolNameSchema>;
 export const taskPolicyNameSchema = z.enum([
@@ -52,6 +53,7 @@ const agentRule = (rule: string): [string, string, string?] | null => {
 export const selectableToolNameSchema = z.union([
   toolNameSchema,
   z.literal("Skill"),
+  z.literal("ToolSearch"),
   taskPolicyNameSchema,
   planPolicyNameSchema,
   agentPolicyNameSchema,
@@ -80,6 +82,7 @@ function builtinCallRule(rule: string): boolean {
 }
 export const toolRuleNameSchema = z.union([
   toolNameSchema,
+  z.literal("ToolSearch"),
   taskPolicyNameSchema,
   planPolicyNameSchema,
   backgroundTaskPolicyNameSchema,

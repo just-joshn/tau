@@ -42,6 +42,8 @@ export const apiToolContentSchema = z.discriminatedUnion("type", [
     source: documentSourceSchema,
     title: z.string().optional(),
   }),
+  /** A ToolSearch match; the API expands it to the named defer_loading tool. */
+  z.object({ type: z.literal("tool_reference"), tool_name: z.string() }),
 ]);
 export type ApiToolContent = z.infer<typeof apiToolContentSchema>;
 export const instructionRecordSchema = z.object({
@@ -140,6 +142,11 @@ export const catalogAttachmentSchema = z.discriminatedUnion("type", [
     addsToEarlier: z.literal(true).optional(),
     callsSkillToolDirectly: z.literal(true).optional(),
   }),
+  z.object({
+    type: z.literal("deferred_tools_delta"),
+    addedNames: z.array(z.string()),
+    removedNames: z.array(z.string()),
+  }),
 ]);
 export const messageSchema = z.object({
   role: z.enum(["user", "assistant"]),
@@ -213,6 +220,8 @@ export interface ToolDefinition {
     required?: string[];
     [key: string]: unknown;
   };
+  /** Set only on a discovered deferred tool; the API loads it through a tool_reference. */
+  defer_loading?: true;
 }
 export interface Usage {
   input_tokens: number;

@@ -78,15 +78,23 @@
         "tools": [
           "Agent",
           "Bash",
+          "DeferredToolPlaceholder",
           "Edit",
           "Glob",
           "Grep",
           "Read",
-          "TaskStop",
+          "ToolSearch",
           "Write"
         ],
         "messages": [
-          { "role": "user", "blocks": [{ "kind": "text" }, { "kind": "text" }] }
+          {
+            "role": "user",
+            "blocks": [
+              { "kind": "text" },
+              { "kind": "text" },
+              { "kind": "text" }
+            ]
+          }
         ]
       },
       {
@@ -94,17 +102,22 @@
         "tools": [
           "Agent",
           "Bash",
+          "DeferredToolPlaceholder",
           "Edit",
           "Glob",
           "Grep",
           "Read",
-          "TaskStop",
+          "ToolSearch",
           "Write"
         ],
         "messages": [
           {
             "role": "user",
-            "blocks": [{ "kind": "text" }, { "kind": "text" }]
+            "blocks": [
+              { "kind": "text" },
+              { "kind": "text" },
+              { "kind": "text" }
+            ]
           },
           {
             "role": "assistant",
@@ -129,17 +142,22 @@
         "tools": [
           "Agent",
           "Bash",
+          "DeferredToolPlaceholder",
           "Edit",
           "Glob",
           "Grep",
           "Read",
-          "TaskStop",
+          "ToolSearch",
           "Write"
         ],
         "messages": [
           {
             "role": "user",
-            "blocks": [{ "kind": "text" }, { "kind": "text" }]
+            "blocks": [
+              { "kind": "text" },
+              { "kind": "text" },
+              { "kind": "text" }
+            ]
           },
           {
             "role": "assistant",
@@ -180,17 +198,22 @@
         "tools": [
           "Agent",
           "Bash",
+          "DeferredToolPlaceholder",
           "Edit",
           "Glob",
           "Grep",
           "Read",
-          "TaskStop",
+          "ToolSearch",
           "Write"
         ],
         "messages": [
           {
             "role": "user",
-            "blocks": [{ "kind": "text" }, { "kind": "text" }]
+            "blocks": [
+              { "kind": "text" },
+              { "kind": "text" },
+              { "kind": "text" }
+            ]
           },
           {
             "role": "assistant",
@@ -247,17 +270,22 @@
         "tools": [
           "Agent",
           "Bash",
+          "DeferredToolPlaceholder",
           "Edit",
           "Glob",
           "Grep",
           "Read",
-          "TaskStop",
+          "ToolSearch",
           "Write"
         ],
         "messages": [
           {
             "role": "user",
-            "blocks": [{ "kind": "text" }, { "kind": "text" }]
+            "blocks": [
+              { "kind": "text" },
+              { "kind": "text" },
+              { "kind": "text" }
+            ]
           },
           {
             "role": "assistant",

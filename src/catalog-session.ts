@@ -1,5 +1,6 @@
 import {
   buildCatalogAttachments,
+  type CatalogHistoryAttachment,
   type CatalogProjectionOptions,
 } from "./catalog-projection.js";
 import { activeContextStart } from "./context-usage.js";
@@ -8,10 +9,15 @@ import {
   captureNativeCatalogAttachments,
   type NativeAttachmentCaptureHost,
 } from "./native-attachment-capture.js";
+import {
+  deferredToolsDelta,
+  wrapToolSearch,
+  type ToolSearchOptions,
+} from "./tool-search.js";
 
 /** Catalog records share the lifetime of the corresponding retained user message. */
 export function wrapCatalogTools(
-  base: ToolExecutor,
+  inner: ToolExecutor,
   messages: Message[],
   options: {
     agents():
@@ -22,8 +28,13 @@ export function wrapCatalogTools(
       | Promise<CatalogProjectionOptions["skills"]>;
     skillBudget?: CatalogProjectionOptions["skillBudget"];
     nativeCapture?: NativeAttachmentCaptureHost;
+    toolSearch?: ToolSearchOptions;
   },
 ): ToolExecutor {
+  const search = options.toolSearch
+    ? wrapToolSearch(inner, messages, options.toolSearch)
+    : undefined;
+  const base = search ?? inner;
   return {
     get definitions() {
       return base.definitions;
@@ -41,25 +52,37 @@ export function wrapCatalogTools(
         options.skills(),
       ]);
       signal.throwIfAborted();
+      const history = messages
+        .slice(activeContextStart(messages))
+        .flatMap((message) => message.catalogAttachments ?? []);
+      const deferred =
+        search &&
+        deferredToolsDelta(
+          search.deferredNames(),
+          history.flatMap((record) =>
+            record.type === "deferred_tools_delta" ? [record] : [],
+          ),
+        );
       const projection = buildCatalogAttachments({
         agents,
         skills,
-        history: messages
-          .slice(activeContextStart(messages))
-          .flatMap((message) => message.catalogAttachments ?? [])
-          .map((record) =>
-            record.type === "agent_listing_delta"
-              ? record
-              : {
-                  type: record.type,
-                  names: record.names,
-                  digests: record.digests,
-                  isInitial: record.isInitial,
-                  ...(record.addsToEarlier === undefined
-                    ? {}
-                    : { addsToEarlier: record.addsToEarlier }),
-                },
-          ),
+        history: history.flatMap((record): CatalogHistoryAttachment[] =>
+          record.type === "deferred_tools_delta"
+            ? []
+            : record.type === "agent_listing_delta"
+              ? [record]
+              : [
+                  {
+                    type: record.type,
+                    names: record.names,
+                    digests: record.digests,
+                    isInitial: record.isInitial,
+                    ...(record.addsToEarlier === undefined
+                      ? {}
+                      : { addsToEarlier: record.addsToEarlier }),
+                  },
+                ],
+        ),
         hasAgentTool: base.definitions.some(
           (tool) => tool.name === "Agent" || tool.name === "Task",
         ),
@@ -68,7 +91,7 @@ export function wrapCatalogTools(
           ? {}
           : { skillBudget: options.skillBudget }),
       });
-      if (!projection.blocks.length) return;
+      if (!projection.blocks.length && !deferred) return;
       let row = messages.at(-1);
       const createdMessage = row?.role !== "user";
       if (row?.role !== "user") {
@@ -87,9 +110,13 @@ export function wrapCatalogTools(
       signal.throwIfAborted();
       if (createdMessage) messages.push(row);
       row.content.push(
+        ...(deferred ? [{ type: "text" as const, text: deferred.text }] : []),
         ...projection.blocks.map(({ type, text }) => ({ type, text })),
       );
-      (row.catalogAttachments ??= []).push(...projection.attachments);
+      (row.catalogAttachments ??= []).push(
+        ...(deferred ? [deferred.attachment] : []),
+        ...projection.attachments,
+      );
     },
   };
 }

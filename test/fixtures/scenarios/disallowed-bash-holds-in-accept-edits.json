@@ -38,18 +38,47 @@
     "requestSequence": [
       {
         "path": "/v1/messages?beta=true",
-        "tools": ["Agent", "Edit", "Glob", "Grep", "Read", "TaskStop", "Write"],
+        "tools": [
+          "Agent",
+          "DeferredToolPlaceholder",
+          "Edit",
+          "Glob",
+          "Grep",
+          "Read",
+          "ToolSearch",
+          "Write"
+        ],
         "messages": [
-          { "role": "user", "blocks": [{ "kind": "text" }, { "kind": "text" }] }
+          {
+            "role": "user",
+            "blocks": [
+              { "kind": "text" },
+              { "kind": "text" },
+              { "kind": "text" }
+            ]
+          }
         ]
       },
       {
         "path": "/v1/messages?beta=true",
-        "tools": ["Agent", "Edit", "Glob", "Grep", "Read", "TaskStop", "Write"],
+        "tools": [
+          "Agent",
+          "DeferredToolPlaceholder",
+          "Edit",
+          "Glob",
+          "Grep",
+          "Read",
+          "ToolSearch",
+          "Write"
+        ],
         "messages": [
           {
             "role": "user",
-            "blocks": [{ "kind": "text" }, { "kind": "text" }]
+            "blocks": [
+              { "kind": "text" },
+              { "kind": "text" },
+              { "kind": "text" }
+            ]
           },
           {
             "role": "assistant",

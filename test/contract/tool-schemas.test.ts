@@ -54,9 +54,10 @@ const goldenRaw = z
   })
   .parse(goldenText).tools;
 
-// Every built-in tool appears with the todo tools enabled and one skill present.
+// Every built-in tool appears with the todo tools enabled, one skill present,
+// and tool search off so deferred tools are sent eagerly with full schemas.
 const ALL_TOOLS = {
-  env: { CLAUDE_CODE_ENABLE_TODO_TOOLS: "1" },
+  env: { CLAUDE_CODE_ENABLE_TODO_TOOLS: "1", ENABLE_TOOL_SEARCH: "false" },
   files: {
     "present.txt": "present\n",
     ".claude/skills/demo/SKILL.md":
@@ -139,6 +140,10 @@ const BASE: Record<string, (tag: string) => Record<string, unknown>> = {
   Glob: () => ({ pattern: "*.txt" }),
   Grep: () => ({ pattern: "present" }),
   Bash: (tag) => ({ command: `touch bad-${tag}.txt` }),
+  NotebookEdit: (tag) => ({
+    notebook_path: `bad-${tag}.ipynb`,
+    new_source: "x",
+  }),
   TaskCreate: () => ({ subject: "bad-task", description: "bad-task" }),
   TaskGet: () => ({ taskId: "1" }),
   TaskUpdate: () => ({ taskId: "1", subject: "bad-task" }),

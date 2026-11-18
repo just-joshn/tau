@@ -134,7 +134,7 @@ test("policy availability and denial override every permission mode", async () =
     });
     assert.deepEqual(
       executor.definitions.map((tool) => tool.name),
-      ["Edit", "Glob", "Grep"],
+      ["Edit", "Glob", "Grep", "NotebookEdit"],
     );
     for (const name of ["Write", "Bash", "Read"]) {
       assert.match(

@@ -49,6 +49,7 @@ import {
 import { createSessionTaskHost } from "./task-session.js";
 import { createSessionAgentHost } from "./agent-session.js";
 import { wrapCatalogTools } from "./catalog-session.js";
+import { TOOL_SEARCH, toolSearchEnabled } from "./tool-search.js";
 import { formatBackgroundNotification } from "./background-notifications.js";
 import type { BackgroundAgentCompletion } from "./background-agent-runtime.js";
 import { createBackgroundTaskTools } from "./background-task-tools.js";
@@ -1353,6 +1354,18 @@ async function main(): Promise<void> {
       skills: () => skillHost?.runtime.catalog("model") ?? [],
       skillBudget: {
         contextTokens: provider.contextWindowTokens(currentModel()),
+      },
+      toolSearch: {
+        enabled: () => {
+          const current = skillHost?.policy() ?? policy;
+          return (
+            toolSearchEnabled(process.env, queryModelForTools) &&
+            (current.tools === undefined ||
+              current.tools.includes(TOOL_SEARCH)) &&
+            matchingToolRule(current, "deny", TOOL_SEARCH) === undefined
+          );
+        },
+        alwaysLoad: (name) => mcp?.lookup(name)?.alwaysLoad === true,
       },
     });
   };

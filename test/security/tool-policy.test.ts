@@ -264,7 +264,7 @@ test("MCP primitive argument deny/ask matching is trimmed, '*' only, and scoped 
   assert.equal(matchesPermissionArgument("a**c", "abc"), true);
 });
 
-test("Skill selection preserves six builtin names while permission lists retain scoped rules and argument spaces", () => {
+test("Skill selection preserves seven builtin names while permission lists retain scoped rules and argument spaces", () => {
   assert.deepEqual(toolNameSchema.options, [
     "Read",
     "Write",
@@ -272,6 +272,7 @@ test("Skill selection preserves six builtin names while permission lists retain 
     "Glob",
     "Grep",
     "Bash",
+    "NotebookEdit",
   ]);
   assert.equal(toolNameSchema.safeParse("Skill").success, false);
   assert.equal(selectableToolNameSchema.safeParse("Skill").success, true);
