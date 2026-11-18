@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { posix } from "node:path";
+import { posix, win32 } from "node:path";
 import { createNativeBashCommandPreparation } from "../../../src/native-bash-command-preparation.js";
 import {
   createNativeBashSecurityPathControl,
@@ -659,4 +659,202 @@ test("network devices, process substitution and removals rank by bypass immunity
       command,
       "ask:dangerousRemoval",
     ]);
+});
+
+function removalRule(d: Decision) {
+  if (d.behavior === "passthrough") return "none";
+  const reason = d.decisionReason;
+  if (reason?.type !== "safetyCheck" || reason.removalRule === undefined)
+    throw new Error(`not a removal hold: ${d.message}`);
+  return reason.removalRule;
+}
+
+function remove(
+  f: ReturnType<typeof owner>,
+  args: string[],
+  cwd = "/work",
+  options: { cd?: boolean; command?: string; p?: Policy | undefined } = {},
+) {
+  const p = "p" in options ? options.p : policy();
+  return f.controller.withPolicyScope(policy(), cwd, () =>
+    f.controller.native.o2(
+      options.command ?? "rm",
+      args,
+      cwd,
+      p,
+      options.cd ?? false,
+    ),
+  ).result;
+}
+
+test("removal targets are classified by what the shell would remove", () => {
+  const links = new Map([
+    ["/work", "/real/work"],
+    ["/work/ln", "/etc"],
+  ]);
+  const f = owner(
+    {},
+    {
+      host: {
+        workingDirectories: (_p, s) => known(["/work", "/elsewhere/proj"], s),
+      },
+      filesystem: {
+        canonical: (path, s) =>
+          known(
+            {
+              resolvedPath: links.get(path) ?? path,
+              isCanonical: !/[*?[]/.test(path),
+              isSymlink: links.has(path),
+            },
+            s,
+          ),
+      },
+    },
+  );
+  const rows: [string[], string][] = [
+    [["-rf", "~"], "home"],
+    [["-rf", "/tmp"], "tmp"],
+    [["-rf", "/private/tmp"], "tmp"],
+    [["-rf", "/etc"], "other_critical_path"],
+    [["-rf", "/*"], "root"],
+    [["-rf", "/**"], "root"],
+    [["-rf", "--", "/"], "root"],
+    // /work is itself a top-level folder here.
+    [["-rf", "*"], "other_critical_path"],
+    [["-rf", "../*"], "unresolvable_target"],
+    [["-rf", "sub/../*"], "unresolvable_target"],
+    [["-rf", "/work/../*"], "unresolvable_target"],
+    [["-rf", "~user/*"], "unresolvable_target"],
+    [["-rf", "//server/share/*"], "unresolvable_target"],
+    [["-rf", "sub/*/x/*"], "multi_level_glob"],
+    [["-rf", "a*/*"], "multi_level_glob"],
+    [["-rf", "sub/*"], "none"],
+    [["-r", "a*/"], "none"],
+    // Removing a link removes the link; a glob under it expands into /etc.
+    [["-rf", "/work/ln"], "none"],
+    [["-rf", "/work/ln/*"], "other_critical_path"],
+    // The working directory is known by its real path too.
+    [["-rf", "/real/work"], "working_directory"],
+    // Additional working directories guard glob removals of their contents.
+    [["-rf", "/elsewhere/proj/*"], "working_directory"],
+    // A command substitution may expand to -r, so a mount is at risk.
+    [["__CMDSUB__", "/Volumes/x"], "mounted_drive_path"],
+    [["/Volumes/x"], "none"],
+  ];
+  for (const [args, rule] of rows)
+    expect([args, removalRule(remove(f, args))]).toEqual([args, rule]);
+  // rmdir -p climbs through every matched parent.
+  for (const flag of ["-p", "--parents"])
+    expect(
+      removalRule(remove(f, [flag, "a/*"], "/work", { command: "rmdir" })),
+    ).toBe("unresolvable_target");
+  // Without a policy only the evaluation directory is a working directory.
+  expect(
+    removalRule(
+      remove(f, ["-rf", "/elsewhere/proj/*"], "/work", { p: undefined }),
+    ),
+  ).toBe("none");
+});
+
+test("removal feature gates and the mounted-drive opt-out", () => {
+  const payloadOff = owner(
+    {},
+    {
+      host: {
+        feature: (_key, _default, s) =>
+          known({ value: false, source: "payload" }, s),
+      },
+    },
+  );
+  expect(removalRule(remove(payloadOff, ["-rf", "/Volumes/x"]))).toBe("none");
+  expect(removalRule(remove(payloadOff, ["-rf", "$X/etc"]))).toBe("none");
+  // Without the gate a backslash-only target is still a critical path.
+  expect(removalRule(remove(payloadOff, ["-rf", "\\\\"]))).toBe(
+    "other_critical_path",
+  );
+  const fromDefault = owner(
+    {},
+    {
+      host: {
+        feature: (_key, _default, s) =>
+          known({ value: false, source: "default" }, s),
+      },
+    },
+  );
+  expect(removalRule(remove(fromDefault, ["-rf", "/Volumes/x"]))).toBe(
+    "mounted_drive_path",
+  );
+  const optedOut = owner(
+    {},
+    { host: { mountedDriveRmPromptDisabled: (s) => known(true, s) } },
+  );
+  expect(removalRule(remove(optedOut, ["-rf", "/Volumes/x"]))).toBe("none");
+});
+
+test("Windows removal targets cover drive roots, Git Bash spellings and home", () => {
+  const f = owner(
+    {},
+    {
+      host: {
+        platform: "windows",
+        home: (s) => known("C:\\Users\\me", s),
+        workingDirectories: (_p, s) => known(["C:\\work"], s),
+        networkHostShape: (_path, s) => known(undefined, s),
+        windowsPathAliases: (home, path, s) => {
+          const got = path.split("/");
+          return known(
+            [
+              home
+                .split("/")
+                .filter(
+                  (segment, i) =>
+                    segment.toLowerCase() !== (got[i] ?? "").toLowerCase(),
+                ),
+            ],
+            s,
+          );
+        },
+        pathPrimitive: (primitive, path, s) =>
+          known(
+            primitive === "Y4e"
+              ? path.replace(
+                  /^\/mnt\/([a-z])\//i,
+                  (_match, drive: string) => `${drive.toUpperCase()}:\\`,
+                )
+              : primitive === "o7n"
+                ? win32.normalize(path)
+                : primitive === "Do"
+                  ? path.toLowerCase()
+                  : path,
+            s,
+          ),
+      },
+    },
+  );
+  const rows: [string, string][] = [
+    ["C:\\", "other_critical_path"],
+    ["C:\\work", "other_critical_path"],
+    ["/c/", "other_critical_path"],
+    ["/c/Windows", "other_critical_path"],
+    ["/cygdrive/d", "other_critical_path"],
+    ["/mnt/c/", "other_critical_path"],
+    ["C:\\Users\\me", "home"],
+    // Still critical; only the label compares the home spelling exactly.
+    ["c:\\users\\ME", "other_critical_path"],
+    // Git Bash may place these differently from this check.
+    ["C:foo", "windows_unplaceable_path"],
+    ["C:\\work\\a\\..\\b", "windows_unplaceable_path"],
+    // A critical folder outranks an unplaceable spelling.
+    ["/a/../b", "other_critical_path"],
+    ["\\\\?\\C:\\x", "other_critical_path"],
+    ["/proc/cygdrive/c/x/y", "none"],
+    ["//server/x/../y", "none"],
+    ["sub\\*", "none"],
+    ["x", "none"],
+  ];
+  for (const [target, rule] of rows)
+    expect([
+      target,
+      removalRule(remove(f, ["-rf", target], "C:\\work")),
+    ]).toEqual([target, rule]);
 });
