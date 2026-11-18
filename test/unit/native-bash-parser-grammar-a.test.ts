@@ -246,3 +246,9 @@ test("every prefix and generated token soup parses without throwing, with exact 
   // Refusals are rare: nearly every generated input yields a tree to check.
   assert.ok(refused * 20 < inputs.length, `${refused} of ${inputs.length}`);
 });
+
+test("a parser built without options reads the real clock and parses", () => {
+  const root = createNativeBashParser().parse("echo hi");
+  assert.equal(root?.type, "program");
+  assert.equal(root?.children[0]?.type, "command");
+});
