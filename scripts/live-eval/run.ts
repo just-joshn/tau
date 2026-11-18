@@ -1,9 +1,3 @@
-// Live evaluation runner (LIVE-EVALS.md). Runs the real tau CLI once per case
-// and trial in a disposable workspace against the provider in the environment,
-// enforces per-case and total spend caps, and writes one §3 result per run plus
-// summary.json. Exit codes: 0 all measured, 1 executed policy violation,
-// 2 unavailable (no ANTHROPIC_API_KEY), 3 incomplete evidence.
-//
 //   bun scripts/live-eval/run.ts [--subset NAME]... [--case ID]... [--trials N]
 //     [--model ID] [--max-total-usd N] [--max-case-usd N] [--max-turns N]
 //     [--cases DIR] [--out DIR]
@@ -61,7 +55,6 @@ function git(args: string[]): string {
   }
 }
 
-/** Runs the CLI, killing it when the streamed spend passes capUsd or the deadline passes. */
 async function spawnCli(
   args: string[],
   env: Record<string, string>,

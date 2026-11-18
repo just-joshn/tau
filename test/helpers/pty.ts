@@ -126,9 +126,7 @@ export function startPty(options: PtyOptions = {}): PtySession {
   const killGroup = () => {
     try {
       process.kill(-child.pid, "SIGKILL");
-    } catch {
-      // Already gone.
-    }
+    } catch {}
   };
   let timedOut = false;
   const deadline = setTimeout(() => {
@@ -192,7 +190,6 @@ export function startPty(options: PtyOptions = {}): PtySession {
   };
 }
 
-/** Offset just past the first match, or undefined. */
 function locate(text: string, pattern: string | RegExp): number | undefined {
   if (typeof pattern === "string") {
     const index = text.indexOf(pattern);
@@ -206,11 +203,6 @@ function plain(raw: string): string {
   return Bun.stripANSI(raw).replace(/\r\n/g, "\n").replace(/\r/g, "");
 }
 
-/**
- * Replays output onto a grid, honouring the controls readline and tau emit:
- * CR, LF, cursor up/down/forward/back/column (A B C D G) and erase to end of
- * screen or line (J K). Other escape sequences are dropped.
- */
 function render(raw: string): string {
   const rows: string[][] = [[]];
   let row = 0;

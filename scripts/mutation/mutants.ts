@@ -1,5 +1,3 @@
-// Mutant enumeration and splicing for scripts/mutation/run.ts. Each mutant
-// replaces one source range, so the rest of the file stays byte-identical.
 import { parse } from "@babel/parser";
 import type { Expression, Node, ReturnStatement } from "@babel/types";
 
@@ -35,7 +33,6 @@ const FLIPS: Readonly<Record<string, [Operator, string]>> = {
   "||": ["logical", "&&"],
 };
 
-// TypeScript nodes that still run. Every other TS* node is type-only.
 const RUNTIME_TS = new Set([
   "TSAsExpression",
   "TSSatisfiesExpression",
@@ -87,7 +84,6 @@ export function enumerateMutants(source: string): Mutant[] {
       column: start - (lineStarts[line - 1] ?? 0) + 1,
     });
   };
-  // A negation that another operator already produces is a duplicate.
   const negate = (operator: Operator, node: Expression) => {
     if (node.type === "UnaryExpression" && node.operator === "!") return;
     if (
@@ -171,13 +167,11 @@ export function applyMutant(source: string, mutant: Mutant): string {
   );
 }
 
-/** `line:col operator original → mutated`, whitespace collapsed. */
 export function describeMutant(mutant: Mutant): string {
   const flat = (text: string) => text.replace(/\s+/g, " ");
   return `${mutant.line}:${mutant.column} ${mutant.operator} ${flat(mutant.original)} → ${flat(mutant.replacement)}`;
 }
 
-/** Visits runtime nodes depth-first. A visitor returning false skips children. */
 function walk(node: Node, visit: (node: Node) => boolean | void): void {
   if (node.type.startsWith("TS") && !RUNTIME_TS.has(node.type)) return;
   if (visit(node) === false) return;

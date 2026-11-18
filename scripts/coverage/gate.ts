@@ -1,5 +1,3 @@
-// The decisions scripts/coverage/run.ts makes about its inputs, apart from
-// the script so tests can drive them without spawning the suite.
 import type { CoverageMap, CoverageMapData } from "istanbul-lib-coverage";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -8,13 +6,11 @@ import { parseArgs } from "node:util";
 export interface RunArgs {
   serial: boolean;
   mergePath: string | undefined;
-  /** --focus values as given, resolved by resolveFocus. */
   focus: string[];
   testArgs: string[];
 }
 
 export function parseRunArgs(argv: readonly string[]): RunArgs {
-  // Unknown options pass through, so tokens rather than values drive this.
   const { tokens } = parseArgs({
     args: [...argv],
     options: {
@@ -51,10 +47,6 @@ export function parseRunArgs(argv: readonly string[]): RunArgs {
   return args;
 }
 
-/**
- * Absolute paths of the --focus values, relative to `root`. Each must be one
- * of `sources`, since an unmatched focus would gate nothing and pass.
- */
 export function resolveFocus(
   root: string,
   focus: readonly string[],
@@ -95,7 +87,6 @@ export function mergeableCoverage(
   return { fresh, stale };
 }
 
-/** The istanbul coverage map saved at `path`. */
 export function readCoverage(path: string): CoverageMapData {
   const data: unknown = JSON.parse(readFileSync(path, "utf8"));
   if (!isCoverageMapData(data))

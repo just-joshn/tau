@@ -1,13 +1,6 @@
-// Bun preload that loads <repo>/src/**/*.ts instrumented with istanbul,
-// because Bun's own coverage has no branch data. scripts/coverage/run.ts
-// instruments every source into the cache before tests start and sets
-// TAU_COVERAGE_DIR. bunfig.toml lists this preload first, because bun test
-// runs bunfig preloads before BUN_OPTIONS ones and a preload that imports src
-// would otherwise load it uninstrumented; BUN_OPTIONS carries it into every
-// descendant bun process. Without TAU_COVERAGE_DIR it does nothing. Each
-// process only reads the cache, so a spawned CLI pays neither babel nor the
-// istanbul import, and writes its counters to
-// $TAU_COVERAGE_DIR/raw/<pid>-<n>.json.
+// Bun's own coverage has no branch data, hence istanbul. bunfig.toml lists
+// this preload first because bun test runs bunfig preloads before BUN_OPTIONS
+// ones, and a preload that imports src would otherwise load it uninstrumented.
 import { plugin } from "bun";
 import type { CoverageMapData } from "istanbul-lib-coverage";
 import { createHash, randomUUID } from "node:crypto";
@@ -35,7 +28,6 @@ export const INSTRUMENTER_OPTIONS = {
 };
 let version: string | undefined;
 
-/** Where the instrumented copy of `source`, read from `path`, is cached. */
 export function cachedInstrumentation(path: string, source: string): string {
   const key = createHash("sha256")
     .update((version ??= instrumenterVersion()))
@@ -86,8 +78,6 @@ function installLoader() {
   });
 }
 
-// Options and the versions of istanbul and the babel it parses and prints
-// with are part of the key, so upgrading any of them invalidates the cache.
 function instrumenterVersion(): string {
   const istanbul = Bun.resolveSync(
     "istanbul-lib-instrument/package.json",

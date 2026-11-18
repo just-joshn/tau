@@ -1,6 +1,3 @@
-// Surviving mutants whose behaviour cannot differ from the original, keyed by
-// the survivor line run.ts prints. Each value says why no test can tell them
-// apart. run.ts fails on an entry that no longer matches a mutant.
 export const EQUIVALENT_MUTANTS: Readonly<Record<string, string>> = {
   "src/tool-policy.ts:40:43 relational >= → >":
     "The escape scan walks left from the character before ')'. Index 0 is the A of Agent( or the T of Task(, never a backslash, so stopping above 0 counts the same escapes.",

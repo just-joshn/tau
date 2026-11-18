@@ -1,7 +1,5 @@
-/** Seed used when TAU_TEST_SEED is unset. Every property run prints it on failure. */
 export const DEFAULT_SEED = 20261117;
 
-/** TAU_TEST_SEED replays a failing run. It must be an unsigned 32-bit integer. */
 export function testSeed(): number {
   const raw = process.env.TAU_TEST_SEED;
   if (raw === undefined || raw === "") return DEFAULT_SEED;
@@ -11,7 +9,6 @@ export function testSeed(): number {
   return seed;
 }
 
-/** mulberry32: small, fast and identical on every runtime. */
 export class Rng {
   private state: number;
   constructor(seed: number) {

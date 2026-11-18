@@ -1,13 +1,5 @@
-// Mutation check for the permission guards (STRATEGY.md section 8).
-//
 //   bun scripts/mutation/run.ts [--target src/x.ts]... [--tests <path>]...
 //     [--concurrency N] [--min-score 0.8]
-//
-// Runs the tests once unmutated, then once per mutant with --bail and a
-// deadline. A failing run kills the mutant, a deadline kills it by timeout and
-// a passing run lets it survive. Writes mutation-results/report.json and exits
-// 1 when the score (killed and timed out over all mutants) is below
-// --min-score. Survivors listed in equivalent.ts carry their reason.
 import { spawn } from "node:child_process";
 import {
   existsSync,
@@ -91,7 +83,6 @@ if (baseline.code !== 0) {
   console.error(`unmutated tests failed (exit ${baseline.code})`);
   process.exit(1);
 }
-// Generous, since the mutant runs share the machine with each other.
 const deadline = Math.max(20_000, baseline.ms * 5);
 console.log(
   `baseline passed in ${(baseline.ms / 1000).toFixed(1)}s; ${mutants.length} mutants, concurrency ${concurrency}, deadline ${(deadline / 1000).toFixed(0)}s`,
@@ -222,8 +213,6 @@ async function runMutant(
   };
 }
 
-// The test run leads its own process group so a deadline also reaps the CLI
-// children its tests spawned.
 function runTests(
   env: Record<string, string>,
   ms: number,
@@ -243,9 +232,7 @@ function runTests(
   const killGroup = () => {
     try {
       if (child.pid !== undefined) process.kill(-child.pid, "SIGKILL");
-    } catch {
-      // The group already exited.
-    }
+    } catch {}
   };
   let timedOut = false;
   const timer = Number.isFinite(ms)

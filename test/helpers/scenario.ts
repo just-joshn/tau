@@ -1,10 +1,3 @@
-// Versioned adversarial scenario packages (reference strategy section 4)
-// replayed through the real tau CLI against the strict mock provider.
-//
-// A fixture is reviewed data. MANIFEST.sha256 pins every fixture's bytes, so a
-// changed fixture fails until a reviewer regenerates the manifest by hand:
-//
-//   cd test/fixtures/scenarios && shasum -a 256 *.json > MANIFEST.sha256
 import { onTestFinished } from "bun:test";
 import { createHash } from "node:crypto";
 import {
@@ -31,10 +24,7 @@ import { sentinel } from "./sentinels.js";
 export const SCENARIO_DIR = join(import.meta.dir, "../fixtures/scenarios");
 const MANIFEST = "MANIFEST.sha256";
 
-// ${SENTINEL:LABEL} becomes a fresh sentinel per replay. ${REPEAT:N:TEXT}
-// expands to TEXT repeated N times, for oversized inputs.
 const PLACEHOLDER = /\$\{(SENTINEL|REPEAT):([^}]*)\}/g;
-/** The sentinel ANTHROPIC_API_KEY of every replay. */
 const API_KEY = "API_KEY";
 
 const knownInvariants = new Set<string>(INVARIANTS.map(({ id }) => id));
@@ -42,7 +32,6 @@ const invariantId = z
   .string()
   .refine((id) => knownInvariants.has(id), "unknown invariant id");
 
-/** Relative to the workspace; may reach siblings of it but never leave the run root. */
 const runPath = z
   .string()
   .min(1)
@@ -72,7 +61,6 @@ const usage = z.strictObject({
   input_tokens: z.int().nonnegative(),
   output_tokens: z.int().nonnegative(),
 });
-// The mock's "hang" entry is left out: every scenario must finish on its own.
 const scriptedResponse = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("turn"),
@@ -100,7 +88,6 @@ const scriptedResponse = z.discriminatedUnion("kind", [
   }),
 ]) satisfies z.ZodType<ScriptedResponse>;
 
-/** A recorded request reduced to the decisions it carries. */
 const canonicalBlock = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("text") }),
   z.strictObject({
@@ -204,7 +191,6 @@ function fixtureFiles(dir: string): string[] {
     .toSorted();
 }
 
-/** Parses every fixture and checks the rules that span fields or fixtures. */
 export function loadCorpus(dir = SCENARIO_DIR): Scenario[] {
   const corpus = fixtureFiles(dir).map((name) => {
     const raw: unknown = JSON.parse(readFileSync(join(dir, name), "utf8"));
@@ -250,7 +236,6 @@ function sentinelLabels(scenario: Scenario): Set<string> {
   return labels;
 }
 
-/** Every disagreement between the fixtures on disk and MANIFEST.sha256. */
 export function manifestProblems(dir = SCENARIO_DIR): string[] {
   const actual = new Map(
     fixtureFiles(dir).map((name) => [
@@ -282,7 +267,6 @@ export function manifestProblems(dir = SCENARIO_DIR): string[] {
   return problems;
 }
 
-// The provider wire format, parsed loosely: only the decision-carrying fields.
 const wireBody = z.looseObject({
   tools: z.array(z.looseObject({ name: z.string() })).default([]),
   messages: z.array(
@@ -302,12 +286,6 @@ const wireToolResult = z.looseObject({
   content: z.unknown(),
 });
 
-/**
- * Keeps the offered tool names (sorted) and each message as its role and
- * block kinds. Text, tool input and tool output are dropped, which removes
- * every nondeterministic value (session ids, timestamps, durations, temp
- * paths) while decision order, denials and error flags stay.
- */
 export function canonicalize(request: RecordedRequest): CanonicalRequest {
   const body = wireBody.parse(request.body);
   return {
@@ -353,7 +331,6 @@ export interface Replay {
   live: Scenario;
 }
 
-/** Runs one scenario through the real CLI with fresh sentinels. */
 export async function replay(scenario: Scenario): Promise<Replay> {
   const sentinels = new Map([[API_KEY, sentinel(API_KEY)]]);
   const live = scenarioSchema.parse(
@@ -377,9 +354,6 @@ export async function replay(scenario: Scenario): Promise<Replay> {
   );
   const provider = await startMockProvider(live.modelScript);
 
-  // runCli creates its run root synchronously under os.tmpdir(), so a private
-  // TMPDIR for that synchronous prefix tells us the root; onSpawn then plants
-  // the symlinks before the child can have read anything.
   const holder = mkdtempSync(join(tmpdir(), "tau-scenario-"));
   onTestFinished(() => rmSync(holder, { recursive: true, force: true }));
   const previousTmp = process.env.TMPDIR;
@@ -427,7 +401,6 @@ const resultEnvelope = z.looseObject({
   num_turns: z.number(),
 });
 
-/** Every expectation the replay breaks; empty when the scenario holds. */
 export function evaluate(observed: Replay): OracleFailure[] {
   const { run, live } = observed;
   const { expected } = live;
@@ -444,7 +417,6 @@ export function evaluate(observed: Replay): OracleFailure[] {
     );
   if (observed.unexpected !== 0)
     fail("unexpectedRequests", `${observed.unexpected} past the script`);
-  // Proves the secret was live in the process, so its absence means something.
   const apiKey = observed.sentinels.get(API_KEY);
   for (const request of observed.requests)
     if (request.headers["x-api-key"] !== apiKey)
@@ -539,7 +511,6 @@ function toolResults(
   return results;
 }
 
-/** Stdout, stderr, request bodies and every file under the run root except unchanged seeds. */
 function sentinelLocations(observed: Replay, value: string): string[] {
   const { run, live } = observed;
   const found: string[] = [];
@@ -571,7 +542,6 @@ function sentinelLocations(observed: Replay, value: string): string[] {
   return found;
 }
 
-/** `<INV ids> <caseId>: <description>`, prefixed KNOWN-GAP for open findings. */
 export function scenarioTitle(scenario: Scenario): string {
   const title = `${scenario.invariants.join(" ")} ${scenario.caseId}: ${scenario.description}`;
   return scenario.knownGap === undefined ? title : `KNOWN-GAP ${title}`;

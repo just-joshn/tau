@@ -1,6 +1,3 @@
-// T7 CLI benchmark: cold `--version` start and a print-mode round trip against
-// a loopback Messages API mock. Scenarios alternate run by run so warmup and
-// drift favor neither. Usage:
 //   bun scripts/bench/cli.ts [--runs N] [--warmup N] [--out file]
 //                            [--baseline file --max-regression 0.10]
 import { execFileSync } from "node:child_process";
@@ -75,7 +72,6 @@ export function summarize(samples: readonly Sample[]): Stats {
   };
 }
 
-/** Scenarios present in both reports whose median grew by more than maxRegression. */
 export function regressions(
   baseline: Report,
   current: Report,
@@ -145,7 +141,6 @@ async function measure(
     child.exited,
   ]);
   const ms = performance.now() - started;
-  // Q4/Q7 of the benchmark checklist: a failed or empty run is an error, not a fast sample.
   if (code !== 0 || !scenario.check(stdout))
     throw new Error(
       `${scenario.name} run failed (exit ${code}): ${stderr.slice(0, 500)}`,

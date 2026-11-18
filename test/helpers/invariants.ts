@@ -1,6 +1,3 @@
-// The strategy's invariants (docs/STRATEGY.md section 3 of the reference
-// strategy) as they apply to tau, with the kind of evidence each one needs.
-
 type Digit = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9";
 export type InvariantId = `INV-${"0" | "1"}${Digit}`;
 export type Severity = "P0" | "P1";

@@ -1,5 +1,3 @@
-// Fails when CI artifacts contain a test sentinel or an Anthropic-key-shaped
-// string. Usage: bun scripts/scan-artifacts.ts <dir>... (missing dirs are skipped)
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -19,7 +17,6 @@ function mask(value: string): string {
   return `${value.slice(0, value.startsWith("sk-ant-") ? 7 : 13)}***`;
 }
 
-/** Replaces every secret-shaped substring with its masked form. */
 export function redactSecrets(text: string): string {
   return secretPatterns.reduce(
     (current, { pattern }) => current.replace(pattern, mask),

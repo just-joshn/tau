@@ -4,8 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resetProviderProcessLatches } from "../../src/provider.js";
 
-// CLI children inherit disposable configuration, never the developer's Claude
-// settings or instruction files. Individual fixtures can override these roots.
 const state = mkdtempSync(join(tmpdir(), "tau-test-environment-"));
 for (const name of ["user", "managed", "state"]) mkdirSync(join(state, name));
 process.env.CLAUDE_CONFIG_DIR = join(state, "user");
@@ -13,9 +11,7 @@ process.env.TAU_MANAGED_ROOT = join(state, "managed");
 process.env.TAU_HOME = join(state, "state");
 process.once("exit", () => rmSync(state, { recursive: true, force: true }));
 
-// Bun 1.4 ignores bunfig's restoreMocks/clearMocks/unstubEnvs, so every test
-// gets restored spies, cleared mock history and the environment it started with.
-// Every test also starts with a fresh process's provider beta refusal latches.
+// Bun 1.4 ignores bunfig's restoreMocks/clearMocks/unstubEnvs.
 let environment: Record<string, string | undefined> = {};
 beforeEach(() => {
   environment = { ...process.env };

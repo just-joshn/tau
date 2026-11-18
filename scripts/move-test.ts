@@ -1,13 +1,3 @@
-// Moves test files into a strategy tier and keeps every relative module
-// specifier that points at or out of them resolving to the same file.
-//
-//   bun scripts/move-test.ts <tier> <test-file>...
-//
-// Rewrites only specifiers in `from "..."`, `import "..."`, `import("...")`
-// and `new URL("...", import.meta.url)` whose target exists on disk, so string
-// test data such as "../escape" is never touched. Also rewrites `test/<file>`
-// references in bunfig.toml, root *.md and docs/**/*.md (except docs/archive).
-// Rerunning with the same arguments is a no-op.
 import {
   existsSync,
   mkdirSync,
@@ -97,8 +87,6 @@ function walk(dir: string, keep: (path: string) => boolean): string[] {
   });
 }
 
-// Compute every edit before touching disk so specifiers resolve against the
-// original layout.
 const modules = [testRoot, join(root, "scripts")].flatMap((dir) =>
   walk(dir, (path) => path.endsWith(".ts")),
 );
@@ -148,7 +136,6 @@ for (const { from, to, next } of [...edits, ...documents]) {
       : `moved ${relative(root, from)} -> ${relative(root, to)}`,
   );
 }
-// Longer specifiers and paths can cross the formatter's line width.
 const touched = [...edits, ...documents].map(({ to }) => to);
 if (touched.length > 0)
   Bun.spawnSync([process.execPath, "fmt", ...touched], { stdout: "ignore" });

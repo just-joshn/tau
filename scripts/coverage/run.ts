@@ -1,14 +1,8 @@
-// Runs the suite under istanbul instrumentation and gates branch coverage.
-//
 //   bun scripts/coverage/run.ts [--serial] [--focus <src path>]...
 //     [--merge <coverage-final.json>] [<bun test args>]
 //
 // Every other argument goes to bun test, so the package script takes
 // `bun run test:coverage -- --reporter=junit` (bun run drops the "--").
-// Writes coverage/coverage-final.json, lcov.info and coverage-summary.json.
-// --focus narrows printing and gating to the named files and lists each of
-// their uncovered branches. --merge unions a saved coverage-final.json first,
-// skipping with a warning each file whose source changed since it was saved.
 import {
   createCoverageMap,
   type CoverageMap,
@@ -35,9 +29,9 @@ import {
 } from "./gate.ts";
 import { cachedInstrumentation, INSTRUMENTER_OPTIONS } from "./instrument.ts";
 
-const BRANCH_FLOOR = 80; // total and every src file
-const LINE_FLOOR = 85; // total
-const FUNCTION_FLOOR = 85; // total
+const BRANCH_FLOOR = 80;
+const LINE_FLOOR = 85;
+const FUNCTION_FLOOR = 85;
 
 const root = resolve(import.meta.dir, "../..");
 const coverageDir = join(root, "coverage");
@@ -48,11 +42,9 @@ const {
   testArgs,
 } = parseRunArgs(process.argv.slice(2));
 
-// Read --merge before cleaning, since it may live under coverage/.
 const merged = mergePath === undefined ? undefined : readCoverage(mergePath);
 rmSync(coverageDir, { recursive: true, force: true });
 
-// Every source starts at zero, so one no test loaded still counts.
 const map = createCoverageMap({});
 for (const fileCoverage of instrumentSources())
   map.addFileCoverage(fileCoverage);
@@ -91,7 +83,6 @@ const context = createContext({ dir: coverageDir, coverageMap: map });
 for (const report of ["json", "lcovonly", "json-summary"] as const)
   create(report, { file: outputName(report) }).execute(context);
 
-// Printing and gating cover the focused files, or every file.
 if (focus.length > 0) map.filter((file) => focus.includes(file));
 create("text-summary").execute(
   createContext({ dir: coverageDir, coverageMap: map }),
@@ -99,7 +90,6 @@ create("text-summary").execute(
 const violations: string[] = [];
 const total = map.getCoverageSummary();
 checkFloor("total branches", total.branches, BRANCH_FLOOR);
-// The line and function floors are whole-suite totals, so a focused run skips them.
 if (focus.length === 0) {
   checkFloor("total lines", total.lines, LINE_FLOOR);
   checkFloor("total functions", total.functions, FUNCTION_FLOOR);
@@ -139,11 +129,9 @@ function outputName(report: "json" | "lcovonly" | "json-summary"): string {
   }
 }
 
-// Instruments every src file once, here, and fills the cache the preload
-// reads. Without this a cold cache makes each spawned CLI run babel over
-// every module it imports, about 1.2s per child instead of 0.2s, and the
-// parallel CLI tests then miss their deadlines. Returns each file's coverage
-// with every counter at zero.
+// A cold cache makes each spawned CLI run babel over every module it imports,
+// about 1.2s per child instead of 0.2s, and the parallel CLI tests then miss
+// their deadlines.
 function instrumentSources() {
   const instrumenter = createInstrumenter(INSTRUMENTER_OPTIONS);
   return readdirSync(join(root, "src"), { recursive: true, encoding: "utf8" })

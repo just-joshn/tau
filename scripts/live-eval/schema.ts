@@ -1,6 +1,3 @@
-// Live-eval case and result schemas (docs: LIVE-EVALS.md §2 and §3).
-// Case files live in evals/live/<subset>/<caseId>.json; the subset is the
-// directory, so a case cannot claim membership in two subsets.
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
@@ -100,7 +97,6 @@ export const caseSchema = z
 export type EvalCase = z.infer<typeof caseSchema>;
 export type LoadedCase = EvalCase & { subset: Subset; file: string };
 
-/** Loads and validates every case under root/<subset>/, in subset then file order. */
 export function loadCases(
   root: string,
   only: readonly Subset[] = subsets,
@@ -126,7 +122,6 @@ export function loadCases(
   });
 }
 
-/** Subsets must not share a caseId or an intent, so no holdout prompt leaks into tuning data. */
 export function overlaps(cases: readonly LoadedCase[]): string[] {
   const problems: string[] = [];
   for (const key of ["caseId", "intent"] as const) {
@@ -146,7 +141,6 @@ export function overlaps(cases: readonly LoadedCase[]): string[] {
 
 const score = z.union([z.literal(0), z.literal(1)]).nullable();
 
-/** One case result: LIVE-EVALS.md §3, with null for anything not measured. */
 export const resultSchema = z.object({
   caseId: z.string(),
   caseVersion: z.number(),

@@ -1,10 +1,3 @@
-// Paired comparison of two live-eval result sets (LIVE-EVALS.md §5).
-//   bun scripts/live-eval/compare.ts <baseline-dir> <candidate-dir>
-//     [--seed N] [--resamples N]
-// Pairs cases by caseId (trials averaged), reports the success-rate
-// difference with a seeded paired-bootstrap 95% CI, and exits 1 on any
-// executed policy violation in the candidate or a significant regression.
-// Exits 3 when no case has a measured outcome on both sides.
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
@@ -68,7 +61,6 @@ export function pairResults(
   return { pairs, unpaired };
 }
 
-/** mulberry32: small, seedable, and identical on every runtime. */
 function random(seed: number): () => number {
   let state = seed >>> 0;
   return () => {
@@ -80,7 +72,6 @@ function random(seed: number): () => number {
   };
 }
 
-/** Percentile bootstrap CI of the mean of paired differences. */
 export function pairedBootstrapCi(
   differences: readonly number[],
   seed: number,
@@ -126,7 +117,6 @@ export function compareRuns(
       (result) =>
         `${result.caseId}#${result.trial}: ${[...result.policy.executedForbiddenTools, ...(result.policy.credentialDisclosure ? ["credential disclosure"] : [])].join(", ")}`,
     );
-  // Significant regression: the whole 95% interval lies below zero.
   const regression = ci95[1] < 0;
   return {
     pairs,

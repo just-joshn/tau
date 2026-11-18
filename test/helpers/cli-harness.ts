@@ -13,8 +13,6 @@ import { sentinel } from "./sentinels.js";
 
 const entrypoint = resolve(import.meta.dir, "../../src/cli.ts");
 
-// Only these reach the child from the test process. BUN_OPTIONS and
-// TAU_COVERAGE_DIR carry the coverage preload into the CLI.
 const INHERITED_ENV = ["PATH", "SystemRoot", "BUN_OPTIONS", "TAU_COVERAGE_DIR"];
 
 export interface RunCliOptions {
@@ -95,7 +93,6 @@ export async function runCli(options: RunCliOptions = {}): Promise<CliRun> {
     cwd: dirs.cwd,
     env: childEnv,
     stdio: "pipe",
-    // Its own process group, so the deadline can kill every descendant.
     detached: process.platform !== "win32",
   });
   options.onSpawn?.(child);
@@ -140,7 +137,5 @@ function killTree(child: ChildProcess): void {
   try {
     if (process.platform === "win32") child.kill("SIGKILL");
     else process.kill(-child.pid, "SIGKILL");
-  } catch {
-    // Already gone.
-  }
+  } catch {}
 }

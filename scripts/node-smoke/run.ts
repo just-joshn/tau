@@ -1,6 +1,4 @@
-// Cross-runtime smoke, executed by Node (type stripping) through
-// scripts/node-smoke.mjs: bundle the CLI for Node, then drive the bundle with
-// `node` against a loopback Messages API mock. Only erasable TypeScript here.
+// Node runs this file by type stripping, so only erasable TypeScript here.
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import {
@@ -111,7 +109,6 @@ function run(
   });
 }
 
-/** Serves one scripted reply per request and records every request body. */
 async function startMock(reply: (body: Request) => Block) {
   const bodies: Request[] = [];
   const server = createServer(async (request, response) => {
