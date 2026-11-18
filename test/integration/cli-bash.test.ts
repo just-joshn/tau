@@ -87,16 +87,21 @@ test("cd persists, nonzero exits lead with the exit code, and a leading sleep ti
   });
   assert.equal(run.exitCode, 0, run.stderr);
   const sub = `${run.cwd}/sub`;
+  const moved = (to: string, from: string) =>
+    `\n\n<system-reminder>\n# Environment update\n - Primary working directory: ${to} (was ${from})\n</system-reminder>`;
   assert.deepEqual(results(provider), {
     s1: { content: "hi", is_error: false },
-    s2: { content: sub, is_error: false },
+    s2: { content: sub + moved(sub, run.cwd), is_error: false },
     s3: { content: sub, is_error: false },
     s4: { content: "Exit code 3", is_error: true },
     s5: {
       content: "Exit code 143\nCommand timed out after 0s",
       is_error: true,
     },
-    s6: { content: `/\nShell cwd was reset to ${run.cwd}`, is_error: false },
+    s6: {
+      content: `/\nShell cwd was reset to ${run.cwd}${moved(run.cwd, sub)}`,
+      is_error: false,
+    },
     s7: { content: "(Bash completed with no output)", is_error: false },
   });
   const tools = bodySchema.parse(provider.requests[0]?.body).tools ?? [];
@@ -191,4 +196,34 @@ test("a background command's completion reaches the next request, and TaskStop s
     ),
   );
   assert.equal(await readFile(output, "utf8"), "bg\n\n[exited with code 0]\n");
+});
+
+test("the tenth model turn without the task tools folds the task reminder into its result", async () => {
+  const steps = Array.from({ length: 11 }, (_, index) =>
+    bash(`t${index + 1}`, { command: "true" }),
+  );
+  const provider = await startMockProvider([
+    ...steps,
+    turn({ type: "text", text: "done" }),
+  ]);
+  const run = await runCli({
+    args: [...PRINT, "--model", "claude-sonnet-4-5-20250929"],
+    provider,
+  });
+  assert.equal(run.exitCode, 0, run.stderr);
+  const silent = "(Bash completed with no output)";
+  const tokens =
+    "\n\n<system-reminder>\n<total_tokens>14999986 tokens left</total_tokens>\n</system-reminder>";
+  const contents = Object.fromEntries(
+    Object.entries(results(provider)).map(([id, { content }]) => [id, content]),
+  );
+  assert.deepEqual(contents, {
+    ...Object.fromEntries(
+      Array.from({ length: 11 }, (_, index) => [
+        `t${index + 1}`,
+        silent + tokens,
+      ]),
+    ),
+    t10: `${silent}\n\n<system-reminder>\nThe task tools haven't been used recently. If you're working on tasks that would benefit from tracking progress, consider using TaskCreate to add new tasks and TaskUpdate to update task status (set to in_progress when starting, completed when done). Also consider cleaning up the task list if it has become stale. Only use these if relevant to the current work. This is just a gentle reminder - ignore if not applicable.\n\n</system-reminder>${tokens}`,
+  });
 });

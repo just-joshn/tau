@@ -31,6 +31,7 @@ import {
 } from "./system-prompt.js";
 import {
   attributionTexts,
+  environmentSnapshot,
   firstPromptText,
   gitFacts,
   localDate,
@@ -1748,8 +1749,34 @@ async function main(): Promise<void> {
           signal: turnSignal,
           onEvent,
           streamEvents: sdk !== undefined,
-          roundAttachments: (messages) =>
-            roundAttachments({ model, env: process.env }, messages),
+          roundAttachments: async (messages) => {
+            const offered = new Set([
+              ...tools.definitions.map((tool) => tool.name),
+              ...(tools.deferredToolNames?.() ?? []),
+            ]);
+            const [start, now, tasks] = await Promise.all([
+              environmentSnapshot(cwd),
+              environmentSnapshot(shellHost.cwd),
+              offered.has("TaskUpdate") && taskHost
+                ? taskHost.store.list().catch(() => [])
+                : undefined,
+            ]);
+            return roundAttachments(
+              {
+                model,
+                env: process.env,
+                environment: { start, now },
+                ...(tasks && {
+                  tasks: tasks.map(({ id, status, subject }) => ({
+                    id,
+                    status,
+                    subject,
+                  })),
+                }),
+              },
+              messages,
+            );
+          },
           stopHook: (context) => {
             const { runtime } = activeHooks();
             if (!runtime.stop)

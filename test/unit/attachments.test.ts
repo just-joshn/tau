@@ -265,3 +265,98 @@ test("a tool_reference result keeps an attachment beside it, as the original's x
     ],
   );
 });
+
+const work = { workingDirectory: "/w", isGitRepo: true, isWorktree: false };
+const moved = (text: string) =>
+  `<system-reminder>\n# Environment update\n${text}\n</system-reminder>`;
+
+test("a moved shell folds one environment update, then nothing until it moves again", () => {
+  const sub = { ...work, workingDirectory: "/w/s<b>", isGitRepo: false };
+  const facts = {
+    ...sonnet,
+    env: { CLAUDE_CODE_TOTAL_TOKENS_REMINDER: "off" },
+  };
+  const owed = roundAttachments(
+    { ...facts, environment: { start: work, now: sub } },
+    [prompt, call("a"), result("a")],
+  );
+  assert.deepEqual(owed.flatMap(renderAttachment), [
+    moved(
+      " - Primary working directory: /w/s&lt;b&gt; (was /w)\n - Is a git repository: false (was true)",
+    ),
+  ]);
+  const told = [prompt, call("a"), result("a"), ...owed.map(attachmentMessage)];
+  assert.deepEqual(
+    roundAttachments(
+      { ...facts, environment: { start: work, now: sub } },
+      told,
+    ),
+    [],
+  );
+  assert.deepEqual(
+    roundAttachments(
+      { ...facts, environment: { start: work, now: work } },
+      told,
+    ).flatMap(renderAttachment),
+    [
+      moved(
+        " - Primary working directory: /w (was /w/s&lt;b&gt;)\n - Is a git repository: true (was false)",
+      ),
+    ],
+  );
+  assert.deepEqual(
+    renderAttachment({
+      type: "environment",
+      snapshot: { ...work, isWorktree: true },
+      changes: [{ field: "isWorktree" }],
+    })[0]?.split("\n")[2],
+    " - This is a git worktree — an isolated copy of the repository. Run all commands from this directory. Do NOT `cd` to the original repository root.",
+  );
+});
+
+test("the task reminder waits ten non-thinking assistant blocks after task use or the last reminder", () => {
+  const facts = {
+    ...sonnet,
+    env: { CLAUDE_CODE_TOTAL_TOKENS_REMINDER: "off" },
+    tasks: [{ id: "1", status: "pending" as const, subject: "Ship it" }],
+  };
+  const thinking: Message = {
+    role: "assistant",
+    content: [{ type: "thinking", thinking: "t", signature: "s" }],
+  };
+  const turns = (count: number) =>
+    Array.from({ length: count }, (_, index) => [
+      call(`c${index}`),
+      thinking,
+      result(`c${index}`),
+    ]).flat();
+  assert.deepEqual(roundAttachments(facts, [prompt, ...turns(9)]), []);
+  const due = [prompt, ...turns(10)];
+  const [reminder] = roundAttachments(facts, due);
+  assert.deepEqual(reminder && renderAttachment(reminder), [
+    "<system-reminder>\nThe task tools haven't been used recently. If you're working on tasks that would benefit from tracking progress, consider using TaskCreate to add new tasks and TaskUpdate to update task status (set to in_progress when starting, completed when done). Also consider cleaning up the task list if it has become stale. Only use these if relevant to the current work. This is just a gentle reminder - ignore if not applicable.\n\n\nHere are the existing tasks:\n\n#1. [pending] Ship it\n</system-reminder>",
+  ]);
+  const reminded = [...due, ...(reminder ? [attachmentMessage(reminder)] : [])];
+  assert.deepEqual(roundAttachments(facts, [...reminded, ...turns(9)]), []);
+  assert.equal(roundAttachments(facts, [...reminded, ...turns(10)]).length, 1);
+  const managed: Message = {
+    role: "assistant",
+    content: [{ type: "tool_use", id: "u", name: "TaskUpdate", input: {} }],
+  };
+  assert.deepEqual(
+    roundAttachments(facts, [...due, managed, result("u"), ...turns(9)]),
+    [],
+  );
+  const { tasks: _offered, ...untracked } = facts;
+  assert.deepEqual(roundAttachments(untracked, due), []);
+  assert.deepEqual(
+    roundAttachments(
+      {
+        ...facts,
+        env: { ...facts.env, CLAUDE_CODE_TODO_REMINDER_MODE: "off" },
+      },
+      due,
+    ),
+    [],
+  );
+});

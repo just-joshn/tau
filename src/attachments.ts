@@ -1,4 +1,10 @@
 import { z } from "zod";
+import {
+  environmentChangeSchema,
+  environmentSnapshotSchema,
+  environmentUpdateText,
+} from "./environment-reminder.js";
+import { taskStatusSchema } from "./task-store.js";
 import type { Message } from "./types.js";
 
 /** Source `qs`. */
@@ -69,6 +75,23 @@ export const attachmentSchema = z.discriminatedUnion("type", [
   }),
   asyncHookResponseSchema,
   z.object({ type: z.literal("total_tokens_reminder"), text: z.string() }),
+  /** Source `environment` with `changes`: what a Bash `cd` moved since the model last read it. */
+  z.object({
+    type: z.literal("environment"),
+    snapshot: environmentSnapshotSchema,
+    changes: z.array(environmentChangeSchema),
+  }),
+  /** Source `task_reminder`: the task tools went unused for a stretch of model turns. */
+  z.object({
+    type: z.literal("task_reminder"),
+    tasks: z.array(
+      z.object({
+        id: z.string(),
+        status: taskStatusSchema,
+        subject: z.string(),
+      }),
+    ),
+  }),
 ]);
 export type Attachment = z.infer<typeof attachmentSchema>;
 export type AsyncHookResponseAttachment = z.infer<
@@ -119,7 +142,27 @@ export function renderAttachment(attachment: Attachment): string[] {
       );
     case "total_tokens_reminder":
       return [systemReminder(attachment.text)];
+    case "environment": {
+      const text = environmentUpdateText(
+        attachment.snapshot,
+        attachment.changes,
+      );
+      return text ? [systemReminder(text)] : [];
+    }
+    case "task_reminder":
+      return [systemReminder(taskReminderText(attachment.tasks))];
   }
+}
+
+const TASK_REMINDER =
+  "The task tools haven't been used recently. If you're working on tasks that would benefit from tracking progress, consider using TaskCreate to add new tasks and TaskUpdate to update task status (set to in_progress when starting, completed when done). Also consider cleaning up the task list if it has become stale. Only use these if relevant to the current work. This is just a gentle reminder - ignore if not applicable.\n";
+
+function taskReminderText(
+  tasks: Extract<Attachment, { type: "task_reminder" }>["tasks"],
+): string {
+  return tasks.length
+    ? `${TASK_REMINDER}\n\nHere are the existing tasks:\n\n${tasks.map((task) => `#${task.id}. [${task.status}] ${task.subject}`).join("\n")}`
+    : TASK_REMINDER;
 }
 
 /** A transcript row for an attachment; projection folds it into the preceding result. */

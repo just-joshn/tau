@@ -175,7 +175,9 @@ export async function runAgent<
     stopHookActive: boolean;
   }) => Promise<AgentStopHookResult>;
   /** Source `getAttachments` with no new prompt: attachments owed before each later request. */
-  roundAttachments?: (messages: readonly Message[]) => Attachment[];
+  roundAttachments?: (
+    messages: readonly Message[],
+  ) => Attachment[] | Promise<Attachment[]>;
 }): Promise<{
   messages: Message[];
   usage: Usage;
@@ -358,7 +360,7 @@ export async function runAgent<
       abortIfNeeded(options.signal);
       // A trailing assistant row is a prefill continuation, not a new round.
       if (turns > 1 && options.messages.at(-1)?.role === "user") {
-        const owed = options.roundAttachments?.(options.messages) ?? [];
+        const owed = (await options.roundAttachments?.(options.messages)) ?? [];
         options.messages.push(...owed.map(attachmentMessage));
       }
       await options.tools.beforeModelRequest?.(options.signal);
