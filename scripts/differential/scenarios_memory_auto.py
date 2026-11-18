@@ -121,13 +121,21 @@ def verify(requests, stdouts, memory: Path):
     results = [r for body in save[-1:] for r in _results(body)]
     index_blocks = [t for body in recall[:1] for t in _texts(body) if "TAU_AUTO_MEMORY_INDEX_LINE" in t]
     topic, index = memory / TOPIC, memory / "MEMORY.md"
+    topic_text = topic.read_text() if topic.is_file() else None
+    index_text = index.read_text() if index.is_file() else None
     checks = {
         "init_memory_paths": [(_init(out) or {}).get("memory_paths") for out in stdouts] == [{"auto": folder}] * len(stdouts),
         "prompt_section": bool(save) and f"# auto memory\n\nYou have a persistent, file-based memory system at `{folder}`." in _system(save[0]),
         "writes_allowed": len(results) == 2 and not any(r.get("is_error") for r in results),
-        "topic_written": topic.is_file() and topic.read_text() == TOPIC_BODY,
-        "index_written": index.is_file() and index.read_text() == INDEX_LINE + "\n",
+        "topic_written": topic_text == TOPIC_BODY,
+        "index_written": index_text == INDEX_LINE + "\n",
         "index_loaded": len(index_blocks) == 1 and str(index) in index_blocks[0],
         "topic_not_loaded": not any("TAU_AUTO_MEMORY_TOPIC_BODY" in t for body in recall[:1] for t in _texts(body)),
     }
-    return {"checks": checks, "write_results": results, "index_block": index_blocks[0] if index_blocks else None}
+    return {
+        "checks": checks,
+        "write_results": results,
+        "index_block": index_blocks[0] if index_blocks else None,
+        # Kept when a written-file check fails so the next run can see rewrite vs missing.
+        "disk": {"topic": topic_text, "index": index_text},
+    }
