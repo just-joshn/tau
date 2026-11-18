@@ -858,3 +858,264 @@ test("Windows removal targets cover drive roots, Git Bash spellings and home", (
       removalRule(remove(f, ["-rf", target], "C:\\work")),
     ]).toEqual([target, rule]);
 });
+
+test("links and removals that reach a protected root name it", async () => {
+  const protectedDeny: Decision = {
+    behavior: "deny",
+    decisionReason: {
+      type: "safetyCheck",
+      reason: "settings file.",
+      classifierApprovable: false,
+      circuitBreaker: "claudeSettingsFile",
+    },
+  };
+  const f = owner(
+    {},
+    {
+      host: { protectedRoots: (s) => known(["/work/proj/.claude"], s) },
+      filePolicy: {
+        protectedWrite: (path, _spellings, _p, s) =>
+          known(
+            /settings\.json$|\.claude$/.test(path)
+              ? protectedDeny
+              : { behavior: "passthrough" },
+            s,
+          ),
+      },
+    },
+  );
+  const second =
+    "settings file. A link gives the file a second name, and later writes to that name change it.";
+  const reaches =
+    "This command reaches /work/proj/.claude, which Claude Code\u2019s tools cannot write";
+  const rows: [string, string, string][] = [
+    ["ln /work/settings.json x", "/work/settings.json", second],
+    ["link /work/settings.json y", "/work/settings.json", second],
+    ["ln x /work/settings.json", "/work/settings.json", "settings file."],
+    ["ln /work/proj y", "/work/proj/.claude", reaches],
+    ["rm -r /work/proj", "/work/proj/.claude", reaches],
+    ["mv /work/proj /work/other", "/work/proj/.claude", reaches],
+  ];
+  for (const [command, blockedPath, message] of rows) {
+    const r = await f.run(command);
+    expect([command, kind(r), r.blockedPath, r.message]).toEqual([
+      command,
+      "ask:claudeSettingsFile",
+      blockedPath,
+      message,
+    ]);
+  }
+  for (const command of ["ln src", "/bin/ln a b"])
+    expect([command, kind(await f.run(command))]).toEqual([
+      command,
+      "passthrough:none",
+    ]);
+});
+
+test("cd forms, empty tee and sed reads are checked by their real targets", async () => {
+  await table([
+    [
+      "cd a b",
+      { plain: "ask:cd-multi-positional", block: "ask:outsideReadsBlocked" },
+    ],
+    ["cd -- a b", { plain: "ask:cd-multi-positional" }],
+    ["echo x | tee", { plain: "passthrough:none", block: "passthrough:none" }],
+    ["sed -n p f", { plain: "passthrough:none", block: "passthrough:none" }],
+    ["sed -n p /outside/f", { block: "ask:outsideReadsBlocked" }],
+    ["sed -n p /secret", { plain: "deny:rule", block: "deny:rule" }],
+    ["sed -i s/a/b/ f", { plain: "ask:none", block: "ask:none" }],
+    // A w command writes a file named in the script.
+    [
+      "sed s/a/b/w /outside/out f",
+      { plain: "ask:none", block: "ask:outsideReadsBlocked" },
+    ],
+    ["rm file", { plain: "ask:none" }],
+  ]);
+  // The text-only entry gives the same answers.
+  const f = owner({ deny: "/secret" });
+  expect(kind(f.text("sed -n p /secret"))).toBe("deny:rule");
+  expect(kind(f.text("sed -i s/a/b/ f"))).toBe("ask:none");
+  expect(kind(f.text(""))).toBe("passthrough:none");
+});
+
+test("a relative read after cd asks while Read denies exist", async () => {
+  const f = owner({ deny: "/work/denied" });
+  const hostOnly = policy({
+    alwaysDenyRules: { hostCredential: ["Read(~/.ssh/**)"] },
+  });
+  const project = policy({
+    alwaysDenyRules: { projectSettings: ["Read(/x)"], session: undefined },
+  });
+  const keys = await f.run("cat f", hostOnly, true);
+  expect(keys.message).toBe(
+    "cat reads a relative path after cd. That can't be checked against this computer's keys and sign-in files first.",
+  );
+  expect(kind(keys)).toBe("ask:cd-compound-read");
+  const rule = await f.run("cat f", project, true);
+  expect(kind(rule)).toBe("ask:cd-compound-read");
+  expect(rule.message).toContain("while a Read() deny rule is configured");
+  // A relative path that resolves to a denied file is still denied.
+  expect(kind(await f.run("cat denied", project, true))).toBe("deny:rule");
+  // Absolute reads and cd itself do not depend on the changed directory.
+  expect(kind(await f.run("cat /work/f", project, true))).toBe(
+    "passthrough:none",
+  );
+  expect(kind(await f.run("cd sub", project, true))).toBe("passthrough:none");
+  // Without any Read deny the relative read is not held.
+  expect(kind(await f.run("cat f", policy(), true))).toBe("passthrough:none");
+  expect(
+    kind(
+      await f.run(
+        "cat f",
+        policy({ alwaysDenyRules: { projectSettings: ["Edit(/x)"] } }),
+        true,
+      ),
+    ),
+  ).toBe("passthrough:none");
+});
+
+test("write suggestions offer acceptEdits only from a plain default mode", async () => {
+  const f = owner();
+  const cases: [Partial<Policy>, boolean][] = [
+    [{}, true],
+    [{ mode: "plan" }, true],
+    [{ mode: "plan", prePlanMode: "auto" }, false],
+    [{ mode: "plan", prePlanMode: "dontAsk" }, false],
+    [{ modeBeforeRewrite: "bypassPermissions" }, false],
+    [{ mode: "dontAsk" }, false],
+  ];
+  for (const [options, offered] of cases) {
+    const r = await f.run("touch file", policy(options));
+    expect([
+      options,
+      (r.suggestions ?? []).some((s) => s.type === "setMode"),
+    ]).toEqual([options, offered]);
+  }
+  // A read hold suggests a Read rule only when the host has one.
+  const none = owner(
+    { outsideBlocked: true },
+    {
+      host: {
+        readDirectorySuggestion: (_path, _destination, s) =>
+          known(undefined, s),
+      },
+    },
+  );
+  const read = await none.run("cat /outside/f");
+  expect(read.behavior).toBe("ask");
+  expect(read.suggestions).toEqual([]);
+});
+
+test("rule patterns are rooted by their spelling", () => {
+  const f = owner(
+    {},
+    { host: { sourceRuleRoot: (_source, s) => known("/project", s) } },
+  );
+  const w = owner(
+    {},
+    {
+      host: {
+        platform: "windows",
+        sourceRuleRoot: (_source, s) => known("C:\\project", s),
+        home: (s) => known("C:\\Users\\me", s),
+      },
+    },
+  );
+  const root = (o: ReturnType<typeof owner>, pattern: string) =>
+    o.controller.withPolicyScope(policy(), "/work", () =>
+      o.controller.native.u7e(pattern, "projectSettings"),
+    ).result;
+  expect(root(f, "~/x")).toEqual({ relativePattern: "/x", root: "/home/test" });
+  expect(root(f, "x/y")).toEqual({ relativePattern: "x/y", root: null });
+  expect(root(f, "C:/x")).toEqual({ relativePattern: "C:/x", root: null });
+  expect(root(f, "~\\x")).toEqual({ relativePattern: "~\\x", root: null });
+  const windows: [string, { relativePattern: string; root: string | null }][] =
+    [
+      ["//c/x", { relativePattern: "/x", root: "C:\\" }],
+      ["//c", { relativePattern: "/c", root: "/" }],
+      ["//server/x", { relativePattern: "/server/x", root: "/" }],
+      ["C:\\x\\y", { relativePattern: "/x/y", root: "C:\\" }],
+      ["d:/x", { relativePattern: "/x", root: "D:\\" }],
+      ["~\\x", { relativePattern: "/x", root: "C:\\Users\\me" }],
+      ["\\x", { relativePattern: "/x", root: "C:\\project" }],
+      ["\\!x", { relativePattern: "\\!x", root: null }],
+      ["\\#x", { relativePattern: "\\#x", root: null }],
+    ];
+  for (const [pattern, want] of windows)
+    expect([pattern, root(w, pattern)]).toEqual([pattern, want]);
+  const n = f.controller.native;
+  expect(n.$t("a//b")).toBe("a/b");
+  expect(n.$t("/**")).toBe("/**");
+  expect(n.$t("  ")).toBe("  ");
+  expect(n.$t("\ufeff#x")).toBe("\\#x");
+  expect(n.$t("\ufeffx")).toBe("x");
+  expect(n.$t("\ufeff\ufeffx")).toBe("[\ufeff]x");
+});
+
+test("unknown-cwd deny scanning covers absolute, home, parent and Edit rules", () => {
+  const f = owner({ deny: "/abs/secret", writeDeny: "/project/sub/x" });
+  f.host.nativePathSpelling = (path, s) =>
+    known(path.startsWith("~") ? "/home/test" + path.slice(1) : path, s);
+  f.host.originalWorkingDirectory = (s) => known("/work", s);
+  f.host.sourceRuleRoot = (_source, s) => known("/project", s);
+  const rules: { toolName: string; ruleContent?: string }[] = [
+    { toolName: "Edit" },
+    { toolName: "Edit", ruleContent: "/sub/x" },
+    { toolName: "Edit", ruleContent: "bad\u0000/x" },
+  ];
+  const families: string[] = [];
+  f.host.fileDenyRules = (family, _policy, s) => {
+    families.push(family);
+    return known(
+      rules.map((ruleValue) => ({
+        source: "projectSettings",
+        ruleBehavior: "deny",
+        ruleValue,
+      })),
+      s,
+    );
+  };
+  const scan = (path: string, family: "read" | "edit") =>
+    f.controller.withPolicyScope(policy(), "/work", () =>
+      f.controller.native.Pti(path, policy(), family),
+    ).result;
+  expect(scan("/abs/secret", "read")).not.toBeNull();
+  expect(scan("~/nothing", "read")).toBeNull();
+  expect(scan("../..", "read")).toBeNull();
+  expect(scan("./.", "edit")).toBeNull();
+  expect(scan("../x", "edit")).not.toBeNull();
+  expect(scan("../y", "edit")).toBeNull();
+  expect(families).toEqual(["edit", "edit"]);
+});
+
+test("read paths of a command include sources, globs and input redirects", async () => {
+  const f = owner();
+  const paths = async (command: string) => {
+    const r = await f.semantic.analyze(command);
+    if (r.kind !== "simple") throw new Error(r.reason);
+    return f.controller.withPolicyScope(policy(), "/work", () =>
+      r.commands.flatMap((c) => f.controller.native.SSn(c)),
+    ).result;
+  };
+  expect(await paths("cat a b < c")).toEqual(["a", "b", "c"]);
+  expect(await paths("cp a b dest")).toEqual(["a", "b"]);
+  expect(await paths("rm x")).toEqual([]);
+  expect(await paths("echo x < in")).toEqual(["in"]);
+  expect(await paths("cat /dev/null")).toEqual([]);
+  expect(await paths("git diff *")).toEqual(["*"]);
+  expect(await paths("time cat a")).toEqual(["a"]);
+});
+
+test("owners must share one parser and refuse helpers outside a scope", () => {
+  const f = fixture();
+  const other = createNativeBashCommandPreparation(f.semantic.parser, {});
+  expect(() =>
+    createNativeBashSecurityPathControl(f.semantic, other, {
+      ...f.host,
+    }),
+  ).toThrow("Native Bash owners must share parser and feature contexts");
+  const o = owner();
+  expect(() => o.controller.native.mv(policy())).toThrow(
+    "Missing native path-consumer invariant",
+  );
+});
