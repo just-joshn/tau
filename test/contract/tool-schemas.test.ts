@@ -161,6 +161,18 @@ const BASE: Record<string, (tag: string) => Record<string, unknown>> = {
   SendMessage: () => ({ to: "nobody", message: "" }),
   EnterWorktree: (tag) => ({ name: `bad-${tag}` }),
   ExitWorktree: () => ({ action: "keep" }),
+  ListAgents: () => ({}),
+  ReportFindings: () => ({
+    findings: [
+      {
+        file: "present.txt",
+        summary: "bad",
+        failure_scenario: "bad",
+      },
+    ],
+  }),
+  ScheduleWakeup: () => ({ stop: true }),
+  Workflow: () => ({ name: "missing-workflow" }),
   Agent: () => ({ description: "bad", prompt: "bad" }),
   Skill: () => ({ skill: "demo" }),
 };

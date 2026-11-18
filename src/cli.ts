@@ -1497,9 +1497,6 @@ async function main(): Promise<void> {
     ? createCronTools({
         projectDir: () => shellHost.root,
         sessionId: () => session.id,
-        procStart: new Date(
-          Date.now() - Math.floor(process.uptime() * 1000),
-        ).toISOString(),
       })
     : undefined;
   const sessionTools = [
@@ -1514,6 +1511,7 @@ async function main(): Promise<void> {
       sendMessageTool({
         caller: () => ({ kind: "main" }),
         agents: () => [],
+        listAgentsAvailable: () => true,
         deliverToMain() {},
         deliverToAgent: () => false,
       }),

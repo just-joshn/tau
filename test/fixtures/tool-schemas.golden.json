@@ -27,7 +27,9 @@
             "type": "boolean"
           }
         },
-        "required": ["file_path"],
+        "required": [
+          "file_path"
+        ],
         "additionalProperties": false
       }
     },
@@ -45,7 +47,10 @@
             "type": "string"
           }
         },
-        "required": ["file_path", "content"]
+        "required": [
+          "file_path",
+          "content"
+        ]
       }
     },
     {
@@ -69,7 +74,11 @@
             "type": "boolean"
           }
         },
-        "required": ["file_path", "old_string", "new_string"]
+        "required": [
+          "file_path",
+          "old_string",
+          "new_string"
+        ]
       }
     },
     {
@@ -88,7 +97,9 @@
             "type": "string"
           }
         },
-        "required": ["pattern"],
+        "required": [
+          "pattern"
+        ],
         "additionalProperties": false
       }
     },
@@ -111,7 +122,11 @@
           "output_mode": {
             "default": "files_with_matches",
             "type": "string",
-            "enum": ["content", "files_with_matches", "count"]
+            "enum": [
+              "content",
+              "files_with_matches",
+              "count"
+            ]
           },
           "-i": {
             "default": false,
@@ -134,7 +149,9 @@
             "maximum": 10000
           }
         },
-        "required": ["pattern"],
+        "required": [
+          "pattern"
+        ],
         "additionalProperties": false
       }
     },
@@ -165,7 +182,9 @@
             "type": "boolean"
           }
         },
-        "required": ["command"],
+        "required": [
+          "command"
+        ],
         "additionalProperties": false
       }
     },
@@ -190,15 +209,25 @@
           "cell_type": {
             "description": "The type of the cell (code or markdown). If not specified, it defaults to the current cell type. If using edit_mode=insert, this is required.",
             "type": "string",
-            "enum": ["code", "markdown"]
+            "enum": [
+              "code",
+              "markdown"
+            ]
           },
           "edit_mode": {
             "description": "The type of edit to make (replace, insert, delete). Defaults to replace.",
             "type": "string",
-            "enum": ["replace", "insert", "delete"]
+            "enum": [
+              "replace",
+              "insert",
+              "delete"
+            ]
           }
         },
-        "required": ["notebook_path", "new_source"],
+        "required": [
+          "notebook_path",
+          "new_source"
+        ],
         "additionalProperties": false
       }
     },
@@ -225,7 +254,10 @@
             "additionalProperties": {}
           }
         },
-        "required": ["subject", "description"],
+        "required": [
+          "subject",
+          "description"
+        ],
         "additionalProperties": false
       }
     },
@@ -239,7 +271,9 @@
             "type": "string"
           }
         },
-        "required": ["taskId"],
+        "required": [
+          "taskId"
+        ],
         "additionalProperties": false
       }
     },
@@ -268,7 +302,11 @@
             "anyOf": [
               {
                 "type": "string",
-                "enum": ["pending", "in_progress", "completed"]
+                "enum": [
+                  "pending",
+                  "in_progress",
+                  "completed"
+                ]
               },
               {
                 "type": "string",
@@ -296,7 +334,9 @@
             "additionalProperties": {}
           }
         },
-        "required": ["taskId"],
+        "required": [
+          "taskId"
+        ],
         "additionalProperties": false
       }
     },
@@ -331,7 +371,10 @@
             "maximum": 9007199254740991
           }
         },
-        "required": ["url", "prompt"],
+        "required": [
+          "url",
+          "prompt"
+        ],
         "additionalProperties": false
       }
     },
@@ -361,7 +404,9 @@
             }
           }
         },
-        "required": ["query"],
+        "required": [
+          "query"
+        ],
         "additionalProperties": false
       }
     },
@@ -494,12 +539,17 @@
                 }
               }
             },
-            "required": ["url"],
+            "required": [
+              "url"
+            ],
             "additionalProperties": false,
             "description": "WebSocket to open. Each text frame is an event; binary frames are reported as a placeholder line. Socket close ends the watch. Cannot be combined with command."
           }
         },
-        "required": ["description", "timeout_ms"],
+        "required": [
+          "description",
+          "timeout_ms"
+        ],
         "additionalProperties": false
       }
     },
@@ -529,7 +579,10 @@
         "properties": {
           "action": {
             "type": "string",
-            "enum": ["keep", "remove"],
+            "enum": [
+              "keep",
+              "remove"
+            ],
             "description": "\"keep\" leaves the worktree and branch on disk; \"remove\" deletes the worktree and, unless a hook made it or git refuses, its branch."
           },
           "discard_changes": {
@@ -537,7 +590,183 @@
             "type": "boolean"
           }
         },
-        "required": ["action"],
+        "required": [
+          "action"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "ListAgents",
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "channel": {
+            "description": "Not available in this build; leave unset.",
+            "type": "string",
+            "maxLength": 256
+          },
+          "q": {
+            "description": "Not available in this build; leave unset.",
+            "type": "string",
+            "maxLength": 256
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "ReportFindings",
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "level": {
+            "description": "Effort level the review ran at",
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          },
+          "findings": {
+            "maxItems": 32,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "file": {
+                  "type": "string",
+                  "description": "Repo-relative path of the file the finding is in"
+                },
+                "line": {
+                  "description": "1-indexed line the finding anchors to",
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                "summary": {
+                  "type": "string",
+                  "description": "One-sentence statement of the defect"
+                },
+                "short_summary": {
+                  "description": "Compressed label for compact UI (≤60 chars): the claim alone, no rationale or consequence clause",
+                  "type": "string",
+                  "maxLength": 60
+                },
+                "failure_scenario": {
+                  "type": "string",
+                  "description": "Concrete inputs/state → wrong output/crash"
+                },
+                "category": {
+                  "description": "Short kebab-case slug of the finding type, e.g. \"correctness\", \"simplification\", \"efficiency\", \"test-coverage\"",
+                  "type": "string",
+                  "maxLength": 40
+                },
+                "verdict": {
+                  "description": "Set when a verify pass ran; absent on inline-only reviews",
+                  "type": "string",
+                  "enum": [
+                    "CONFIRMED",
+                    "PLAUSIBLE"
+                  ]
+                },
+                "outcome": {
+                  "description": "Set ONLY when re-reporting after applying fixes: what happened to this finding",
+                  "type": "string",
+                  "enum": [
+                    "fixed",
+                    "skipped",
+                    "no_change_needed"
+                  ]
+                }
+              },
+              "required": [
+                "file",
+                "summary",
+                "failure_scenario"
+              ],
+              "additionalProperties": false
+            },
+            "description": "Verified findings, most-severe first; empty if none survived"
+          }
+        },
+        "required": [
+          "findings"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "ScheduleWakeup",
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "delaySeconds": {
+            "description": "Seconds from now to wake up. Clamped to [60, 3600] by the runtime. Required unless `stop` is true.",
+            "type": "number"
+          },
+          "reason": {
+            "description": "One short sentence explaining the chosen delay. Goes to telemetry and is shown to the user. Be specific. Required unless `stop` is true.",
+            "type": "string"
+          },
+          "prompt": {
+            "description": "The /loop input to fire on wake-up. Pass the same /loop input verbatim each turn so the next firing re-enters the skill and continues the loop. For autonomous /loop (no user prompt), pass the literal sentinel `<<autonomous-loop-dynamic>>` instead (the dynamic-pacing variant, not the CronCreate-mode `<<autonomous-loop>>`). Required unless `stop` is true.",
+            "type": "string"
+          },
+          "stop": {
+            "description": "Set to true to end the dynamic loop immediately instead of scheduling another wakeup. When true, all other fields are ignored and no further wakeups fire.",
+            "type": "boolean"
+          },
+          "noop": {
+            "description": "true = nothing changed (you checked and there is nothing to report). false = something happened worth keeping (edited a file, posted a message, advanced state, surfaced a finding). Consecutive noop:true ticks are collapsed in the user's terminal view and tracked as a streak. Required unless `stop` is true.",
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "Workflow",
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "script": {
+            "description": "Self-contained workflow script. Must begin with `export const meta = { name, description, phases }` (pure literal, no computed values) followed by the script body using agent()/parallel()/pipeline()/phase().",
+            "type": "string",
+            "maxLength": 524288
+          },
+          "name": {
+            "description": "Name of a predefined workflow (built-in or from .claude/workflows/). Resolves to a self-contained script.",
+            "type": "string"
+          },
+          "description": {
+            "description": "Ignored — set the workflow description in the script's `meta` block.",
+            "type": "string"
+          },
+          "title": {
+            "description": "Ignored — set the workflow title in the script's `meta` block.",
+            "type": "string"
+          },
+          "args": {
+            "description": "Optional input value exposed to the script as the global `args`, verbatim. Pass arrays/objects as actual JSON values, NOT as a JSON-encoded string — a stringified list breaks `args.filter`/`args.map` in the script. Use for parameterized named workflows (e.g. a research question)."
+          },
+          "scriptPath": {
+            "description": "Path to a workflow script file on disk. Every Workflow invocation persists its script under the session directory and returns the path in the tool result. To iterate, edit that file with Write/Edit and re-invoke Workflow with the same `scriptPath` instead of re-sending the full script. Takes precedence over `script` and `name`.",
+            "type": "string"
+          },
+          "resumeFromRunId": {
+            "description": "Run ID of a prior Workflow invocation to resume from. The cache is positional: agent() calls replay from cache up to the first call that failed, no longer matches the earlier run (edited, added, removed or reordered) or never started in it; that call and every call after it run again, even when their own (prompt, opts) are unchanged. A call a usage limit refused, or one still running when the run stopped, usually runs again without ending reuse: finished calls after it still come from cache. Same-session only. Stop the prior run first (TaskStop) before resuming.",
+            "type": "string",
+            "pattern": "^wf_[a-z0-9-]{6,}$"
+          }
+        },
         "additionalProperties": false
       }
     },
@@ -574,17 +803,31 @@
           },
           "model": {
             "type": "string",
-            "enum": ["sonnet", "opus", "haiku", "fable"]
+            "enum": [
+              "sonnet",
+              "opus",
+              "haiku",
+              "fable"
+            ]
           },
           "effort": {
             "type": "string",
-            "enum": ["low", "medium", "high", "xhigh", "max"]
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
           },
           "run_in_background": {
             "type": "boolean"
           }
         },
-        "required": ["description", "prompt"],
+        "required": [
+          "description",
+          "prompt"
+        ],
         "additionalProperties": false
       }
     },
@@ -603,7 +846,9 @@
             "type": "string"
           }
         },
-        "required": ["skill"],
+        "required": [
+          "skill"
+        ],
         "additionalProperties": false
       }
     }

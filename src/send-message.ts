@@ -110,6 +110,8 @@ export interface SendAgent {
 export interface SendDirectory {
   caller(): SendCaller;
   agents(): readonly SendAgent[];
+  /** When true, a miss points at ListAgents the way the original does. */
+  listAgentsAvailable?(): boolean;
   deliverToMain(text: string): void;
   deliverToAgent(agentId: string, text: string): boolean;
 }
@@ -188,7 +190,7 @@ export function validateSendMessage(
 }
 
 function result(outcome: SendOutcome): string {
-  return JSON.stringify(outcome, null, 2);
+  return JSON.stringify(outcome);
 }
 function queued(name: string): string {
   return `Message queued for delivery to ${name} at its next tool round. If it finishes first, it is resumed with the message and notifies again, so wait for that notification before resending.`;
@@ -231,11 +233,16 @@ export function routeSendMessage(
       message: `${named.length} agents are named '${input.to}'. Re-send with the ref of the one you mean:\n${named.map((agent) => `  ${agent.name} [${agent.agentId}]`).join("\n")}`,
     };
   const agent = matches[0];
-  if (agent === undefined)
+  if (agent === undefined) {
+    const hint =
+      directory.listAgentsAvailable?.() === true
+        ? `Use ${LIST_AGENTS} to see everyone you can message.`
+        : "Check the spelling, or use the agent ID from a background agent's spawn result.";
     return {
       success: false,
-      message: `No agent named '${input.to}' is reachable.\nCheck the spelling, or use the agent ID from a background agent's spawn result.`,
+      message: `No agent named '${input.to}' is reachable.\n${hint}`,
     };
+  }
   if (agent.status === "stopped")
     return {
       success: false,
