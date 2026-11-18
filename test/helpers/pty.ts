@@ -52,6 +52,8 @@ export interface PtySession {
   expect(pattern: string | RegExp, timeoutMs?: number): Promise<string>;
   /** Everything printed so far, ANSI stripped and with CRLF folded to LF. */
   text(): string;
+  /** What the terminal shows now, after cursor moves and erases. */
+  screen(): string;
   exited: Promise<PtyExit>;
 }
 
@@ -158,6 +160,7 @@ export function startPty(options: PtyOptions = {}): PtySession {
       child.terminal?.write(keys);
     },
     text,
+    screen: () => render(raw),
     exited,
     expect: (pattern, timeoutMs = 10_000) =>
       new Promise((matched, fail) => {
@@ -201,4 +204,61 @@ function locate(text: string, pattern: string | RegExp): number | undefined {
 
 function plain(raw: string): string {
   return Bun.stripANSI(raw).replace(/\r\n/g, "\n").replace(/\r/g, "");
+}
+
+/**
+ * Replays output onto a grid, honouring the controls readline and tau emit:
+ * CR, LF, cursor up/down/forward/back/column (A B C D G) and erase to end of
+ * screen or line (J K). Other escape sequences are dropped.
+ */
+function render(raw: string): string {
+  const rows: string[][] = [[]];
+  let row = 0;
+  let col = 0;
+  const line = () => (rows[row] ??= []);
+  for (let i = 0; i < raw.length; i++) {
+    const char = raw.charAt(i);
+    if (char === "\r") col = 0;
+    else if (char === "\n") {
+      row++;
+      while (rows.length <= row) rows.push([]);
+    } else if (char === "\x1b") {
+      const control = /^\[([0-9;?]*)([A-Za-z])/.exec(raw.slice(i + 1));
+      if (control === null) continue;
+      i += control[0].length;
+      const n = Number.parseInt(control[1] || "1", 10) || 1;
+      switch (control[2]) {
+        case "A":
+          row = Math.max(0, row - n);
+          break;
+        case "B":
+          row += n;
+          while (rows.length <= row) rows.push([]);
+          break;
+        case "C":
+          col += n;
+          break;
+        case "D":
+          col = Math.max(0, col - n);
+          break;
+        case "G":
+          col = n - 1;
+          break;
+        case "J":
+          line().length = Math.min(line().length, col);
+          rows.length = row + 1;
+          break;
+        case "K":
+          line().length = Math.min(line().length, col);
+          break;
+        default:
+          break;
+      }
+    } else {
+      const current = line();
+      while (current.length < col) current.push(" ");
+      current[col++] = char;
+    }
+  }
+  return rows.map((cells) => cells.join("").trimEnd()).join("\n");
 }

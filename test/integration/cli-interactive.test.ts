@@ -1,9 +1,18 @@
-import { describe, expect, setDefaultTimeout, test } from "bun:test";
-import { existsSync, readdirSync } from "node:fs";
+import {
+  describe,
+  expect,
+  onTestFinished,
+  setDefaultTimeout,
+  test,
+} from "bun:test";
+import { chmodSync, existsSync, readdirSync } from "node:fs";
+import { createServer } from "node:http";
 import { join } from "node:path";
 import { z } from "zod";
+import { runCli } from "../helpers/cli-harness.js";
 import { startMockProvider } from "../helpers/mock-provider.js";
 import { startPty, type PtySession } from "../helpers/pty.js";
+import { fixtureSse } from "../helpers/sse-fixture.js";
 
 setDefaultTimeout(30_000);
 
@@ -470,5 +479,224 @@ describe("/compact", () => {
     tau.write("\x03");
     await tau.expect("tau: Interrupted");
     await exit(tau);
+  });
+});
+
+/**
+ * Serves each SSE event list in order and ends the response normally, so a
+ * stream cut short before message_stop arrives whole, unlike a dropped socket.
+ */
+async function startSseServer(responses: readonly (readonly unknown[])[]) {
+  let served = 0;
+  const server = createServer((request, response) => {
+    request.resume();
+    request.on("end", () => {
+      const events = responses[served++];
+      if (events === undefined) {
+        response.writeHead(500).end();
+        return;
+      }
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.end(fixtureSse(events));
+    });
+  });
+  await new Promise<void>((listening) =>
+    server.listen(0, "127.0.0.1", listening),
+  );
+  onTestFinished(
+    () =>
+      new Promise<void>((closed) => {
+        server.closeAllConnections();
+        server.close(() => closed());
+      }),
+  );
+  const address = server.address();
+  if (address === null || typeof address === "string")
+    throw new Error("SSE server has no TCP address");
+  return { url: `http://127.0.0.1:${address.port}`, requests: () => served };
+}
+
+const tooLong = {
+  kind: "error" as const,
+  status: 400,
+  body: {
+    type: "error",
+    error: {
+      type: "invalid_request_error",
+      message: "prompt is too long: 210000 tokens > 200000",
+    },
+  },
+};
+
+describe("turn display", () => {
+  test("a retried stream erases its abandoned text from the screen", async () => {
+    const start = {
+      type: "message_start",
+      message: {
+        role: "assistant",
+        content: [],
+        usage: { input_tokens: 1, output_tokens: 0 },
+      },
+    };
+    const provider = await startSseServer([
+      [
+        start,
+        {
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "text", text: "abandoned draft" },
+        },
+      ],
+      [
+        start,
+        {
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "text", text: "final answer" },
+        },
+        { type: "content_block_stop", index: 0 },
+        {
+          type: "message_delta",
+          delta: { stop_reason: "end_turn" },
+          usage: { output_tokens: 2 },
+        },
+        { type: "message_stop" },
+      ],
+    ]);
+    const tau = startPty({ provider });
+    await submit(tau, "question");
+    await tau.expect("final answer");
+    await tau.expect(PROMPT);
+    expect(tau.text()).toContain("abandoned draft");
+    expect(tau.screen()).not.toContain("abandoned draft");
+    expect(tau.screen()).toContain("final answer");
+    tau.write("/exit\r");
+    expect((await tau.exited).exitCode).toBe(0);
+    expect(provider.requests()).toBe(2);
+  });
+
+  test("a context rejection compacts the conversation and reports the token change", async () => {
+    const provider = await startMockProvider([
+      said("original answer"),
+      tooLong,
+      said("<summary>Earlier facts</summary>"),
+      said("done after compaction"),
+    ]);
+    const tau = startPty({ provider, env: { CLAUDE_CODE_MAX_RETRIES: "0" } });
+    await submit(tau, "first");
+    await tau.expect("original answer");
+    await submit(tau, "second");
+    await tau.expect("Compacting conversation context...");
+    await tau.expect(/Context compacted \(\d+ → \d+ estimated tokens\)\./);
+    await tau.expect("done after compaction");
+    await exit(tau);
+    expect(JSON.stringify(body(provider.requests[3]).messages)).toContain(
+      "Earlier facts",
+    );
+  });
+
+  test("a failed reactive compaction says the original conversation was kept", async () => {
+    const provider = await startMockProvider([
+      said("original answer"),
+      tooLong,
+      tooLong,
+    ]);
+    const tau = startPty({ provider, env: { CLAUDE_CODE_MAX_RETRIES: "0" } });
+    await submit(tau, "first");
+    await tau.expect("original answer");
+    await submit(tau, "second");
+    await tau.expect(
+      "Context compaction failed; original conversation preserved.",
+    );
+    await tau.expect(/tau: [^\n]+/);
+    await exit(tau);
+  });
+});
+
+describe("session persistence", () => {
+  test.skipIf(process.getuid?.() === 0)(
+    "a turn whose session cannot be saved reports the save failure",
+    async () => {
+      const provider = await startMockProvider([said("unsaved answer")]);
+      const tau = startPty({ provider });
+      await tau.expect(PROMPT);
+      const sessions = join(tau.state, "sessions");
+      const [partition] = readdirSync(sessions);
+      const directory = join(sessions, partition ?? "");
+      chmodSync(directory, 0o500);
+      tau.write("question\r");
+      await tau.expect("unsaved answer");
+      await tau.expect(/tau: Session save failed: [^\n]+/);
+      chmodSync(directory, 0o700);
+      await exit(tau);
+    },
+  );
+
+  test("resuming a session that was planning restores plan mode", async () => {
+    const provider = await startMockProvider([said("planned")]);
+    const tau = startPty({ provider, args: ["--permission-mode", "plan"] });
+    const planning = sessionId(await tau.expect(PROMPT));
+    tau.write("make a plan\r");
+    await tau.expect("planned");
+    await submit(tau, "/clear");
+    await tau.expect("New session");
+    await submit(tau, "/permissions default");
+    await tau.expect("Permissions: default");
+    await submit(tau, `/resume ${planning}`);
+    await tau.expect(`Resumed ${planning}`);
+    await submit(tau, "/permissions");
+    await tau.expect("Permissions: plan");
+    await submit(tau, "/permissions acceptEdits");
+    await tau.expect("Permissions: acceptEdits");
+    await submit(tau, "/clear");
+    await tau.expect("New session");
+    await submit(tau, `/resume ${planning}`);
+    await tau.expect(`Resumed ${planning}`);
+    await submit(tau, "/permissions");
+    await tau.expect("Permissions: acceptEdits");
+    await exit(tau);
+  });
+});
+
+describe("workspace trust", () => {
+  const settings = {
+    ".claude/settings.json": JSON.stringify({
+      hooks: {
+        Stop: [
+          {
+            hooks: [
+              {
+                type: "command",
+                command: process.execPath,
+                args: [
+                  "-e",
+                  "require('node:fs').writeFileSync('hook-ran.txt','ran')",
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    }),
+  };
+
+  test("project hooks run in print mode but not in an untrusted interactive workspace", async () => {
+    const provider = await startMockProvider([said("printed")]);
+    const printed = await runCli({
+      provider,
+      files: settings,
+      args: ["-p", "hello"],
+    });
+    expect(printed.exitCode).toBe(0);
+    expect(existsSync(join(printed.cwd, "hook-ran.txt"))).toBe(true);
+
+    const tau = startPty({
+      provider: await startMockProvider([said("typed")]),
+      files: settings,
+    });
+    await submit(tau, "hello");
+    await tau.expect("typed");
+    await exit(tau);
+    expect(existsSync(join(tau.cwd, "hook-ran.txt"))).toBe(false);
   });
 });
