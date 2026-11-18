@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, mock } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resetProviderProcessLatches } from "../../src/provider.js";
+import { tempBase } from "./temp-base.js";
 
-const state = mkdtempSync(join(tmpdir(), "tau-test-environment-"));
+const state = mkdtempSync(join(tempBase(), "tau-test-environment-"));
 for (const name of ["user", "managed", "state", "tmp"])
   mkdirSync(join(state, name));
 process.env.CLAUDE_CONFIG_DIR = join(state, "user");

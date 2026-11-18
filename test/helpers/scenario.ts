@@ -8,7 +8,7 @@ import {
   rmSync,
   symlinkSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { tempBase } from "./temp-base.js";
 import { isAbsolute, join, normalize } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
@@ -358,7 +358,7 @@ export async function replay(scenario: Scenario): Promise<Replay> {
   );
   const provider = await startMockProvider(live.modelScript);
 
-  const holder = mkdtempSync(join(tmpdir(), "tau-scenario-"));
+  const holder = mkdtempSync(join(tempBase(), "tau-scenario-"));
   onTestFinished(() => rmSync(holder, { recursive: true, force: true }));
   const previousTmp = process.env.TMPDIR;
   process.env.TMPDIR = holder;

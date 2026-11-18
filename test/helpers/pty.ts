@@ -7,7 +7,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { tempBase } from "./temp-base.js";
 import { dirname, join, resolve } from "node:path";
 import { sentinel } from "./sentinels.js";
 
@@ -72,7 +72,7 @@ export interface PtySession {
  * group, which the deadline and test teardown kill.
  */
 export function startPty(options: PtyOptions = {}): PtySession {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "tau-pty-")));
+  const root = realpathSync(mkdtempSync(join(tempBase(), "tau-pty-")));
   const dirs = {
     home: join(root, "home"),
     cwd: join(root, "workspace"),

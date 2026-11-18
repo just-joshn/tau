@@ -7,9 +7,9 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { sentinel } from "./sentinels.js";
+import { tempBase } from "./temp-base.js";
 
 const entrypoint = resolve(import.meta.dir, "../../src/cli.ts");
 
@@ -48,7 +48,7 @@ export interface CliRun {
  * environment. The root is removed when the current test finishes.
  */
 export async function runCli(options: RunCliOptions = {}): Promise<CliRun> {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "tau-cli-")));
+  const root = realpathSync(mkdtempSync(join(tempBase(), "tau-cli-")));
   onTestFinished(() => rmSync(root, { recursive: true, force: true }));
   const dirs = {
     home: join(root, "home"),

@@ -7,7 +7,6 @@ import {
   rm,
   writeFile,
 } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { expect, onTestFinished, test } from "bun:test";
 import { z } from "zod";
@@ -18,11 +17,12 @@ import {
   type EvalCase,
 } from "../../scripts/live-eval/schema.js";
 import { fixtureSse } from "../helpers/sse-fixture.js";
+import { tempBase } from "../helpers/temp-base.js";
 
 const runner = resolve("scripts/live-eval/run.ts");
 
 async function temp(): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), "tau-live-eval-test-"));
+  const dir = await mkdtemp(join(tempBase(), "tau-live-eval-test-"));
   onTestFinished(() => rm(dir, { recursive: true, force: true }));
   return dir;
 }
