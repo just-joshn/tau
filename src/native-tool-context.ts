@@ -7,13 +7,19 @@ import {
   type NativeJson,
   type NativeSessionDocument,
   type NativeTranscriptNode,
+  type NativeSourceRow,
 } from "./native-session-codec.js";
 import {
   projectNativeHistory,
   projectNativeHistoryForModelRequest,
+  projectNativeHistoryBeforeContextRequest,
+  projectNativeOwnedHistory,
+  assertNativeHistoryProjectionDocument,
   reconstructNativeHistory,
   type NativeHistoryOptions,
   type NativeHistoryProjection,
+  type NativeRecoveredHistory,
+  type NativeOrderedHistory,
 } from "./native-history-projection.js";
 import {
   NativeResumeContextError,
@@ -59,20 +65,14 @@ export interface NativeToolContextEvent {
   toolUseId?: string;
   reorderedPastTextBlocks?: number;
 }
-export interface NativeToolContextProjection {
-  originalDocument: NativeSessionDocument;
-  documentForProjection: NativeSessionDocument;
-  projection: NativeHistoryProjection;
+export interface NativeToolContextRendering<
+  N extends NativeSourceRow = NativeTranscriptNode,
+> {
+  projection: NativeHistoryProjection<N>;
   messages: Message[];
   messageSources: readonly (readonly string[])[];
   dispositions: readonly NativeResumeContextDisposition[];
   contextMergeEvents: readonly NativeToolContextEvent[];
-  parentRewrites: readonly {
-    uuid: string;
-    from: string | null;
-    to: string | null;
-    skippedContext: readonly string[];
-  }[];
   assistantBlockIndices: readonly {
     responseId: string;
     indices: readonly number[];
@@ -82,6 +82,27 @@ export interface NativeToolContextProjection {
     removedNonTextBlocks: number;
     retainedTextBlocks: number;
   }[];
+}
+export interface NativeToolContextProjection extends NativeToolContextRendering {
+  originalDocument: NativeSessionDocument;
+  documentForProjection: NativeSessionDocument;
+  parentRewrites: readonly {
+    uuid: string;
+    from: string | null;
+    to: string | null;
+    skippedContext: readonly string[];
+  }[];
+}
+export interface NativeToolContextRenderOptions<
+  N extends NativeSourceRow = NativeTranscriptNode,
+> {
+  host:
+    | NativeResumeContextHost
+    | ((nodes: readonly N[]) => NativeResumeContextHost);
+  classifiers: NativeToolContextClassifiers;
+  echoApiBlockOrder: boolean;
+  preserveTrailingThinking: boolean;
+  signal: AbortSignal;
 }
 const fail = (code: string, uuid?: string): never => {
   throw new NativeResumeContextError(code, uuid);
@@ -174,7 +195,7 @@ interface AssistantState {
   sources: string[];
 }
 function fragmentIndices(
-  node: NativeTranscriptNode,
+  node: NativeSourceRow,
   length: number,
 ): number[] | undefined {
   if (typeof node.row.apiBlockIndex !== "number") return;
@@ -269,13 +290,139 @@ export async function projectNativeToolRequestContext(
   return projectNativeToolContextCore(document, options, "model-request");
 }
 
+/** Membership/order belongs to the owning query, independently of physical parent ancestry. */
+export async function projectNativeOwnedToolRequestContext(
+  document: NativeSessionDocument,
+  ownedRows: NativeRecoveredHistory,
+  options: Parameters<typeof projectNativeToolContext>[1],
+): Promise<NativeToolContextProjection> {
+  return projectNativeToolContextCore(
+    document,
+    options,
+    "model-request",
+    ownedRows,
+  );
+}
+
 async function projectNativeToolContextCore(
   document: NativeSessionDocument,
   options: Parameters<typeof projectNativeToolContext>[1],
   phase: "completed" | "model-request",
+  ownedRows?: NativeRecoveredHistory,
 ): Promise<NativeToolContextProjection> {
+  if (ownedRows)
+    assertNativeHistoryProjectionDocument(document, options.selection.scope);
   const index = indexNativeSession(document);
-  const recovered = reconstructNativeHistory(index, options.selection);
+  const recovered =
+    ownedRows ?? reconstructNativeHistory(index, options.selection);
+  const parentRewrites: NativeToolContextProjection["parentRewrites"][number][] =
+    [];
+  let documentForProjection = document;
+  const rendered = await projectNativeToolContextRows(
+    recovered,
+    options,
+    phase,
+    ownedRows !== undefined,
+    (removed, contextRequest) => {
+      const selectedUuids = new Set(recovered.nodes.map((node) => node.uuid));
+      const retained: NativeJson[] = [];
+      for (const line of ownedRows ? [] : document.lines) {
+        if (line.kind !== "record" || line.value === undefined) continue;
+        const row = line.value;
+        if (!isNativeObject(row)) {
+          retained.push(row);
+          continue;
+        }
+        if (typeof row.uuid === "string" && removed.has(row.uuid)) continue;
+        if (
+          (row.type !== "user" && row.type !== "assistant") ||
+          typeof row.uuid !== "string" ||
+          !selectedUuids.has(row.uuid)
+        ) {
+          retained.push(row);
+          continue;
+        }
+        let parent = typeof row.parentUuid === "string" ? row.parentUuid : null;
+        const skippedContext: string[] = [];
+        while (parent !== null && removed.has(parent)) {
+          if (skippedContext.includes(parent))
+            return fail("tool-context-parent-cycle", parent);
+          skippedContext.push(parent);
+          parent = index.nodes.get(parent)?.parentUuid ?? null;
+        }
+        if (skippedContext.length && typeof row.uuid === "string")
+          parentRewrites.push({
+            uuid: row.uuid,
+            from: typeof row.parentUuid === "string" ? row.parentUuid : null,
+            to: parent,
+            skippedContext,
+          });
+        retained.push(
+          skippedContext.length ? { ...row, parentUuid: parent } : row,
+        );
+      }
+      documentForProjection = ownedRows
+        ? document
+        : decodeNativeSession(encodeNativeSessionRows(retained), {
+            parser: "source-line-fallback",
+          });
+      return ownedRows
+        ? projectNativeOwnedHistory(
+            {
+              ...recovered,
+              nodes: recovered.nodes.filter((node) => !removed.has(node.uuid)),
+            },
+            contextRequest ? "context-request" : "model-request",
+          )
+        : (phase === "completed"
+            ? projectNativeHistory
+            : contextRequest
+              ? projectNativeHistoryBeforeContextRequest
+              : projectNativeHistoryForModelRequest)(
+            documentForProjection,
+            options.selection,
+          );
+    },
+  );
+  return {
+    ...rendered,
+    originalDocument: document,
+    documentForProjection,
+    parentRewrites,
+  };
+}
+
+/** The source owner supplies actual ordered rows; this path has no native file ancestry. */
+export function projectNativeRetainedToolRequestContext(
+  retained: NativeOrderedHistory<NativeSourceRow>,
+  options: NativeToolContextRenderOptions<NativeSourceRow>,
+): Promise<NativeToolContextRendering<NativeSourceRow>> {
+  return projectNativeToolContextRows(
+    retained,
+    options,
+    "model-request",
+    true,
+    (removed, contextRequest) =>
+      projectNativeOwnedHistory(
+        {
+          ...retained,
+          nodes: retained.nodes.filter((node) => !removed.has(node.uuid)),
+        },
+        contextRequest ? "context-request" : "model-request",
+      ),
+  );
+}
+
+async function projectNativeToolContextRows<N extends NativeSourceRow>(
+  recovered: NativeOrderedHistory<N>,
+  options: NativeToolContextRenderOptions<N>,
+  phase: "completed" | "model-request",
+  liveRows: boolean,
+  projectBase: (
+    removed: ReadonlySet<string>,
+    contextRequest: boolean,
+  ) => NativeHistoryProjection<N>,
+): Promise<NativeToolContextRendering<N>> {
   const host =
     typeof options.host === "function"
       ? options.host(recovered.nodes)
@@ -287,6 +434,32 @@ async function projectNativeToolContextCore(
   )
     return fail("unsupported-tool-context-projection-gates");
   for (const node of recovered.nodes) {
+    if (
+      liveRows &&
+      node.type === "user" &&
+      isNativeObject(node.row.message) &&
+      isNativeArray(node.row.message.content)
+    ) {
+      for (const block of node.row.message.content) {
+        if (
+          !isNativeObject(block) ||
+          block.type !== "tool_result" ||
+          !isNativeArray(block.content)
+        )
+          continue;
+        if (
+          block.content.some(
+            (part) =>
+              isNativeObject(part) &&
+              isNativeObject(part.source) &&
+              part.source.type === "base64" &&
+              typeof part.source.data === "string" &&
+              part.source.data.startsWith("unsent:"),
+          )
+        )
+          return fail("unsupported-native-live-media-owner", node.uuid);
+      }
+    }
     if (
       node.row.sharedHeadBlocks !== undefined ||
       node.row.ephemeral !== undefined
@@ -322,53 +495,27 @@ async function projectNativeToolContextCore(
       requiring.uuid,
     );
   const removed = new Set(dispositions.map((entry) => entry.uuid));
-  const selectedUuids = new Set(recovered.nodes.map((node) => node.uuid));
-  const parentRewrites: NativeToolContextProjection["parentRewrites"][number][] =
-    [];
-  const retained: NativeJson[] = [];
-  for (const line of document.lines) {
-    if (line.kind !== "record" || line.value === undefined) continue;
-    const row = line.value;
-    if (!isNativeObject(row)) {
-      retained.push(row);
-      continue;
-    }
-    if (typeof row.uuid === "string" && removed.has(row.uuid)) continue;
-    if (
-      (row.type !== "user" && row.type !== "assistant") ||
-      typeof row.uuid !== "string" ||
-      !selectedUuids.has(row.uuid)
-    ) {
-      retained.push(row);
-      continue;
-    }
-    let parent = typeof row.parentUuid === "string" ? row.parentUuid : null;
-    const skippedContext: string[] = [];
-    while (parent !== null && removed.has(parent)) {
-      if (skippedContext.includes(parent))
-        return fail("tool-context-parent-cycle", parent);
-      skippedContext.push(parent);
-      parent = index.nodes.get(parent)?.parentUuid ?? null;
-    }
-    if (skippedContext.length && typeof row.uuid === "string")
-      parentRewrites.push({
-        uuid: row.uuid,
-        from: typeof row.parentUuid === "string" ? row.parentUuid : null,
-        to: parent,
-        skippedContext,
-      });
-    retained.push(skippedContext.length ? { ...row, parentUuid: parent } : row);
-  }
-  const documentForProjection = decodeNativeSession(
-    encodeNativeSessionRows(retained),
-    { parser: "source-line-fallback" },
-  );
   // This validates every individual source block before combining response fragments.
-  const projection = (
-    phase === "completed"
-      ? projectNativeHistory
-      : projectNativeHistoryForModelRequest
-  )(documentForProjection, options.selection);
+  const lastConversationIndex = recovered.nodes.findLastIndex(
+    (node) => node.type === "user" || node.type === "assistant",
+  );
+  const trailingContexts = new Set(
+    recovered.nodes.slice(lastConversationIndex + 1).map((node) => node.uuid),
+  );
+  const contextRequest =
+    phase === "model-request" &&
+    recovered.nodes[lastConversationIndex]?.type === "assistant" &&
+    dispositions.some(
+      (entry) =>
+        trailingContexts.has(entry.uuid) &&
+        entry.destination === "user-context" &&
+        entry.content.some((content) =>
+          typeof content === "string"
+            ? content.length > 0
+            : content.some((block) => block.text.length > 0),
+        ),
+    );
+  const projection = projectBase(removed, contextRequest);
   const users = new Map<string, Message>();
   for (const [i, sources] of projection.messageSources.entries()) {
     const message = projection.messages[i];
@@ -699,20 +846,25 @@ async function projectNativeToolContextCore(
   const last = messages.at(-1),
     trailing = last?.content.at(-1);
   if (
+    contextRequest &&
+    (last?.role !== "user" ||
+      !last.content.some(
+        (block) => block.type === "text" && block.text.length > 0,
+      ))
+  )
+    return fail("missing-actual-context-request-tail");
+  if (
     !options.preserveTrailingThinking &&
     last?.role === "assistant" &&
     (trailing?.type === "thinking" || trailing?.type === "redacted_thinking")
   )
     return fail("unsupported-trailing-thinking-context-repair");
   return {
-    originalDocument: document,
-    documentForProjection,
     projection,
     messages,
     messageSources: sources,
     dispositions,
     contextMergeEvents: events,
-    parentRewrites,
     errorResultCleanups,
     assistantBlockIndices: allAssistants.flatMap((state) =>
       state.message.responseId && state.indices

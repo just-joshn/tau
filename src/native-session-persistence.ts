@@ -27,7 +27,14 @@ import { captureNativePersistenceEvents } from "./native-persistence-events.js";
 
 export interface NativeSessionPersistenceOptions extends NativeSessionWriterOptions {
   /** A foreign/import source is never adopted implicitly as a writable destination. */
-  initial: { kind: "fresh" } | { kind: "owned-existing"; cursorUuid: string };
+  initial:
+    | { kind: "fresh" }
+    | {
+        kind: "owned-existing";
+        cursorUuid: string;
+        /** Exact persisted binding when reopening a previously saved owned file. */
+        expected?: { byteLength: number; sha256: string };
+      };
 }
 export interface NativeSessionPersistenceState {
   cursorUuid: string | null;
@@ -193,10 +200,10 @@ function inspectOwned(
   );
   if (
     selection.transcriptSessionId !== context.sessionId ||
-    selection.checkpoints.at(-1)?.leaf !== cursor
+    selection.terminalUuid !== cursor
   )
     throw new Error(
-      "The explicit persistence cursor does not match the owned native checkpoint",
+      "The explicit persistence cursor does not match the validated owned native tail",
     );
   for (const { value: row } of snapshot.document.lines) {
     if (!isNativeObject(row)) continue;
@@ -376,6 +383,15 @@ export class NativeSessionPersistence {
       if (initial.kind === "owned-existing" && !current.exists)
         throw new Error(
           "Reopening persistence requires its existing owned transcript",
+        );
+      if (
+        initial.kind === "owned-existing" &&
+        initial.expected !== undefined &&
+        (initial.expected.byteLength !== current.bytes.length ||
+          initial.expected.sha256 !== hash(current.bytes))
+      )
+        throw new Error(
+          "Owned native transcript differs from its persisted binding",
         );
       return new NativeSessionPersistence(
         owned,

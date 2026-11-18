@@ -228,6 +228,9 @@ export function createNativeBashParserFeatures(
         grammar("bot_protected_tengu_gilded_abacus")
       );
     },
+    arithmeticGuardOff(): boolean {
+      return arithmeticOff.getStore() === true;
+    },
     withoutArithmeticGuard<T>(run: () => T): T {
       return arithmeticOff.run(true, run);
     },
@@ -241,6 +244,17 @@ export function createNativeBashParserFeatures(
           classifyNativeBashPlainLine(input) === undefined
         )
       );
+    },
+    dollarOperandFeatureEnabled(): boolean {
+      return (
+        dollarOperandOff.getStore() !== true && grammar("tengu_deep_locket")
+      );
+    },
+    plainLineExemptionEnabled(): boolean {
+      return readDefault(grammarReader, "tengu_moonlit_crayon", false);
+    },
+    dollarOperandGuardOff(): boolean {
+      return dollarOperandOff.getStore() === true;
     },
     withoutDollarOperandGuard<T>(run: () => T): T {
       return dollarOperandOff.run(true, run);
@@ -269,6 +283,9 @@ export function createNativeBashParserFeatures(
       const scope = { mayDiffer: false };
       const result = await divergence.run(scope, run);
       return { result, mayDiffer: scope.mayDiffer };
+    },
+    hasMayDifferObservation(): boolean {
+      return divergence.getStore() !== undefined;
     },
     async observeMisreading<T>(run: () => T | Promise<T>) {
       const scope: { misreading?: string } = {};

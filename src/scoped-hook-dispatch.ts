@@ -9,6 +9,7 @@ import {
   composeHookRegistries,
   type HookRegistryLike,
 } from "./composite-hooks.js";
+import { createHookResultProjection } from "./hook-result-projection.js";
 
 export interface NativeCommandHookOrigin {
   /** Native goal marker is host provenance, not inferred from a command string. */
@@ -97,9 +98,6 @@ export interface ScopedHookSelectionBackend {
 function scopedId(backend: string, id: string): string {
   return JSON.stringify([backend, id]);
 }
-function projectResult(backend: string, result: HookResult): HookResult {
-  return { ...result, id: scopedId(backend, result.id) };
-}
 export function createReducedScopedHookRegistry(options: {
   ownerSessionId: string;
   defaultShell: "bash" | "powershell";
@@ -142,12 +140,37 @@ export function createReducedScopedHookRegistry(options: {
         const registry = backend.registry;
         if (!registry.prepareDispatch)
           throw new Error("Hook backend lacks immutable prepared dispatch");
+        const results = createHookResultProjection((id) =>
+          scopedId(backend.id, id),
+        );
         const prepared = await registry.prepareDispatch(input, {
           ...runOptions,
-          onBackgroundResult: async (result) =>
-            runOptions.onBackgroundResult?.(projectResult(backend.id, result)),
+          ...(runOptions.onResult === undefined
+            ? {}
+            : {
+                onResult: (
+                  result: HookResult,
+                  context: Parameters<
+                    NonNullable<HookRunOptions["onResult"]>
+                  >[1],
+                ) =>
+                  results.observe(result, (projected) =>
+                    runOptions.onResult?.(projected, context),
+                  ),
+              }),
+          onBackgroundResult: (result) =>
+            results.observe(result, (projected) =>
+              runOptions.onBackgroundResult?.(projected),
+            ),
         });
-        return { backend, prepared };
+        if (
+          runOptions.preparedSelection === "bound-final" &&
+          !prepared.selection
+        ) {
+          await prepared.close();
+          throw new Error("Hook backend lacks bound final execution");
+        }
+        return { backend, prepared, results };
       }),
     );
     const ready = preparations.flatMap((result) =>
@@ -167,16 +190,18 @@ export function createReducedScopedHookRegistry(options: {
         backendId: string;
         nativeOrigin: NativeCommandHookOrigin;
         prepared: import("./hooks.js").PreparedHookDispatch;
+        results: ReturnType<typeof createHookResultProjection>;
       }
     >;
     let winners: readonly (typeof candidates)[number][];
     try {
-      candidates = ready.flatMap(({ backend, prepared }) =>
+      candidates = ready.flatMap(({ backend, prepared, results }) =>
         prepared.candidates.map((candidate) => ({
           ...candidate,
           backendId: backend.id,
           nativeOrigin: backend.nativeOrigin(candidate),
           prepared,
+          results,
         })),
       );
       winners = reduceMatchedOrdinaryCommandHooks(candidates, options);
@@ -200,6 +225,9 @@ export function createReducedScopedHookRegistry(options: {
     let retired = false;
     const snapshot: import("./hooks.js").PreparedHookDispatch = {
       candidates: listed,
+      ...(runOptions.preparedSelection === "bound-final"
+        ? { selection: "native-origin-reduced" as const }
+        : {}),
       async runSelected(ids) {
         if (retired || closed)
           throw new Error("Scoped hook dispatch snapshot is retired");
@@ -219,14 +247,12 @@ export function createReducedScopedHookRegistry(options: {
               );
               return {
                 ...batch,
-                results: batch.results.map((result) =>
-                  projectResult(entry.backendId, result),
-                ),
+                results: batch.results.map(entry.results.project),
                 background: batch.background.map((task) => ({
                   id: scopedId(entry.backendId, task.id),
                   cancel: task.cancel,
                   completion: task.completion.then((result) =>
-                    projectResult(entry.backendId, result),
+                    entry.results.project(result),
                   ),
                 })),
               };

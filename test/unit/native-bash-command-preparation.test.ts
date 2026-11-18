@@ -392,7 +392,7 @@ test("wildcard matching preserves executable guard and restrictive xargs fallbac
   assert.deepEqual(resolved("foo*", ["foo\\*"], { ruleBehavior: "allow" }), []);
 });
 
-test("escaped whitespace feature and semantic certificate dependencies are explicit unresolved results", () => {
+test("escaped whitespace and actual certificate verifier dependencies remain explicit", () => {
   const f = fixture();
   assert.deepEqual(
     f.matchRules(
@@ -414,11 +414,7 @@ test("escaped whitespace feature and semantic certificate dependencies are expli
       "prefix",
       { ruleBehavior: "allow" },
     ),
-    {
-      status: "unresolved",
-      matches: [],
-      dependency: "semantic-command-certificate",
-    },
+    { status: "resolved", matches: [] },
   );
   assert.deepEqual(
     f.matchRules(
@@ -450,6 +446,60 @@ test("escaped whitespace feature and semantic certificate dependencies are expli
     ),
     { status: "resolved", matches: [1] },
   );
+});
+
+test("certified rules without an AST preserve native candidate preparation and never call a verifier", () => {
+  const base = createNativeBashParser({ now: () => 0 });
+  const parses: string[] = [];
+  const parser = {
+    ...base,
+    parse(input: string, deadline?: number) {
+      parses.push(input);
+      return base.parse(input, deadline);
+    },
+  };
+  let verifierCalls = 0;
+  const preparation = createNativeBashCommandPreparation(parser, {
+    verifyCertifiedRule() {
+      verifierCalls++;
+      throw Error("No-AST rules cannot invoke the semantic verifier");
+    },
+  });
+  assert.deepEqual(
+    preparation.matchRules(
+      { command: "git status" },
+      new Map([["certified: git status", "certified"]]),
+      "prefix",
+      { ruleBehavior: "allow" },
+    ),
+    { status: "resolved", matches: [] },
+  );
+  assert.ok(parses.length > 0);
+  assert.equal(verifierCalls, 0);
+});
+
+test("mixed certified and ordinary no-AST rules retain native ordered matches in every behavior", () => {
+  const preparation = fixture();
+  const rules = new Map([
+    ["certified: git status", "certified"],
+    ["git:*", "prefix"],
+    ["git status", "exact"],
+  ]);
+  const behaviors: ("allow" | "deny" | "ask")[] = ["allow", "deny", "ask"];
+  for (const behavior of behaviors) {
+    assert.deepEqual(
+      preparation.matchRules({ command: "git status" }, rules, "prefix", {
+        ruleBehavior: behavior,
+      }),
+      { status: "resolved", matches: ["prefix", "exact"] },
+    );
+    assert.deepEqual(
+      preparation.matchRules({ command: "git status" }, rules, "exact", {
+        ruleBehavior: behavior,
+      }),
+      { status: "resolved", matches: ["exact"] },
+    );
+  }
 });
 
 test("certified native descriptors cover every finite family and dynamic remote grammar", () => {

@@ -1,6 +1,8 @@
-import { constants } from "node:fs";
-import { open } from "node:fs/promises";
 import { resolve } from "node:path";
+import {
+  readNativeTranscriptSource,
+  type NativeTranscriptSourceReceipt,
+} from "./native-transcript-source.js";
 import {
   foldOrdinaryNativeResume,
   prepareNativePrintResume,
@@ -34,7 +36,11 @@ export async function importNativeSessionFile(options: {
   model: string;
   signal: AbortSignal;
   env?: NodeJS.ProcessEnv;
-}): Promise<{ session: Session; native: NativeResumeEntryResult }> {
+}): Promise<{
+  session: Session;
+  native: NativeResumeEntryResult;
+  sourceReceipt: NativeTranscriptSourceReceipt;
+}> {
   const session = newSession(options.cwd, options.model);
   const env = options.env ?? process.env;
   const recovery = {
@@ -43,6 +49,7 @@ export async function importNativeSessionFile(options: {
     timestampFallback: "reject" as const,
   };
   let contextualMessages: Message[] | undefined;
+  let sourceReceipt: NativeTranscriptSourceReceipt | undefined;
   const native = await prepareNativePrintResume(
     { resume: options.path },
     {
@@ -55,42 +62,13 @@ export async function importNativeSessionFile(options: {
       admitTranscript: ({ path, source }) =>
         source === "file" && path === resolve(options.cwd, options.path.trim()),
       readTranscript: async (path, signal) => {
-        signal.throwIfAborted();
-        const file = await open(
+        const source = await readNativeTranscriptSource({
           path,
-          constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
-        );
-        try {
-          const before = await file.stat();
-          if (!before.isFile() || before.size > MAX_BYTES)
-            throw new Error(
-              "Native transcript must be a regular file under 32 MiB",
-            );
-          const bytes = Buffer.alloc(before.size + 1);
-          let size = 0;
-          while (size < bytes.length) {
-            signal.throwIfAborted();
-            const result = await file.read(
-              bytes,
-              size,
-              bytes.length - size,
-              null,
-            );
-            if (!result.bytesRead) break;
-            size += result.bytesRead;
-          }
-          const after = await file.stat();
-          if (
-            size !== before.size ||
-            after.size !== before.size ||
-            after.mtimeMs !== before.mtimeMs ||
-            after.ctimeMs !== before.ctimeMs
-          )
-            throw new Error("Native transcript changed while loading");
-          return bytes.subarray(0, size);
-        } finally {
-          await file.close();
-        }
+          signal,
+          maxBytes: MAX_BYTES,
+        });
+        sourceReceipt = source.receipt;
+        return source.bytes;
       },
       // Supported local import requires a complete ordinary parent chain. It does
       // not guess native feature flags to repair broken/compacted transcripts.
@@ -237,11 +215,13 @@ export async function importNativeSessionFile(options: {
     options.signal,
   );
   if (!native) throw new Error("Expected an explicit native .jsonl transcript");
+  if (!sourceReceipt)
+    throw new Error("Missing the admitted native source receipt");
   if (native.agentSetting)
     throw new Error(
       "Restoring a native main-thread agent requires its definition host",
     );
   session.id = native.adoptedSessionId ?? session.id;
   session.messages = contextualMessages ?? native.messages;
-  return { session, native };
+  return { session, native, sourceReceipt };
 }

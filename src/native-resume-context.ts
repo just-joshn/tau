@@ -8,6 +8,7 @@ import {
   type NativeObject,
   type NativeSessionDocument,
   type NativeTranscriptNode,
+  type NativeSourceRow,
 } from "./native-session-codec.js";
 import {
   projectNativeHistory,
@@ -105,6 +106,14 @@ const typedRecordedAttachments = new Set([
   "agent_listing_delta",
   "skill_listing",
   "hook_additional_context",
+  "hook_success",
+  "hook_system_message",
+  "hook_non_blocking_error",
+  "hook_error_during_execution",
+  "hook_cancelled",
+  "hook_blocking_error",
+  "hook_stopped_continuation",
+  "max_turns_reached",
 ]);
 function wrap(text: string): string {
   return `<system-reminder>\n${text}\n</system-reminder>`;
@@ -217,12 +226,40 @@ async function missing(
 
 /** L$n/ZZr plus Kw's jf/Y_e disposition, without generic attachment serialization. */
 export async function planNativeResumeContext(
-  nodes: readonly NativeTranscriptNode[],
+  nodes: readonly NativeSourceRow[],
   host: NativeResumeContextHost,
   signal: AbortSignal,
 ): Promise<readonly NativeResumeContextDisposition[]> {
   const output: NativeResumeContextDisposition[] = [];
   for (const node of nodes) {
+    if (node.type === "progress") {
+      signal.throwIfAborted();
+      let row: NativeObject;
+      try {
+        row = validateNativePersistenceEvent(node.row);
+      } catch {
+        return fail("unsupported-retained-progress", node.uuid);
+      }
+      if (
+        !(await host.admit({
+          row,
+          uuid: node.uuid,
+          nativeType: "hook_progress",
+          signal,
+        }))
+      )
+        return fail("context-admission-denied", node.uuid);
+      signal.throwIfAborted();
+      output.push({
+        uuid: node.uuid,
+        row,
+        nativeType: "hook_progress",
+        source: "native-empty",
+        destination: "none",
+        content: [],
+      });
+      continue;
+    }
     if (node.type !== "attachment" && node.type !== "system") continue;
     signal.throwIfAborted();
     const row = node.row;
@@ -244,6 +281,19 @@ export async function planNativeResumeContext(
         : "unknown-system";
     if (nativeType === "compact_boundary")
       return fail("unsupported-compaction", node.uuid);
+    if (nativeType === "stop_hook_summary") {
+      try {
+        validateNativePersistenceEvent(
+          Object.fromEntries(
+            Object.entries(row).filter(
+              ([key]) => !ordinaryTerminalEnvelope.has(key),
+            ),
+          ),
+        );
+      } catch {
+        return fail("invalid-recorded-stop-hook-summary", node.uuid);
+      }
+    }
     if (!(await host.admit({ row, uuid: node.uuid, nativeType, signal })))
       return fail("context-admission-denied", node.uuid);
     signal.throwIfAborted();
@@ -353,11 +403,11 @@ export async function planNativeResumeContext(
 }
 
 /** RPi/ZWo's ordinary non-system-turn ordering. No message bodies are rewritten. */
-export function reorderNativeResumeContextNodes(
-  nodes: readonly NativeTranscriptNode[],
-): readonly NativeTranscriptNode[] {
-  const result: NativeTranscriptNode[] = [];
-  let pending: NativeTranscriptNode[] = [];
+export function reorderNativeResumeContextNodes<N extends NativeSourceRow>(
+  nodes: readonly N[],
+): readonly N[] {
+  const result: N[] = [];
+  let pending: N[] = [];
   let human = false;
   const flush = () => {
     const ordered = human
@@ -439,14 +489,142 @@ export interface NativeOrdinaryContextResult {
 export interface NativeOrdinaryResumeSelection {
   index: ReturnType<typeof indexNativeSession>;
   selectedLeaf: NativeTranscriptNode;
+  /** Actual physical terminal cursor, including admitted snapshot/lifecycle/system tails. */
+  terminalUuid: string;
   transcriptSessionId: string;
   checkpoints: readonly { leaf: string; explicit: boolean }[];
   historyOptions: NativeHistoryOptions;
   recovered: ReturnType<typeof reconstructNativeHistory>;
-  /** Selected history plus the strictly validated passive checkpoint tail, for last-snapshot gates. */
+  /** Complete selected history/tail for effective last-snapshot and context gates. */
   gateNodes: readonly NativeTranscriptNode[];
   /** Only already-applied checkpoint rows are removed; context remains for projection. */
   documentForProjection: NativeSessionDocument;
+}
+const terminalLifecycleTypes = new Set([
+  "hook_additional_context",
+  "hook_success",
+  "hook_system_message",
+  "hook_non_blocking_error",
+  "hook_error_during_execution",
+  "hook_cancelled",
+  "hook_blocking_error",
+  "hook_stopped_continuation",
+  "max_turns_reached",
+]);
+const ordinaryTerminalEnvelope = new Set([
+  "parentUuid",
+  "sessionId",
+  "cwd",
+  "version",
+  "entrypoint",
+  "userType",
+  "sessionKind",
+  "isSidechain",
+  "teamName",
+  "agentName",
+  "promptId",
+  "gitBranch",
+  "slug",
+]);
+function validateOrdinaryLifecycleTail(node: NativeTranscriptNode): void {
+  const event: Record<string, NativeJson> = {};
+  for (const [key, value] of Object.entries(node.row))
+    if (!ordinaryTerminalEnvelope.has(key)) event[key] = value;
+  try {
+    validateNativePersistenceEvent(event);
+  } catch {
+    return fail("invalid-terminal-lifecycle-event", node.uuid);
+  }
+  if (
+    isNativeObject(node.row.attachment) &&
+    node.row.attachment.type === "max_turns_reached" &&
+    node.row.attachment.exitCommitted === false
+  )
+    return fail("unsupported-terminal-max-turn-interruption", node.uuid);
+}
+function requireOrdinaryLifecycleAnswer(
+  selected: NativeTranscriptNode,
+  recovered: readonly NativeTranscriptNode[],
+): void {
+  const message = isNativeObject(selected.row.message)
+    ? selected.row.message
+    : undefined;
+  if (
+    selected.type !== "assistant" ||
+    !message ||
+    message.stop_reason !== "end_turn" ||
+    typeof message.id !== "string" ||
+    !message.id ||
+    typeof message.model !== "string" ||
+    !message.model ||
+    message.model === "<synthetic>" ||
+    !isNativeArray(message.content) ||
+    !message.content.some(
+      (block) =>
+        isNativeObject(block) &&
+        block.type === "text" &&
+        typeof block.text === "string" &&
+        block.text.trim().length > 0,
+    )
+  )
+    return fail("unsupported-terminal-lifecycle-answer", selected.uuid);
+  const calls = new Map<string, string>();
+  const pending = new Set<string>();
+  for (const node of recovered) {
+    if (
+      node.row.isVirtual === true ||
+      node.row.isApiErrorMessage === true ||
+      node.row.resumedFromIncompleteThinking === true ||
+      node.row.interruptedByShutdown === true ||
+      node.row.answeredWithoutRequest === true ||
+      node.row.isVisibleInTranscriptOnly === true ||
+      node.row.madeBy === "input"
+    )
+      return fail("unsupported-terminal-lifecycle-recovery", node.uuid);
+    if (node.type !== "assistant" && node.type !== "user") continue;
+    const body = isNativeObject(node.row.message)
+      ? node.row.message
+      : undefined;
+    if (!body) return fail("invalid-terminal-lifecycle-message", node.uuid);
+    if (
+      node.type === "assistant" &&
+      !["end_turn", "tool_use", "stop_sequence", "refusal"].includes(
+        typeof body.stop_reason === "string" ? body.stop_reason : "",
+      )
+    )
+      return fail("unsupported-terminal-lifecycle-recovery", node.uuid);
+    const blocks = isNativeArray(body.content) ? body.content : [];
+    const results = blocks.filter(
+      (block) => isNativeObject(block) && block.type === "tool_result",
+    );
+    if (
+      node.type === "user" &&
+      !results.length &&
+      node.row.isMeta !== true &&
+      pending.size
+    )
+      return fail("terminal-human-crosses-pending-response", node.uuid);
+    for (const block of blocks) {
+      if (!isNativeObject(block)) continue;
+      if (node.type === "assistant" && block.type === "tool_use") {
+        if (typeof block.id !== "string" || !block.id || calls.has(block.id))
+          return fail("invalid-terminal-tool-use", node.uuid);
+        calls.set(block.id, node.uuid);
+        pending.add(block.id);
+      } else if (node.type === "user" && block.type === "tool_result") {
+        if (
+          typeof block.tool_use_id !== "string" ||
+          !pending.has(block.tool_use_id) ||
+          (node.row.sourceToolAssistantUUID !== undefined &&
+            node.row.sourceToolAssistantUUID !== calls.get(block.tool_use_id))
+        )
+          return fail("invalid-terminal-tool-result", node.uuid);
+        pending.delete(block.tool_use_id);
+      }
+    }
+  }
+  if (pending.size)
+    return fail("unsupported-terminal-unresolved-calls", selected.uuid);
 }
 /** Source ordinary main leaf/checkpoint selection, shared by text and tool-context projection. */
 export function selectOrdinaryNativeResumeHistory(
@@ -507,6 +685,7 @@ export function selectOrdinaryNativeResumeHistory(
   const selectedLeaf = leaf;
   const terminalChain = new Set([selectedLeaf.uuid]);
   const terminalTail: NativeTranscriptNode[] = [];
+  let lifecycleTail = false;
   let terminal = selectedLeaf;
   for (;;) {
     const children = [...index.nodes.values()].filter(
@@ -520,10 +699,29 @@ export function selectOrdinaryNativeResumeHistory(
       next.row.sessionId !== leaf.row.sessionId ||
       next.row.isSidechain === true ||
       next.row.agentId !== undefined ||
-      next.type !== "attachment" ||
-      !isNativeObject(next.row.attachment) ||
-      next.row.attachment.type !== "prompt_snapshot"
+      (next.type !== "attachment" && next.type !== "system")
     )
+      return fail("unsupported-terminal-context-descendants", terminal.uuid);
+    const attachment = isNativeObject(next.row.attachment)
+      ? next.row.attachment
+      : undefined;
+    if (next.type === "attachment" && attachment?.type === "prompt_snapshot") {
+      // Existing passive snapshot admission/gate precedence is unchanged.
+    } else if (
+      (next.type === "system" &&
+        ["informational", "stop_hook_summary"].includes(
+          typeof next.row.subtype === "string" ? next.row.subtype : "",
+        )) ||
+      (next.type === "attachment" &&
+        attachment &&
+        typeof attachment.type === "string" &&
+        terminalLifecycleTypes.has(attachment.type))
+    ) {
+      if (next.row.cwd !== selectedLeaf.row.cwd)
+        return fail("unsupported-terminal-lifecycle-context", next.uuid);
+      validateOrdinaryLifecycleTail(next);
+      lifecycleTail = true;
+    } else
       return fail("unsupported-terminal-context-descendants", terminal.uuid);
     if (terminalChain.has(next.uuid))
       return fail("context-parent-cycle", next.uuid);
@@ -549,6 +747,8 @@ export function selectOrdinaryNativeResumeHistory(
     recovery: recovery,
   };
   const recovered = reconstructNativeHistory(index, historyOptions);
+  if (lifecycleTail)
+    requireOrdinaryLifecycleAnswer(selectedLeaf, recovered.nodes);
   const documentForProjection = checkpoints.length
     ? decodeNativeSession(
         encodeNativeSessionRows(
@@ -566,6 +766,7 @@ export function selectOrdinaryNativeResumeHistory(
   return {
     index,
     selectedLeaf,
+    terminalUuid: terminal.uuid,
     transcriptSessionId: leaf.row.sessionId,
     checkpoints,
     historyOptions,

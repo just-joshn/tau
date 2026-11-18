@@ -9,9 +9,11 @@ import {
   type HookRegistry,
   type HookRegistryOptions,
   type HookResult,
+  type HookRunOptions,
   type PreparedHookDispatch,
   type HookSource,
 } from "./hooks.js";
+import { createHookResultProjection } from "./hook-result-projection.js";
 
 export const SKILL_HOOK_COUNT_LIMIT = 1024;
 export const SKILL_HOOK_MATCHER_CHARACTER_LIMIT = 16384;
@@ -420,10 +422,10 @@ export class SessionSkillHookRegistry {
     const stableIds = new Map(
       listed.map((entry, index) => [entry.id, entries[index]?.id ?? entry.id]),
     );
-    const stableResult = (result: HookResult): HookResult => ({
-      ...result,
-      id: stableIds.get(result.id) ?? result.id,
-    });
+    const resultProjection = createHookResultProjection(
+      (id) => stableIds.get(id) ?? id,
+    );
+    const stableResult = resultProjection.project;
     const observe = (input: HookInput, result: HookResult) => {
       if (result.status !== "success") return;
       const registered = listed.find(
@@ -466,6 +468,7 @@ export class SessionSkillHookRegistry {
         })),
       stableId: (id: string) => stableIds.get(id) ?? id,
       stableResult,
+      observeResult: resultProjection.observe,
       observe,
       createRegistry: () =>
         createHookRegistry(
@@ -523,9 +526,22 @@ export function createSkillHookExecutionRegistry(
     try {
       prepared = await registry.prepareDispatch(input, {
         ...options,
+        ...(options.onResult === undefined
+          ? {}
+          : {
+              onResult: (
+                result: HookResult,
+                context: Parameters<NonNullable<HookRunOptions["onResult"]>>[1],
+              ) =>
+                snapshot.observeResult(result, (projected) =>
+                  options.onResult?.(projected, context),
+                ),
+            }),
         onBackgroundResult: async (result) => {
           observe(result);
-          await options.onBackgroundResult?.(snapshot.stableResult(result));
+          await snapshot.observeResult(result, (projected) =>
+            options.onBackgroundResult?.(projected),
+          );
         },
       });
     } catch (error) {
@@ -541,6 +557,9 @@ export function createSkillHookExecutionRegistry(
         ]),
       );
     return {
+      ...(prepared.selection === undefined
+        ? {}
+        : { selection: prepared.selection }),
       candidates: Object.freeze(
         prepared.candidates.map((entry) =>
           immutable({
@@ -621,9 +640,24 @@ export function createSkillHookExecutionRegistry(
       try {
         const batch = await registry.run(input, {
           ...options,
+          ...(options.onResult === undefined
+            ? {}
+            : {
+                onResult: (
+                  result: HookResult,
+                  context: Parameters<
+                    NonNullable<HookRunOptions["onResult"]>
+                  >[1],
+                ) =>
+                  snapshot.observeResult(result, (projected) =>
+                    options.onResult?.(projected, context),
+                  ),
+              }),
           onBackgroundResult: async (result) => {
             snapshot.observe(capturedInput, result);
-            await options.onBackgroundResult?.(snapshot.stableResult(result));
+            await snapshot.observeResult(result, (projected) =>
+              options.onBackgroundResult?.(projected),
+            );
           },
         });
         for (const result of batch.results)

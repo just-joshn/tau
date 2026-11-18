@@ -45,6 +45,49 @@ const ctx: NativeWriterContext = {
   userType: "external",
   sidechain: false,
 };
+
+test("native writer preserves absent or empty source entrypoint without inventing one", () => {
+  const { entrypoint: _entrypoint, ...absent } = ctx;
+  for (const context of [absent, { ...absent, entrypoint: "" }]) {
+    assert.doesNotThrow(() =>
+      createNativeSessionWriter({
+        path: "/owned/native.jsonl",
+        context,
+        withExclusiveOwnership: async (_path, work) => work(),
+        admit: () => true,
+      }),
+    );
+    const result = envelopeNativeWriterEntries(
+      [
+        {
+          type: "user",
+          uuid: id(1),
+          timestamp: time(1),
+          message: { role: "user", content: "owned prompt" },
+        },
+      ],
+      context,
+      { parentUuid: null },
+      new Set(),
+    );
+    assert.equal(
+      Object.hasOwn(required(result.rows[0]), "entrypoint"),
+      Object.hasOwn(context, "entrypoint"),
+    );
+  }
+  const invalidContext = { ...ctx };
+  Reflect.set(invalidContext, "entrypoint", 1);
+  assert.throws(
+    () =>
+      createNativeSessionWriter({
+        path: "/owned/native.jsonl",
+        context: invalidContext,
+        withExclusiveOwnership: async (_path, work) => work(),
+        admit: () => true,
+      }),
+    /optional entrypoint/,
+  );
+});
 const signal = () => new AbortController().signal;
 function ownership(): NativeSessionWriterOptions["withExclusiveOwnership"] {
   let tail = Promise.resolve();

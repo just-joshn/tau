@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "bun:test";
+import { expect, test } from "bun:test";
 import {
   classifyNativeBashPlainLine,
   createNativeBashParserFeatures,
@@ -211,4 +211,185 @@ test("plain-line classifier handles its finite heads, comments, quotes and quote
     ["echo text; printf next", "head_script_tool"],
   ])
     assert.equal(classifyNativeBashPlainLine(input ?? ""), reason, input ?? "");
+});
+
+test("source guard-off getters read only their own ALS scope through nesting, rejection and concurrent awaits", async () => {
+  let readerCalls = 0;
+  const features = createNativeBashParserFeatures({
+    grammarReader: () => {
+      readerCalls++;
+      throw Error("The guard-off getters must not read feature configuration");
+    },
+  });
+  const state = () => [
+    features.arithmeticGuardOff(),
+    features.dollarOperandGuardOff(),
+  ];
+  assert.deepEqual(state(), [false, false]);
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const arithmetic = features.withoutArithmeticGuard(async () => {
+    assert.deepEqual(state(), [true, false]);
+    await features.withoutDollarOperandGuard(async () => {
+      assert.deepEqual(state(), [true, true]);
+      entered.resolve();
+      await release.promise;
+      assert.deepEqual(state(), [true, true]);
+    });
+    assert.deepEqual(state(), [true, false]);
+  });
+  await entered.promise;
+  assert.deepEqual(state(), [false, false]);
+  await features.withoutDollarOperandGuard(async () => {
+    await Promise.resolve();
+    assert.deepEqual(state(), [false, true]);
+  });
+  assert.deepEqual(state(), [false, false]);
+  release.resolve();
+  await arithmetic;
+  await assert.rejects(
+    features.withoutDollarOperandGuard(() =>
+      features.withoutArithmeticGuard(async () => {
+        await Promise.resolve();
+        assert.deepEqual(state(), [true, true]);
+        throw Error("restore the outer context");
+      }),
+    ),
+    /restore the outer context/,
+  );
+  assert.deepEqual(state(), [false, false]);
+  assert.equal(readerCalls, 0);
+});
+
+test("separate dollar feature and exemption getters preserve native reader order and strict payload defaults", () => {
+  const absent = createNativeBashParserFeatures();
+  assert.equal(absent.dollarOperandFeatureEnabled(), true);
+  assert.equal(absent.plainLineExemptionEnabled(), false);
+  const calls: string[] = [];
+  const features = createNativeBashParserFeatures({
+    grammarReader: (key, fallback) => {
+      calls.push(`${key}:${fallback}`);
+      return {
+        get value() {
+          calls.push("value");
+          return false;
+        },
+        get source() {
+          calls.push("source");
+          return "local";
+        },
+        get defaultHost() {
+          calls.push("host");
+          return true;
+        },
+      };
+    },
+  });
+  assert.equal(features.dollarOperandFeatureEnabled(), true);
+  assert.deepEqual(calls.splice(0), [
+    "tengu_deep_locket:true",
+    "value",
+    "source",
+    "host",
+  ]);
+  assert.equal(features.plainLineExemptionEnabled(), false);
+  assert.deepEqual(calls.splice(0), ["tengu_moonlit_crayon:false", "value"]);
+  features.registerGrammarReader((key, fallback) => {
+    calls.push(`${key}:${fallback}`);
+    return {
+      value: key === "tengu_moonlit_crayon",
+      source: "payload",
+      defaultHost: true,
+    };
+  });
+  assert.equal(features.dollarOperandFeatureEnabled(), false);
+  assert.equal(features.plainLineExemptionEnabled(), true);
+  for (const reader of [
+    () => ({ value: true, source: "local", defaultHost: true }),
+    () => ({ value: true, source: "payload", defaultHost: false }),
+    () => {
+      throw Error("authored missing reader");
+    },
+  ]) {
+    features.registerGrammarReader(reader);
+    assert.equal(features.dollarOperandFeatureEnabled(), true);
+    assert.equal(features.plainLineExemptionEnabled(), false);
+  }
+});
+
+test("dollar feature getter observes its own async guard while exemption remains independent", async () => {
+  const calls: string[] = [];
+  const features = createNativeBashParserFeatures({
+    grammarReader: (key) => {
+      calls.push(key);
+      return { value: true, source: "payload", defaultHost: true };
+    },
+  });
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const guarded = features.withoutDollarOperandGuard(async () => {
+    assert.equal(features.dollarOperandFeatureEnabled(), false);
+    assert.deepEqual(calls.splice(0), []);
+    entered.resolve();
+    await release.promise;
+    assert.equal(features.dollarOperandFeatureEnabled(), false);
+    assert.equal(features.plainLineExemptionEnabled(), true);
+  });
+  await entered.promise;
+  assert.equal(features.dollarOperandFeatureEnabled(), true);
+  assert.deepEqual(calls.splice(0), ["tengu_deep_locket"]);
+  release.resolve();
+  await guarded;
+  assert.deepEqual(calls.splice(0), ["tengu_moonlit_crayon"]);
+  await assert.rejects(
+    features.withoutDollarOperandGuard(async () => {
+      await Promise.resolve();
+      assert.equal(features.dollarOperandFeatureEnabled(), false);
+      throw Error("restore separate native getter context");
+    }),
+    /restore separate native getter context/,
+  );
+  assert.equal(features.dollarOperandFeatureEnabled(), true);
+  assert.deepEqual(calls, ["tengu_deep_locket"]);
+});
+
+test("native O3a observes may-differ scope presence independently from its mutable answer", async () => {
+  const features = createNativeBashParserFeatures();
+  expect(features.hasMayDifferObservation()).toBe(false);
+  const outer = await features.observeMayDiffer(async () => {
+    expect(features.hasMayDifferObservation()).toBe(true);
+    const inner = await features.observeMayDiffer(() => {
+      expect(features.hasMayDifferObservation()).toBe(true);
+      features.markMayDiffer();
+      return "nested";
+    });
+    expect(inner).toEqual({ result: "nested", mayDiffer: true });
+    expect(features.hasMayDifferObservation()).toBe(true);
+    return "outer";
+  });
+  expect(outer).toEqual({ result: "outer", mayDiffer: false });
+  expect(features.hasMayDifferObservation()).toBe(false);
+});
+
+test("native O3a presence stays private to its retained feature owner and restores after rejection", async () => {
+  const features = createNativeBashParserFeatures();
+  const independent = createNativeBashParserFeatures();
+  let release: () => void = () => {};
+  const wait = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const failure = new Error("authored may-differ failure");
+  const pending = features.observeMayDiffer(async () => {
+    expect(features.hasMayDifferObservation()).toBe(true);
+    expect(independent.hasMayDifferObservation()).toBe(false);
+    await wait;
+    expect(features.hasMayDifferObservation()).toBe(true);
+    throw failure;
+  });
+  expect(features.hasMayDifferObservation()).toBe(false);
+  const rejection = assert.rejects(pending, (error) => error === failure);
+  release();
+  await rejection;
+  expect(features.hasMayDifferObservation()).toBe(false);
+  expect(independent.hasMayDifferObservation()).toBe(false);
 });
