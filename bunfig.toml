@@ -1,3 +1,8 @@
 [test]
 root = "./test"
 preload = ["./test/helpers/test-environment.ts"]
+# Bun's native coverage reports lines and functions only. The branch gate is
+# the istanbul run in scripts/coverage/run.ts (bun run test:coverage).
+coverageReporter = ["text", "lcov"]
+coverageSkipTestFiles = true
+coveragePathIgnorePatterns = ["scripts/**", "test/**"]

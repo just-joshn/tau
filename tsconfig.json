@@ -30,5 +30,5 @@
     // Project: precise optional-property shapes
     "exactOptionalPropertyTypes": true
   },
-  "include": ["src", "test", "scripts/*.ts"]
+  "include": ["src", "test", "scripts/**/*.ts"]
 }
