@@ -571,6 +571,27 @@ test("stderr far beyond the pipe buffer, read slowly, completes without loss", a
     );
 }, 40_000);
 
+test("a reader that closes stdout early, like | head, ends the run with exit 0", async () => {
+  const text = "early close line\n".repeat(150_000);
+  const provider = await startDeltaProvider(text, 32 * 1024);
+  let received = 0;
+  const run = await runCli({
+    args: ["-p", "big"],
+    provider,
+    deadlineMs: 15_000,
+    onSpawn: (child: ChildProcess) => {
+      child.stdout?.once("data", (chunk: string) => {
+        received = chunk.length;
+        child.stdout?.destroy();
+      });
+    },
+  });
+  assert.equal(run.timedOut, false);
+  assert.equal(run.exitCode, 0, run.stderr);
+  assert.equal(run.stderr, "");
+  assert.ok(received > 0 && received < text.length);
+});
+
 // Environment isolation
 
 function filesUnder(root: string): string[] {
