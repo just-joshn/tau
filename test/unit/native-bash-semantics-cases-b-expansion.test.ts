@@ -278,3 +278,28 @@ describe("read as divergent shapes, the redirect lists every target a shell may 
       assert.match(result.reason, /writes shell variable HOME/);
   });
 });
+
+describe("a command with a name opens its redirect before its assignments apply", () => {
+  // Checked against bash 3.2 and zsh 5.9: both write to `old`.
+  for (const script of [
+    'x=old; x=new echo hi > "$x"',
+    'x=old; export x=new > "$x"',
+    'x=old; x=new export y > "$x"',
+    'x=old; x=new : > "$x"',
+  ])
+    test(script, async () => {
+      const result = await f.analyze(script);
+      assert.equal(result.kind, "simple");
+      if (result.kind === "simple")
+        assert.deepEqual(
+          result.commands.map((c) => c.redirects.map((r) => r.target)),
+          [["old"]],
+        );
+    });
+});
+
+table(
+  "a heredoc inside a command substitution is not read as plain text",
+  [["x=$(cat <<EOF\na\nEOF\n)", /A nested command in this command/]],
+  plainHeredocs,
+);
