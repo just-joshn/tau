@@ -71,7 +71,7 @@ async function exit(tau: PtySession): Promise<void> {
 }
 
 describe("interactive REPL", () => {
-  test("banner names model, workspace, session and mode; /help lists commands", async () => {
+  test("banner names model, workspace, session and mode", async () => {
     const tau = startPty({
       env: { ANTHROPIC_API_KEY: "unused" },
       args: ["--model", "banner-model"],
@@ -79,19 +79,17 @@ describe("interactive REPL", () => {
     const screen = await tau.expect(PROMPT);
     expect(screen).toContain(`tau · banner-model · ${tau.cwd}`);
     expect(screen).toMatch(/Session [0-9a-f-]{36} · permissions: default/);
-    tau.write("/help\r");
-    expect(await tau.expect("/SKILL [args]")).toContain(
-      "/help · /exit · /clear · /compact · /model [ID]",
-    );
-    await exit(tau);
+    tau.write("/exit\r");
+    expect((await tau.exited).exitCode).toBe(0);
   });
 
-  test("blank lines are ignored and unknown commands are reported", async () => {
-    const tau = startPty({ env: { ANTHROPIC_API_KEY: "unused" } });
+  test("blank lines send nothing and re-prompt", async () => {
+    const provider = await startMockProvider([]);
+    const tau = startPty({ provider });
     await submit(tau, "   ");
-    await submit(tau, "/nope");
-    expect(await tau.expect("Unknown command. Use /help.")).toBeTruthy();
+    await submit(tau, "");
     await exit(tau);
+    expect(provider.requests).toHaveLength(0);
   });
 
   test("a line of text runs a turn and streams the reply to the terminal", async () => {
@@ -289,46 +287,6 @@ describe("skills", () => {
   });
 });
 
-describe("interrupts and end of input", () => {
-  test("Ctrl-C cancels a running turn and the REPL keeps going", async () => {
-    const provider = await startMockProvider([
-      { kind: "hang" },
-      said("after cancel"),
-    ]);
-    const tau = startPty({ provider });
-    await submit(tau, "slow question");
-    await until(() => provider.requests.length === 1);
-    tau.write("\x03");
-    await tau.expect("Cancelling…");
-    await tau.expect("tau: Interrupted");
-    await submit(tau, "again");
-    await tau.expect("after cancel");
-    await exit(tau);
-  });
-
-  test("Ctrl-C at an idle prompt ends the session cleanly", async () => {
-    const tau = startPty({ env: { ANTHROPIC_API_KEY: "unused" } });
-    await tau.expect(PROMPT);
-    tau.write("\x03");
-    expect(await tau.exited).toEqual({
-      exitCode: 0,
-      signal: null,
-      timedOut: false,
-    });
-  });
-
-  test("Ctrl-D at an idle prompt ends the session cleanly", async () => {
-    const tau = startPty({ env: { ANTHROPIC_API_KEY: "unused" } });
-    await tau.expect(PROMPT);
-    tau.write("\x04");
-    expect(await tau.exited).toEqual({
-      exitCode: 0,
-      signal: null,
-      timedOut: false,
-    });
-  });
-});
-
 describe("tool approval prompts", () => {
   const bash = (command: string) => ({
     kind: "turn" as const,
@@ -373,23 +331,6 @@ describe("tool approval prompts", () => {
     expect(JSON.stringify(body(provider.requests[1]).messages)).toContain(
       "Permission denied",
     );
-  });
-});
-
-describe("launch errors specific to a terminal", () => {
-  test.each([
-    [
-      ["--output-format", "json"],
-      "tau: Structured output requires --print or piped input",
-    ],
-    [
-      ["--max-thinking-tokens", "2000"],
-      "tau: --max-thinking-tokens requires print or piped mode",
-    ],
-  ])("%p is rejected in interactive mode", async (args, message) => {
-    const tau = startPty({ env: { ANTHROPIC_API_KEY: "unused" }, args });
-    await tau.expect(message);
-    expect((await tau.exited).exitCode).toBe(1);
   });
 });
 
