@@ -631,9 +631,6 @@ export class SkillRuntime {
   ): ToolExecutor {
     const tools = () => (typeof base === "function" ? base() : base);
     const ownDefinitions = () => this.definitions;
-    const flushContext = () => {
-      this.flushContext(messages);
-    };
     const initial = tools();
     return {
       get definitions() {
@@ -642,7 +639,7 @@ export class SkillRuntime {
       beforeModelRequest: async (signal) => {
         await tools().beforeModelRequest?.(signal);
         signal.throwIfAborted();
-        flushContext();
+        this.flushContext(messages);
       },
       setReadContext(context) {
         tools().setReadContext?.(context);
@@ -654,7 +651,7 @@ export class SkillRuntime {
                 NonNullable<ToolExecutor["prepareCompaction"]>
               >[0],
             ) => {
-              flushContext();
+              this.flushContext(messages);
               const prepare = tools().prepareCompaction;
               if (!prepare)
                 throw new Error(

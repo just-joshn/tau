@@ -25,11 +25,6 @@ import type {
   ToolUse,
 } from "../src/types.js";
 
-function head<T>(items: readonly T[]): T {
-  const [item] = items;
-  assert.ok(item);
-  return item;
-}
 async function fixture() {
   const cwd = await realpath(
     await mkdtemp(join(tmpdir(), "tau-agent-live-policy-")),
@@ -127,10 +122,6 @@ async function fixture() {
     approveCount: () => approveCount,
     before: (callback: typeof onBefore) => {
       onBefore = callback;
-    },
-    host: () => {
-      assert.ok(sessionHost);
-      return sessionHost;
     },
     background: () => {
       assert.ok(sessionHost?.background);
@@ -333,7 +324,8 @@ test("a published background child survives parent-turn abort and adopts later a
   f.setPolicy({ ...f.getPolicy(), askedTools: ["Read"] });
   release();
   await f.background().settled();
-  assert.equal(head(f.background().list()).status, "completed");
+  const [child] = f.background().list();
+  assert.equal(child?.status, "completed");
   assert.equal(f.notifications.length, 1);
   assert.equal(f.approveCount(), 0);
   assert.equal(requests, 2);

@@ -292,8 +292,10 @@ export class SummaryPlanner {
     else if (policy.keptTailTokens) {
       let remaining = policy.keptTailTokens,
         count = 0;
-      for (const group of this.groups.slice(2).reverse()) {
-        remaining -= tokens(group) + unicodeExtra(group);
+      for (const [index, group] of [...this.groups.entries()]
+        .slice(2)
+        .reverse()) {
+        remaining -= (this.sizes[index] ?? tokens(group)) + unicodeExtra(group);
         if (remaining < 0) break;
         count++;
       }

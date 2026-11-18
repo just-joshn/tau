@@ -356,8 +356,7 @@ export class LocalAgentRegistry {
     const maxTurns = positive(fields.maxTurns),
       compact = positive(fields.autoCompactWindow),
       effort = parseQueryEffort(fields.effort);
-    const memoryValue = fields.memory,
-      memory = isMemoryScope(memoryValue) ? memoryValue : undefined;
+    const memory = isMemoryScope(fields.memory) ? fields.memory : undefined;
     const isolation =
       fields.isolation === "worktree" || fields.isolation === "remote"
         ? fields.isolation

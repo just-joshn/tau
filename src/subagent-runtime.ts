@@ -812,38 +812,18 @@ export class SubagentRuntime implements ToolExecutor {
           messages.push(message);
         }
       const allowed = new Set(selectedToolNames),
-        executor = built.tools;
+        executor = built.tools,
+        beforeModelRequest = executor.beforeModelRequest?.bind(executor),
+        setReadContext = executor.setReadContext?.bind(executor),
+        prepareCompaction = executor.prepareCompaction?.bind(executor);
       const tools: ToolExecutor = {
         ...executor,
         get definitions() {
           return executor.definitions.filter((tool) => allowed.has(tool.name));
         },
-        ...(executor.beforeModelRequest
-          ? {
-              beforeModelRequest: (value: AbortSignal) =>
-                executor.beforeModelRequest?.(value) ?? Promise.resolve(),
-            }
-          : {}),
-        ...(executor.setReadContext
-          ? {
-              setReadContext: (
-                value: Parameters<
-                  NonNullable<ToolExecutor["setReadContext"]>
-                >[0],
-              ) => executor.setReadContext?.(value),
-            }
-          : {}),
-        ...(executor.prepareCompaction
-          ? {
-              prepareCompaction: (
-                value: Parameters<
-                  NonNullable<ToolExecutor["prepareCompaction"]>
-                >[0],
-              ) =>
-                executor.prepareCompaction?.(value) ??
-                Promise.resolve({ messages: [], commit() {} }),
-            }
-          : {}),
+        ...(beforeModelRequest ? { beforeModelRequest } : {}),
+        ...(setReadContext ? { setReadContext } : {}),
+        ...(prepareCompaction ? { prepareCompaction } : {}),
         execute: async (call, childSignal) => {
           childSignal.throwIfAborted();
           controller.signal.throwIfAborted();

@@ -77,7 +77,6 @@ export interface BackgroundTaskToolsOptions {
   hooks?: ToolHookRuntime;
   onDiagnostic?(message: string): void;
 }
-/** The schema refine guarantees a non-empty id; this restates it for the type checker with the schema's own message. */
 const taskIdOf = (input: TaskStopInput): string =>
   input.task_id ??
   input.shell_id ??

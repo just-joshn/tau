@@ -20,12 +20,6 @@ import {
 } from "../src/plan-runtime.js";
 import { wrapPlanRuntime } from "../src/plan-session.js";
 
-function at<T>(items: readonly T[], index: number): T {
-  const item = items.at(index);
-  if (item === undefined) assert.fail(`no item at index ${String(index)}`);
-  return item;
-}
-
 const planInput = z.object({ input: z.object({ plan: z.string() }) });
 const toolName = "mcp__owned__permit";
 const call = (
@@ -347,7 +341,9 @@ test("valid permission updates are preserved without application and explicit ho
     mode: "default",
     destination: "session",
   });
-  assert.match(at(diagnostics, 0), /has not applied/);
+  const [diagnostic] = diagnostics;
+  assert.ok(diagnostic);
+  assert.match(diagnostic, /has not applied/);
   let applied = 0;
   const applying = createMcpPermissionPrompt({
     toolName,

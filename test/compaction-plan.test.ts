@@ -189,10 +189,7 @@ test("omission takes the largest results first and never changes ids or error fl
     present(plan.toSummarize[2]).content[0],
     present(rows[2]).content[0],
   );
-  assert.equal(
-    present(present(plan.toSummarize[2]).content[1]).type,
-    "tool_result",
-  );
+  assert.equal(present(plan.toSummarize[2]).content[1]?.type, "tool_result");
 });
 
 test("head truncation remains whole-group, marks missing context and never drops the last group", () => {

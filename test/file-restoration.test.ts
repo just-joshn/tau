@@ -85,7 +85,7 @@ async function fixture() {
   ) =>
     compactionPreparer(tools)({
       keptMessages,
-      signal: signal,
+      signal,
       ...(countTokens ? { countTokens } : {}),
     });
   const request = (messages: Message[]): Omit<CompletionRequest, "onText"> => ({
@@ -94,7 +94,7 @@ async function fixture() {
     messages,
     tools: tools.definitions,
     maxTokens: 32000,
-    signal: signal,
+    signal,
   });
   return { cwd, state, tools, run, file, prepare, request };
 }

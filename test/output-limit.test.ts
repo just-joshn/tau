@@ -9,7 +9,7 @@ import { OutputLimitRepair } from "../src/output-limit.js";
 import { thinkingRequest, usesAssumedOutputLimit } from "../src/reasoning.js";
 import type { CompletionRequest } from "../src/types.js";
 
-const bodySchema = z.object({
+const bodySchema = z.looseObject({
   max_tokens: z.number(),
   stream: z.boolean(),
   thinking: z.object({ budget_tokens: z.number().optional() }).optional(),

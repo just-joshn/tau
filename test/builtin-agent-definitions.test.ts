@@ -23,11 +23,6 @@ function agentNamed<T extends { agentType: string }>(
   assert.ok(agent, `missing built-in agent ${agentType}`);
   return agent;
 }
-function withoutExplorePlan(): BuiltinAgentCatalogOptions {
-  const invalid = options();
-  Reflect.set(invalid, "explorePlanEnabled", undefined);
-  return invalid;
-}
 function options(
   changes: Partial<BuiltinAgentCatalogOptions> = {},
 ): BuiltinAgentCatalogOptions {
@@ -133,8 +128,10 @@ test("headless disable precedence, safe mode, entrypoint and explore/plan latch 
   assert.deepEqual(coordinator.unsupportedCapabilities, [
     { capability: "coordinator-agents" },
   ]);
+  const invalid = options();
+  Reflect.set(invalid, "explorePlanEnabled", undefined);
   await assert.rejects(
-    createBuiltinAgentCatalog(withoutExplorePlan()),
+    createBuiltinAgentCatalog(invalid),
     /Explicit built-in host capabilities/,
   );
 });

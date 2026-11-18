@@ -97,9 +97,6 @@ function success(res: ServerResponse, stream = true, index = 0) {
     ]),
   );
 }
-const fail = (message: string): never => {
-  throw new Error(message);
-};
 async function fixture(
   handler?: (body: Body, res: ServerResponse, count: number) => void,
 ) {
@@ -137,7 +134,7 @@ async function fixture(
       ...extra,
     });
   const row = (index: number) =>
-    seen.at(index) ?? fail(`Owned request missing: ${String(index)}`);
+    seen.at(index) ?? assert.fail(`Owned request missing: ${String(index)}`);
   return { seen, row, make };
 }
 

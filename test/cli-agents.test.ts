@@ -25,7 +25,7 @@ const toolResult = z.object({
   is_error: z.boolean().optional(),
 });
 type ToolResult = z.infer<typeof toolResult>;
-const bodySchema = z.object({
+const bodySchema = z.looseObject({
   model: z.string(),
   system: z.unknown(),
   messages: z.array(
