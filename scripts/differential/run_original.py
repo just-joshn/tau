@@ -20,6 +20,8 @@ def main():
     parser.add_argument("--verbose", action="store_true", help="Pass --verbose (required by the original for stream-json print output)")
     parser.add_argument("--all-tools", action="store_true", help="Omit --tools so the request advertises the full default catalog")
     parser.add_argument("--label", default="", help="Suffix for artifact file names")
+    parser.add_argument("--stream-input", type=Path, help="NDJSON file fed on stdin with --input-format stream-json; replaces the prompt")
+    parser.add_argument("--extra", action="append", default=[], help="Additional original CLI argument (repeatable)")
     args = parser.parse_args()
     artifact_dir = args.artifacts.resolve()
     application = args.scenario if args.scenario not in ["version", "help"] else "text"
@@ -38,7 +40,15 @@ def main():
             arguments = ([] if args.ordinary else ["--bare"]) + ["--print", "TAU_DIFFERENTIAL_"+args.scenario.upper(), "--model", MODEL,
                          "--output-format", args.output_format, "--no-session-persistence", "--dangerously-skip-permissions"] + \
                         ([] if args.all_tools else ["--tools", "Read,Edit,Write"]) + (["--verbose"] if args.verbose else [])
-        result = isolation.sandbox([str(target), *arguments], timeout=20)
+        arguments += args.extra
+        command = [str(target), *arguments]
+        if args.stream_input:
+            arguments[arguments.index("--print") + 1:arguments.index("--print") + 2] = []
+            arguments += ["--input-format", "stream-json"]
+            feed = isolation.root / "work" / "stream-input.ndjson"
+            feed.write_bytes(args.stream_input.read_bytes())
+            command = ["/bin/sh", "-c", 'exec "$0" "$@" < "' + str(feed) + '"', str(target), *arguments]
+        result = isolation.sandbox(command, timeout=20)
         record = {"scenario": args.scenario, "sse_framing": args.sse_framing, "mode": "ordinary" if args.ordinary else "bare", "target_sha256": TARGET_SHA256, "original_executed": True,
                   "isolation": isolation.report, "arguments": arguments, "result": result, "requests": state.requests,
                   "final_file": (isolation.root / "work" / "a.txt").read_text() if args.scenario not in ["version", "help"] else None}
