@@ -124,3 +124,48 @@ test("$HOME uses the process home directory when the host gives none", async () 
     homedir(),
   ]);
 });
+
+describe("each argv word records whether it carries an unquoted glob", () => {
+  test.each<[string, string[], boolean[]]>([
+    ["echo a*", ["echo", "a*"], [false, true]],
+    ["echo a#*", ["echo", "a#*"], [false, true]],
+    ["echo 'a*'", ["echo", "a*"], [false, false]],
+    ['echo "a*"', ["echo", "a*"], [false, false]],
+    ['echo "\\"*"', ["echo", '"*'], [false, false]],
+    ["echo \\*", ["echo", "*"], [false, false]],
+    // A # at the start of a word starts a comment.
+    ["echo a # *", ["echo", "a"], [false, false]],
+  ])("%j", async (text, argv, globs) => {
+    const result = await semantics.analyze(text);
+    expect(
+      result.kind === "simple" &&
+        result.commands.map((command) => [
+          command.argv,
+          command.argvUnquotedGlob,
+          command.hasUnquotedGlob,
+        ]),
+    ).toEqual([[argv, globs, globs.includes(true)]]);
+  });
+});
+
+describe("a brace is only suspect next to a quote when it is unquoted", () => {
+  test.each<[string, string[]]>([
+    [`echo {a} "'"`, ["echo", "{a}", "'"]],
+    [`echo '{' "'"`, ["echo", "{", "'"]],
+    [`echo "{" "'"`, ["echo", "{", "'"]],
+    [`echo "\\"{" "'"`, ["echo", '"{', "'"]],
+    ["echo # {", ["echo"]],
+  ])("%j", async (text, argv) => {
+    const result = await semantics.analyze(text);
+    expect(
+      result.kind === "simple" && result.commands.map((c) => c.argv),
+    ).toEqual([argv]);
+  });
+
+  test("an unquoted brace before a quote mid-word is refused", async () => {
+    expect(await semantics.analyze(`echo a#{ "'"`)).toMatchObject({
+      kind: "too-complex",
+      reason: "Contains brace with quote character (expansion obfuscation)",
+    });
+  });
+});
