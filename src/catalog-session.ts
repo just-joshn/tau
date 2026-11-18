@@ -3,6 +3,7 @@ import {
   type CatalogProjectionOptions,
 } from "./catalog-projection.js";
 import { activeContextStart } from "./context-usage.js";
+import { prependReminders } from "./context-reminders.js";
 import type { Message, ToolExecutor } from "./types.js";
 import {
   captureNativeCatalogAttachments,
@@ -64,6 +65,7 @@ export function wrapCatalogTools(
           (tool) => tool.name === "Agent" || tool.name === "Task",
         ),
         hasSkillTool: base.definitions.some((tool) => tool.name === "Skill"),
+        showConcurrencyNote: true,
         ...(options.skillBudget === undefined
           ? {}
           : { skillBudget: options.skillBudget }),
@@ -86,9 +88,17 @@ export function wrapCatalogTools(
         );
       signal.throwIfAborted();
       if (createdMessage) messages.push(row);
-      row.content.push(
-        ...projection.blocks.map(({ type, text }) => ({ type, text })),
-      );
+      const reminders = projection.blocks.map(({ kind, type, text }) => ({
+        id:
+          kind === "agent"
+            ? ("agent_listing" as const)
+            : ("skill_listing" as const),
+        block: { type, text },
+      }));
+      // Tool results must lead their row; elsewhere the listing joins the turn's leading reminders.
+      if (row.content.some((block) => block.type === "tool_result"))
+        row.content.push(...reminders.map(({ block }) => block));
+      else prependReminders(row, reminders);
       (row.catalogAttachments ??= []).push(...projection.attachments);
     },
   };

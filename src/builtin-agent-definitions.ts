@@ -115,7 +115,7 @@ function candidates(
   const definitions = [
     base(
       "general-purpose",
-      "Research, implement, or verify a delegated task.",
+      "General-purpose agent for researching complex questions, searching for code, and executing multi-step tasks. When you are searching for a keyword or file and are not confident that you will find the right match in the first few tries use this agent to perform the search for you.",
       "Complete the delegated task using the tools and context supplied by the host. Respect the parent session's permissions. Verify relevant changes and return concrete findings and remaining issues.",
       { tools: ["*"] },
     ),
@@ -124,7 +124,7 @@ function candidates(
     definitions.push(
       base(
         "statusline-setup",
-        "Configure the requested terminal status line.",
+        "Use this agent to configure the user's Claude Code status line setting.",
         "Inspect the admitted configuration and implement the requested status line change. Use only the supplied Read and Edit tools, preserve unrelated configuration, and describe the result.",
         { tools: ["Read", "Edit"], model: "sonnet", color: "orange" },
       ),
@@ -133,7 +133,7 @@ function candidates(
     definitions.push(
       base(
         "claude",
-        "Handle a task without a more specific agent specialization.",
+        "Catch-all for any task that doesn't fit a more specific agent. FleetView's default when no agent name is typed.",
         "Complete the delegated task within the supplied session context and permissions. Return a concise report with evidence and any unresolved work.",
         { tools: ["*"] },
       ),
@@ -142,7 +142,7 @@ function candidates(
     definitions.push(
       base(
         "Explore",
-        "Search and explain an existing codebase.",
+        'Fast read-only search agent for locating code. Use it to find files by pattern (eg. "src/components/**/*.tsx"), grep for symbols or keywords (eg. "API endpoints"), or answer "where is X defined / which files reference Y." Do NOT use it for code review, design-doc auditing, cross-file consistency checks, or open-ended analysis — it reads excerpts rather than whole files and will miss content past its read window. When calling, specify search breadth: "quick" for a single targeted lookup, "medium" for moderate exploration, or "very thorough" to search across multiple locations and naming conventions.',
         "Investigate the codebase to answer the delegated question. Search and read relevant code, cite file locations, and explain the relationships you establish. Keep the investigation read-only, including shell commands; do not modify files.",
         {
           disallowedTools: EXPLORATION_DISALLOWED_TOOLS,
@@ -154,7 +154,7 @@ function candidates(
     definitions.push(
       base(
         "Plan",
-        "Develop an implementation plan from code and requirements.",
+        "Software architect agent for designing implementation plans. Use this when you need to plan the implementation strategy for a task. Returns step-by-step plans, identifies critical files, and considers architectural trade-offs.",
         "Read the relevant code and requirements, identify existing behavior and constraints, and produce an actionable implementation plan with affected files, tradeoffs, and validation steps. Keep all investigation read-only, including shell commands; do not modify files.",
         {
           disallowedTools: EXPLORATION_DISALLOWED_TOOLS,

@@ -49,8 +49,13 @@ test("catalogs follow the retained user history, refresh after compaction and su
   await wrapper.beforeModelRequest(signal);
   assert.equal(messages.length, 1);
   assert.equal(at(messages, 0).content.length, 3);
-  assert.match(textOf(at(messages, 0).content[1]), /reader/);
-  assert.match(textOf(at(messages, 0).content[2]), /owned/);
+  assert.deepEqual(at(messages, 0).reminders, [
+    "agent_listing",
+    "skill_listing",
+  ]);
+  assert.match(textOf(at(messages, 0).content[0]), /reader/);
+  assert.match(textOf(at(messages, 0).content[1]), /owned/);
+  assert.equal(textOf(at(messages, 0).content[2]), "owned task");
   assert.deepEqual(
     at(messages, 0).catalogAttachments?.map((record) => record.type),
     ["agent_listing_delta", "skill_listing"],
@@ -187,6 +192,7 @@ test("native catalog creation precedes display mutation and retains real row pla
   assert.deepEqual(Object.keys(target ?? {}).sort(), [
     "catalogAttachments",
     "content",
+    "reminders",
     "role",
   ]);
   await tools.beforeModelRequest?.(new AbortController().signal);

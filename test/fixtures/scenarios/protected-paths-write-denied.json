@@ -86,7 +86,17 @@
           "Write"
         ],
         "messages": [
-          { "role": "user", "blocks": [{ "kind": "text" }, { "kind": "text" }] }
+          {
+            "role": "user",
+            "blocks": [
+              { "kind": "text" },
+              { "kind": "text" },
+              { "kind": "text" },
+              { "kind": "text" },
+              { "kind": "text" },
+              { "kind": "text" }
+            ]
+          }
         ]
       },
       {
@@ -104,7 +114,14 @@
         "messages": [
           {
             "role": "user",
-            "blocks": [{ "kind": "text" }, { "kind": "text" }]
+            "blocks": [
+              { "kind": "text" },
+              { "kind": "text" },
+              { "kind": "text" },
+              { "kind": "text" },
+              { "kind": "text" },
+              { "kind": "text" }
+            ]
           },
           {
             "role": "assistant",
@@ -139,7 +156,14 @@
         "messages": [
           {
             "role": "user",
-            "blocks": [{ "kind": "text" }, { "kind": "text" }]
+            "blocks": [
+              { "kind": "text" },
+              { "kind": "text" },
+              { "kind": "text" },
+              { "kind": "text" },
+              { "kind": "text" },
+              { "kind": "text" }
+            ]
           },
           {
             "role": "assistant",
@@ -190,7 +214,14 @@
         "messages": [
           {
             "role": "user",
-            "blocks": [{ "kind": "text" }, { "kind": "text" }]
+            "blocks": [
+              { "kind": "text" },
+              { "kind": "text" },
+              { "kind": "text" },
+              { "kind": "text" },
+              { "kind": "text" },
+              { "kind": "text" }
+            ]
           },
           {
             "role": "assistant",
@@ -257,7 +288,14 @@
         "messages": [
           {
             "role": "user",
-            "blocks": [{ "kind": "text" }, { "kind": "text" }]
+            "blocks": [
+              { "kind": "text" },
+              { "kind": "text" },
+              { "kind": "text" },
+              { "kind": "text" },
+              { "kind": "text" },
+              { "kind": "text" }
+            ]
           },
           {
             "role": "assistant",

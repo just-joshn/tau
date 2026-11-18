@@ -99,7 +99,7 @@ test("agent updates use name presence, emit removed names, and return to initial
   if (delta.type !== "agent_listing_delta") throw Error("Expected agent delta");
   assert.deepEqual(delta.removedTypes, ["owned:reader"]);
   assert.equal(delta.isInitial, false);
-  assert.match(blockText(removed, 0), /removed/);
+  assert.match(blockText(removed, 0), /no longer available/);
   const restored = buildCatalogAttachments({
     ...base(),
     history: [...saved, ...history(removed)],

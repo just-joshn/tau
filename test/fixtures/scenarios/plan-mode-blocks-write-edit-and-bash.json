@@ -93,6 +93,10 @@
             "blocks": [
               { "kind": "text" },
               { "kind": "text" },
+              { "kind": "text" },
+              { "kind": "text" },
+              { "kind": "text" },
+              { "kind": "text" },
               { "kind": "text" }
             ]
           }
@@ -114,6 +118,10 @@
           {
             "role": "user",
             "blocks": [
+              { "kind": "text" },
+              { "kind": "text" },
+              { "kind": "text" },
+              { "kind": "text" },
               { "kind": "text" },
               { "kind": "text" },
               { "kind": "text" }
@@ -153,6 +161,10 @@
           {
             "role": "user",
             "blocks": [
+              { "kind": "text" },
+              { "kind": "text" },
+              { "kind": "text" },
+              { "kind": "text" },
               { "kind": "text" },
               { "kind": "text" },
               { "kind": "text" }
@@ -208,6 +220,10 @@
           {
             "role": "user",
             "blocks": [
+              { "kind": "text" },
+              { "kind": "text" },
+              { "kind": "text" },
+              { "kind": "text" },
               { "kind": "text" },
               { "kind": "text" },
               { "kind": "text" }
@@ -279,6 +295,10 @@
           {
             "role": "user",
             "blocks": [
+              { "kind": "text" },
+              { "kind": "text" },
+              { "kind": "text" },
+              { "kind": "text" },
               { "kind": "text" },
               { "kind": "text" },
               { "kind": "text" }

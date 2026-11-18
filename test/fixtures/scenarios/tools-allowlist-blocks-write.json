@@ -37,13 +37,33 @@
       {
         "path": "/v1/messages?beta=true",
         "tools": ["Grep", "Read"],
-        "messages": [{ "role": "user", "blocks": [{ "kind": "text" }] }]
+        "messages": [
+          {
+            "role": "user",
+            "blocks": [
+              { "kind": "text" },
+              { "kind": "text" },
+              { "kind": "text" },
+              { "kind": "text" },
+              { "kind": "text" }
+            ]
+          }
+        ]
       },
       {
         "path": "/v1/messages?beta=true",
         "tools": ["Grep", "Read"],
         "messages": [
-          { "role": "user", "blocks": [{ "kind": "text" }] },
+          {
+            "role": "user",
+            "blocks": [
+              { "kind": "text" },
+              { "kind": "text" },
+              { "kind": "text" },
+              { "kind": "text" },
+              { "kind": "text" }
+            ]
+          },
           {
             "role": "assistant",
             "blocks": [

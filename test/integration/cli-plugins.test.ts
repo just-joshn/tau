@@ -474,12 +474,12 @@ test(
           block.type === "text" && block.text?.includes("<system-reminder>"),
       );
     assert.match(
-      catalogs.find((block) => block.text?.includes("Agent types available"))
+      catalogs.find((block) => block.text?.includes("Available agent types"))
         ?.text ?? "",
       /owned:reader/,
     );
     assert.match(
-      catalogs.find((block) => block.text?.includes("Skills available"))
+      catalogs.find((block) => block.text?.includes("skills are available"))
         ?.text ?? "",
       /owned:prepare/,
     );

@@ -7,6 +7,7 @@ import type {
 } from "./types.js";
 import { resolveModelFacts } from "./reasoning.js";
 import { activeContextStart, contextTokens } from "./context-usage.js";
+import { foldRoundReminders } from "./context-reminders.js";
 import {
   normalizeHistoryMessages,
   type HistoryProjectionMessage,
@@ -89,7 +90,9 @@ export function projectMessages(
     // before that user round. Assistant/tool-result rows delimit the round.
     lifecycleOrdered.push(
       ...pending.filter((row) => row.contextPlacement === "subagent-start"),
-      ...pending.filter((row) => row.contextPlacement !== "subagent-start"),
+      ...foldRoundReminders(
+        pending.filter((row) => row.contextPlacement !== "subagent-start"),
+      ),
     );
     pending.length = 0;
   };

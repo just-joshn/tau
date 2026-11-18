@@ -753,7 +753,7 @@ test(
     assert.equal(bodies.length, 3);
     assert.deepEqual(bodies[1]?.tools, bodies[0]?.tools);
     assert.deepEqual(bodies[1]?.thinking, bodies[0]?.thinking);
-    assert.equal(bodies[1]?.system, bodies[0]?.system);
+    assert.deepEqual(bodies[1]?.system, bodies[0]?.system);
     assert.ok(
       !JSON.stringify(bodies[2]).includes("Original answer stays in history."),
     );
@@ -761,12 +761,14 @@ test(
     const [compacted] = bodies[2]?.messages ?? [];
     assert.ok(compacted);
     assert.equal(compacted.role, "user");
-    assert.equal(compacted.content.length, 2);
+    // The resumed turn's reminders lead the whole user round, summary included.
+    assert.equal(compacted.content.length, 3);
+    assert.match(compacted.content[0]?.text ?? "", /<total_tokens>/);
     assert.match(
-      compacted.content[0]?.text ?? "",
+      compacted.content[1]?.text ?? "",
       /Continue work on a\.ts;[\s\S]*\n$/,
     );
-    assert.deepEqual(compacted.content[1], {
+    assert.deepEqual(compacted.content[2], {
       type: "text",
       text: "next",
     });

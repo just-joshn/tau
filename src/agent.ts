@@ -130,7 +130,7 @@ export async function runAgent<
   tools: ToolExecutor;
   messages: Message[];
   model: string;
-  system: string;
+  system: import("./system-prompt.js").SystemPrompt;
   maxTokens: number;
   useModelTokenDefaults?: boolean;
   /** Read after tool/context updates for each model round. */

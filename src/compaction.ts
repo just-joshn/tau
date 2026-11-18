@@ -1,4 +1,5 @@
 import { integerSetting, triBoolean } from "./env-settings.js";
+import { systemPromptText } from "./system-prompt.js";
 import { resolveModelFacts } from "./reasoning.js";
 import {
   activeContextStart,
@@ -275,7 +276,7 @@ export async function compactContext(options: {
     messages.slice(start),
     options.planning,
     options.inputError,
-    Math.round(request.system.length / 4),
+    Math.round(systemPromptText(request.system).length / 4),
     estimateMessageTokens(summaryInstruction()),
   );
   let plan: SummaryPlan | undefined = manual
