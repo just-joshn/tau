@@ -4,24 +4,24 @@
 
 I anchored the review to the official repository at [commit `536a3352a050e47cb75f86be497ea304ef342301`](https://github.com/cursor/plugins/commit/536a3352a050e47cb75f86be497ea304ef342301), checked 46 source-file copies against their Git blob hashes, and checked the relevant Cursor platform documentation.
 
-| Pass | What I checked | Outcome |
-|---|---|---|
-| **Verification** | The claims in every section against the relevant skills, playbooks, agent definitions, and documentation. | The core descriptions were supported. Several operative requirements and limitations were missing. |
-| **Confirmation** | Seventeen documented workflow paths, including their handoffs, exceptions, and stopping points. | The overall model was consistent, but the diagram needed a blocked-work exit and clearer separation of optional activities. |
-| **Fact-check** | The complete explanation and proposed corrections, including source inconsistencies, overstatements, and possible overcorrections. | The corrections below are supported. Some statements needed qualification rather than reversal. |
+| Pass             | What I checked                                                                                                                     | Outcome                                                                                                                     |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| **Verification** | The claims in every section against the relevant skills, playbooks, agent definitions, and documentation.                          | The core descriptions were supported. Several operative requirements and limitations were missing.                          |
+| **Confirmation** | Seventeen documented workflow paths, including their handoffs, exceptions, and stopping points.                                    | The overall model was consistent, but the diagram needed a blocked-work exit and clearer separation of optional activities. |
+| **Fact-check**   | The complete explanation and proposed corrections, including source inconsistencies, overstatements, and possible overcorrections. | The corrections below are supported. Some statements needed qualification rather than reversal.                             |
 
 **This establishes what the inspected source instructs agents to do. Actual execution in your installed Cursor environment remains unverified:** I did not launch the plugin there, run its subagents, exercise its application controls, or perform real PR, CI, or merge operations.
 
 ### What needed correction or qualification
 
-| Area | Correction |
-|---|---|
-| **Delegation and Arena** | Delegation follows the selected playbook. Feature implementation requires delegation, and multiple valid implementation shapes trigger mandatory Arena comparison. My opening made delegation sound more discretionary. |
-| **Design and planning** | Architect explicitly considers two shapes, with Arena escalation for large or contested designs. A requested multi-phase plan is a separate deliverable with specific verification obligations and an execution stop. |
-| **Comment cleanup** | `/no-comments` can remove comments and cause accepted code repairs within scope. It is more active than my description conveyed. Constraint encodings have their own approval requirements. |
-| **Verification coverage** | Generating an application-verification skill proves its procedure on **one mapped feature**. That does not establish full application coverage. Formal checks also require demonstrating that they detect an intentionally broken variant. |
-| **PR and autopilot timing** | Autopilot-full opens a PR early so CI overlaps the work. Autopilot-stack stops at verified, green PRs and prohibits further pushes after handoff without the operator’s go. |
-| **The diagram and learning** | Failed or inconclusive work can end in an explicit limitation report. Reflect and Correct are separate invoked workflows; they are not an automatic final stage after every task. |
+| Area                         | Correction                                                                                                                                                                                                                                 |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Delegation and Arena**     | Delegation follows the selected playbook. Feature implementation requires delegation, and multiple valid implementation shapes trigger mandatory Arena comparison. My opening made delegation sound more discretionary.                    |
+| **Design and planning**      | Architect explicitly considers two shapes, with Arena escalation for large or contested designs. A requested multi-phase plan is a separate deliverable with specific verification obligations and an execution stop.                      |
+| **Comment cleanup**          | `/no-comments` can remove comments and cause accepted code repairs within scope. It is more active than my description conveyed. Constraint encodings have their own approval requirements.                                                |
+| **Verification coverage**    | Generating an application-verification skill proves its procedure on **one mapped feature**. That does not establish full application coverage. Formal checks also require demonstrating that they detect an intentionally broken variant. |
+| **PR and autopilot timing**  | Autopilot-full opens a PR early so CI overlaps the work. Autopilot-stack stops at verified, green PRs and prohibits further pushes after handoff without the operator’s go.                                                                |
+| **The diagram and learning** | Failed or inconclusive work can end in an explicit limitation report. Reflect and Correct are separate invoked workflows; they are not an automatic final stage after every task.                                                          |
 
 These corrections follow the operative feature, planning, cleanup, verification, autopilot, and reflection instructions. [GitHub](https://github.com/cursor/plugins/blob/main/pstack/skills/poteto-mode/playbooks/feature.md?utm_source=chatgpt.com)
 
@@ -37,14 +37,14 @@ The user supplies the desired result and constraints. The agent takes responsibi
 
 A useful way to understand its parts is:
 
-| Part | Function |
-|---|---|
-| **`/poteto-mode`** | Coordinates the task and selects its workflow. |
-| **Playbooks** | Define how particular kinds of work proceed. |
-| **Skills** | Supply focused methods for investigation, design, comparison, review, verification, and writing. |
-| **Agent definitions** | Give certain delegates their role-specific instructions. |
-| **Verification procedures and helpers** | Let agents exercise the project and collect evidence. |
-| **Engineering principles** | Guide choices about complexity, ownership, scope, and proof. |
+| Part                                    | Function                                                                                         |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| **`/poteto-mode`**                      | Coordinates the task and selects its workflow.                                                   |
+| **Playbooks**                           | Define how particular kinds of work proceed.                                                     |
+| **Skills**                              | Supply focused methods for investigation, design, comparison, review, verification, and writing. |
+| **Agent definitions**                   | Give certain delegates their role-specific instructions.                                         |
+| **Verification procedures and helpers** | Let agents exercise the project and collect evidence.                                            |
+| **Engineering principles**              | Guide choices about complexity, ownership, scope, and proof.                                     |
 
 This table is an explanatory model of the package. Cursor supplies the underlying agent, model, tools, and execution environment. Its documentation describes agents as a combination of instructions, tools, and a model; PSTACK supplies additional instructions and workflows for that system to follow. [Cursor Docs](https://cursor.com/docs/agent/overview?utm_source=chatgpt.com)
 
@@ -92,15 +92,15 @@ The useful ingredients are the goal, acceptance check, requested evidence, relev
 
 The route determines both the work and the stopping point:
 
-| Requested work | Expected outcome |
-|---|---|
-| Investigate or explain | Supported findings or a recommendation. |
-| Produce a multi-phase plan | A plan with dependencies and verification obligations, followed by a stop. |
-| Fix, build, or refactor | An implemented change with the required verification and delivery steps. |
-| Review a change | Findings supported by the applicable review procedure. |
-| Check or babysit a PR | A status report or progress toward merge-ready, according to the requested mode. |
-| Ship authorized work | Verified landing, followed by confirmation of actual merge state. |
-| Work autonomously | Continued execution toward an explicit finish condition, with recorded progress and defined limits. |
+| Requested work             | Expected outcome                                                                                    |
+| -------------------------- | --------------------------------------------------------------------------------------------------- |
+| Investigate or explain     | Supported findings or a recommendation.                                                             |
+| Produce a multi-phase plan | A plan with dependencies and verification obligations, followed by a stop.                          |
+| Fix, build, or refactor    | An implemented change with the required verification and delivery steps.                            |
+| Review a change            | Findings supported by the applicable review procedure.                                              |
+| Check or babysit a PR      | A status report or progress toward merge-ready, according to the requested mode.                    |
+| Ship authorized work       | Verified landing, followed by confirmation of actual merge state.                                   |
+| Work autonomously          | Continued execution toward an explicit finish condition, with recorded progress and defined limits. |
 
 For example, the Investigation playbook explicitly excludes code changes, PR creation, and babysitting. Its cited explanation is the deliverable. [github.com](https://github.com/cursor/plugins/blob/main/pstack/skills/poteto-mode/playbooks/investigation.md?utm_source=chatgpt.com)
 
@@ -190,11 +190,11 @@ Interrogate gives adversaries a change and its intended behavior. Each alleged d
 
 The coordinator reruns findings, retains demonstrated violations of intent, drops unsupported claims, and consolidates shared causes. It returns findings without applying fixes. A result with no verified findings is valid, although it does not establish that no bugs exist. [github.com](https://github.com/cursor/plugins/blob/main/pstack/skills/interrogate/SKILL.md?utm_source=chatgpt.com)
 
-| Workflow | Main question |
-|---|---|
-| **Arena** | Which implementation or design should we build from? |
-| **Swarm** | Have we covered the required work, or which attempt satisfies the declared selection rule? |
-| **Interrogate** | What can we demonstrate is wrong with this change? |
+| Workflow        | Main question                                                                              |
+| --------------- | ------------------------------------------------------------------------------------------ |
+| **Arena**       | Which implementation or design should we build from?                                       |
+| **Swarm**       | Have we covered the required work, or which attempt satisfies the declared selection rule? |
+| **Interrogate** | What can we demonstrate is wrong with this change?                                         |
 
 ## 8. Implementation includes testing and cleanup
 

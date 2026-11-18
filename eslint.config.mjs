@@ -2,16 +2,29 @@ import { defineConfig } from "eslint/config";
 import tseslint from "typescript-eslint";
 
 export default defineConfig(
-  { ignores: ["dist/", "artifacts/", "scripts/differential/", "scripts/ghidra/"] },
+  {
+    ignores: [
+      "dist/",
+      "artifacts/",
+      "scripts/differential/",
+      "scripts/ghidra/",
+    ],
+  },
   {
     files: ["src/**/*.ts", "test/**/*.ts", "scripts/*.ts"],
     extends: [tseslint.configs.base],
     languageOptions: {
-      parserOptions: { projectService: true, tsconfigRootDir: import.meta.dirname },
+      parserOptions: {
+        projectService: true,
+        tsconfigRootDir: import.meta.dirname,
+      },
     },
     linterOptions: { reportUnusedDisableDirectives: "error" },
     rules: {
-      "@typescript-eslint/consistent-type-assertions": ["error", { assertionStyle: "never" }],
+      "@typescript-eslint/consistent-type-assertions": [
+        "error",
+        { assertionStyle: "never" },
+      ],
       "@typescript-eslint/no-explicit-any": "error",
       "@typescript-eslint/no-non-null-assertion": "error",
       "@typescript-eslint/no-unnecessary-type-assertion": "error",

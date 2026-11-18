@@ -10,22 +10,22 @@ Thirty bounded spans, each at most 8 KiB, match the executable byte for byte. Al
 
 Selected original executable offsets (not module-relative):
 
-| Contract | Module | Offset | Bytes |
-| --- | --- | ---: | ---: |
-| SDK fetch timer | chunk-vawgpkfg.js | `0x11450a26` | 1040 |
-| Duration resolution | same | `0x11477137` | 929 |
-| First-header gate/window/sleep sampling | same | `0x114775e0` | 1417 |
-| Suspend classification | same | `0x11477c8d` | 640 |
-| Byte-idle wrapper | same | `0x1147818e` | 1926 |
-| Fetch/watchdog composition | same | `0x11478b66` | 3813 |
-| Dual-clock timer coalescing | same | `0x11471767` | 1534 |
-| Nonstream deadline | chunk-4h798pp0.js | `0x11a618f4` | 124 |
-| Nonstream request/body scope | same | `0x11a61eb4` | 3402 |
-| Active event configuration | same | `0x11a7f473` | 312 |
-| Event progress reset | same | `0x11a7da03` | 730 |
-| Consecutive ping limit | same | `0x11a7fe66` | 116 |
-| Byte-to-ping heartbeat bridge | same | `0x11a63b2e` | 887 |
-| Header retry window selection | chunk-d73xe1mr.js | `0x11068fbe` | 372 |
+| Contract                                | Module            |       Offset | Bytes |
+| --------------------------------------- | ----------------- | -----------: | ----: |
+| SDK fetch timer                         | chunk-vawgpkfg.js | `0x11450a26` |  1040 |
+| Duration resolution                     | same              | `0x11477137` |   929 |
+| First-header gate/window/sleep sampling | same              | `0x114775e0` |  1417 |
+| Suspend classification                  | same              | `0x11477c8d` |   640 |
+| Byte-idle wrapper                       | same              | `0x1147818e` |  1926 |
+| Fetch/watchdog composition              | same              | `0x11478b66` |  3813 |
+| Dual-clock timer coalescing             | same              | `0x11471767` |  1534 |
+| Nonstream deadline                      | chunk-4h798pp0.js | `0x11a618f4` |   124 |
+| Nonstream request/body scope            | same              | `0x11a61eb4` |  3402 |
+| Active event configuration              | same              | `0x11a7f473` |   312 |
+| Event progress reset                    | same              | `0x11a7da03` |   730 |
+| Consecutive ping limit                  | same              | `0x11a7fe66` |   116 |
+| Byte-to-ping heartbeat bridge           | same              | `0x11a63b2e` |   887 |
+| Header retry window selection           | chunk-d73xe1mr.js | `0x11068fbe` |   372 |
 
 Remaining verified spans cover direct-origin/request-ID gates, typed settings and number/boolean grammar. The ledger retains exact offsets/hashes for all thirty.
 
@@ -35,13 +35,13 @@ The SDK fetch timer is cleared when fetch settles, which normally means response
 
 Source fallback durations for a trusted direct provider:
 
-| Layer | Fallback | Lifetime |
-| --- | ---: | --- |
-| SDK request | 600,000 ms | Dispatch until response headers |
-| First-header watchdog | 180,000 ms plus upload allowance | Eligible request until response headers |
-| Byte idle | 180,000 ms | Stream creation or latest delivered byte chunk |
-| Event idle | 300,000 ms | Stream creation or qualifying parsed progress |
-| Nonstream | 300,000 ms local / 120,000 ms remote | Dispatch through complete JSON response |
+| Layer                 |                             Fallback | Lifetime                                       |
+| --------------------- | -----------------------------------: | ---------------------------------------------- |
+| SDK request           |                           600,000 ms | Dispatch until response headers                |
+| First-header watchdog |     180,000 ms plus upload allowance | Eligible request until response headers        |
+| Byte idle             |                           180,000 ms | Stream creation or latest delivered byte chunk |
+| Event idle            |                           300,000 ms | Stream creation or qualifying parsed progress  |
+| Nonstream             | 300,000 ms local / 120,000 ms remote | Dispatch through complete JSON response        |
 
 The source has provider, request-ID and feature gates. Tau implements the direct Messages provider: `api.anthropic.com` is trusted by exact URL host comparison, and an explicit `_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL` can opt a custom origin into that profile. Other custom URLs use a 300,000 ms byte fallback and have no first-header watchdog. Byte/event watchdogs still apply to their accepted SSE bodies. Tau does not fetch feature/configuration state; `resolveTimeoutPolicy` accepts caller-supplied configuration/features for independent embedding and tests.
 
@@ -49,17 +49,17 @@ The source has provider, request-ID and feature gates. Tau implements the direct
 
 Tau resolves these once when constructing its provider:
 
-| Environment variable | Meaning |
-| --- | --- |
-| `API_TIMEOUT_MS` | Typed integer request duration; also the nonstream duration if positive |
-| `CLAUDE_STREAM_IDLE_TIMEOUT_MS` | Positive raw number overriding event-idle configuration; event duration has a 300,000 ms floor |
-| `CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS` | Positive finite raw number overriding byte-idle duration |
-| `CLAUDE_STREAM_FIRST_BYTE_TIMEOUT_MS` | Positive typed integer overriding first-header base duration |
-| `CLAUDE_ENABLE_BYTE_WATCHDOG` | Tri-state boolean, fallback enabled; also gates first-header and raw-byte heartbeat support |
-| `CLAUDE_ENABLE_STREAM_WATCHDOG` | Tri-state boolean, fallback enabled; controls parsed-event deadline |
-| `CLAUDE_CODE_STREAM_TIMER_SLACK_MS` | Digits-only typed integer from 0 through 1000; fallback 0 |
-| `CLAUDE_CODE_REMOTE` | Selects the shorter nonstream fallback |
-| `_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL` | Explicit direct-profile origin override |
+| Environment variable                       | Meaning                                                                                        |
+| ------------------------------------------ | ---------------------------------------------------------------------------------------------- |
+| `API_TIMEOUT_MS`                           | Typed integer request duration; also the nonstream duration if positive                        |
+| `CLAUDE_STREAM_IDLE_TIMEOUT_MS`            | Positive raw number overriding event-idle configuration; event duration has a 300,000 ms floor |
+| `CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS`       | Positive finite raw number overriding byte-idle duration                                       |
+| `CLAUDE_STREAM_FIRST_BYTE_TIMEOUT_MS`      | Positive typed integer overriding first-header base duration                                   |
+| `CLAUDE_ENABLE_BYTE_WATCHDOG`              | Tri-state boolean, fallback enabled; also gates first-header and raw-byte heartbeat support    |
+| `CLAUDE_ENABLE_STREAM_WATCHDOG`            | Tri-state boolean, fallback enabled; controls parsed-event deadline                            |
+| `CLAUDE_CODE_STREAM_TIMER_SLACK_MS`        | Digits-only typed integer from 0 through 1000; fallback 0                                      |
+| `CLAUDE_CODE_REMOTE`                       | Selects the shorter nonstream fallback                                                         |
+| `_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL` | Explicit direct-profile origin override                                                        |
 
 Byte and first-header base values clamp to 10,000–1,800,000 ms. Without a positive raw stream setting, valid remote `stream_idle_timeout_ms` values clamp at 1,800,000 before the event floor is applied. Remote duration fields must be integers from 10,000 through 2,147,483,647. A stream-setting override also changes the byte fallback, unless separately overridden.
 

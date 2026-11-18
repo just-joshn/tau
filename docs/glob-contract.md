@@ -16,12 +16,12 @@ The JavaScript wrapper delegates matching to **rg**, not a JavaScript RegExp imp
 
 Parent-verified spans in the original executable:
 
-| Module/symbols | Absolute file offset | Bytes | Evidence |
-| --- | ---: | ---: | --- |
-| `chunk-4h798pp0.js`, path/backend helpers | 294675902 | 3126 | `ev_c1fa1152e6ec454f21b0af0be09bac1d3ed3bbf258fd6f874bfa73b810977a0c` |
-| Same, `EKr` flags and spawn options | 294677023 | 900 | `ev_9ebedac0a13b91b925f0abd06563a65acd9b89462c983c704607063b4f76382f` |
-| Same, `PKr/MKr/OKr/IKr/o1` | 294680947 | 4428 | `ev_c9e8631383aad323b4d26c61a5210fd3b817632fe647510fd4046583b134f2b2` |
-| Same, `Tx` NUL validation | 294607502 | 198 | `ev_2c50f80bae350b1569cafb2897ccefe1725e8b0fff5db2d043d4242f63414d8b` |
+| Module/symbols                            | Absolute file offset | Bytes | Evidence                                                              |
+| ----------------------------------------- | -------------------: | ----: | --------------------------------------------------------------------- |
+| `chunk-4h798pp0.js`, path/backend helpers |            294675902 |  3126 | `ev_c1fa1152e6ec454f21b0af0be09bac1d3ed3bbf258fd6f874bfa73b810977a0c` |
+| Same, `EKr` flags and spawn options       |            294677023 |   900 | `ev_9ebedac0a13b91b925f0abd06563a65acd9b89462c983c704607063b4f76382f` |
+| Same, `PKr/MKr/OKr/IKr/o1`                |            294680947 |  4428 | `ev_c9e8631383aad323b4d26c61a5210fd3b817632fe647510fd4046583b134f2b2` |
+| Same, `Tx` NUL validation                 |            294607502 |   198 | `ev_2c50f80bae350b1569cafb2897ccefe1725e8b0fff5db2d043d4242f63414d8b` |
 
 The native `rg` route and its typing limits are documented in [the Ghidra investigation](ghidra-native.md). Native decompilation does not establish the full glob language here.
 
@@ -29,13 +29,13 @@ The native `rg` route and its typing limits are documented in [the Ghidra invest
 
 `src/glob.ts` implements the existing small language without executing recovered code or requiring rg:
 
-| Pattern element | Meaning |
-| --- | --- |
-| `*` | Zero or more non-slash string units |
-| `?` | Exactly one non-slash UTF-16 string unit |
-| `**` | Zero or more string units, including slashes and line terminators |
-| `**/` | Nothing, or a prefix ending in a slash |
-| Everything else | Literal characters, including braces, brackets and backslashes |
+| Pattern element | Meaning                                                           |
+| --------------- | ----------------------------------------------------------------- |
+| `*`             | Zero or more non-slash string units                               |
+| `?`             | Exactly one non-slash UTF-16 string unit                          |
+| `**`            | Zero or more string units, including slashes and line terminators |
+| `**/`           | Nothing, or a prefix ending in a slash                            |
+| Everything else | Literal characters, including braces, brackets and backslashes    |
 
 Matching consumes the **entire** workspace-relative candidate. For example, `**/*.ts` includes root and nested files, while `*.ts` excludes nested files. No brace expansion, character classes, negation, escape grammar or native glob parity is claimed.
 

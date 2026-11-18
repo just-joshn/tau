@@ -1,49 +1,185 @@
 import { z } from "zod";
 import { setTimeout as wait } from "node:timers/promises";
-import { assistantBlockSchema, type Completion, type CompletionRequest, type Provider } from "./types.js";
-import { MessageStream, StreamFailure, StreamOutputLimit, streamEventSchema, protocolError, parseJson, mergeUsage } from "./message-stream.js";
-import { MAX_RETRIES, MAX_RETRY_DELAY_MS, resolveRetryConfiguration, retryableStatus, retryDelay } from "./retry.js";
+import {
+  assistantBlockSchema,
+  type Completion,
+  type CompletionRequest,
+  type Provider,
+} from "./types.js";
+import {
+  MessageStream,
+  StreamFailure,
+  StreamOutputLimit,
+  streamEventSchema,
+  protocolError,
+  parseJson,
+  mergeUsage,
+} from "./message-stream.js";
+import {
+  MAX_RETRIES,
+  MAX_RETRY_DELAY_MS,
+  resolveRetryConfiguration,
+  retryableStatus,
+  retryDelay,
+} from "./retry.js";
 import { RequestAttemptLedger } from "./attempt-ledger.js";
-import { apiErrorInfo, betaHeaderRejected, ProviderHttpError, readErrorMetadata, resumePrefillRefused, terminalHttpFailure } from "./http-error.js";
-import { StreamSuspendedError, TransportDeadline, TransportTimeoutError, systemClock, type Clock } from "./deadline.js";
+import {
+  apiErrorInfo,
+  betaHeaderRejected,
+  ProviderHttpError,
+  readErrorMetadata,
+  resumePrefillRefused,
+  terminalHttpFailure,
+} from "./http-error.js";
+import {
+  StreamSuspendedError,
+  TransportDeadline,
+  TransportTimeoutError,
+  systemClock,
+  type Clock,
+} from "./deadline.js";
 import { resolveTimeoutPolicy, type TimeoutPolicy } from "./timeout-policy.js";
 import { triBoolean } from "./env-settings.js";
-import { defaultOutputTokens, resolveModelFacts, supportsInterleavedThinking, thinkingRequest, type ThinkingOptions } from "./reasoning.js";
+import {
+  defaultOutputTokens,
+  resolveModelFacts,
+  supportsInterleavedThinking,
+  thinkingRequest,
+  type ThinkingOptions,
+} from "./reasoning.js";
 import { decideRecovery, type RecoveryPolicy } from "./recovery.js";
-import { markThinkingStripped, planThinkingStrip, projectMessages, type ThinkingStrip } from "./thinking-history.js";
-import { contextWindow, LONG_CONTEXT_BETA, type ContextPolicy } from "./context-window.js";
+import {
+  markThinkingStripped,
+  planThinkingStrip,
+  projectMessages,
+  type ThinkingStrip,
+} from "./thinking-history.js";
+import {
+  contextWindow,
+  LONG_CONTEXT_BETA,
+  type ContextPolicy,
+} from "./context-window.js";
 import { clearedInputTokens } from "./context-usage.js";
 import { OutputLimitRepair } from "./output-limit.js";
 import { contextRejection } from "./context-error.js";
-import { queryEffortOutputConfig, resolveQueryEffort, type QueryEffortCapabilities, type QueryEffortSelection } from "./query-model-effort.js";
-import { normalizeAssistantToolBlocks, pureToolCallNormalizationBinding } from "./tool-call-normalization.js";
+import {
+  queryEffortOutputConfig,
+  resolveQueryEffort,
+  type QueryEffortCapabilities,
+  type QueryEffortSelection,
+} from "./query-model-effort.js";
+import {
+  normalizeAssistantToolBlocks,
+  pureToolCallNormalizationBinding,
+} from "./tool-call-normalization.js";
 
-function normalizeCommittedToolBlocks(content: Completion["content"], request: CompletionRequest): Completion["content"] {
-  const known = new Set(request.tools.map(tool => tool.name));
-  return normalizeAssistantToolBlocks(content, { resolveTool: name => known.has(name) ? pureToolCallNormalizationBinding(name) : undefined });
+function normalizeCommittedToolBlocks(
+  content: Completion["content"],
+  request: CompletionRequest,
+): Completion["content"] {
+  const known = new Set(request.tools.map((tool) => tool.name));
+  return normalizeAssistantToolBlocks(content, {
+    resolveTool: (name) =>
+      known.has(name) ? pureToolCallNormalizationBinding(name) : undefined,
+  });
 }
 
 const tokenCount = z.number().int().nonnegative();
-const jsonMessageSchema = z.object({ type: z.literal("message"), role: z.literal("assistant"), model: z.string().optional(), id: z.string().optional(), resumable: z.unknown().optional(), context_management: z.unknown().optional(), content: z.array(assistantBlockSchema), stop_reason: z.string().min(1), usage: z.object({ input_tokens: tokenCount, output_tokens: tokenCount, cache_creation_input_tokens: tokenCount.nullable().optional(), cache_read_input_tokens: tokenCount.nullable().optional(), iterations: z.array(z.unknown()).optional(), cache_creation: z.object({ ephemeral_1h_input_tokens: tokenCount.optional(), ephemeral_5m_input_tokens: tokenCount.optional() }).nullable().optional() }) });
+const jsonMessageSchema = z.object({
+  type: z.literal("message"),
+  role: z.literal("assistant"),
+  model: z.string().optional(),
+  id: z.string().optional(),
+  resumable: z.unknown().optional(),
+  context_management: z.unknown().optional(),
+  content: z.array(assistantBlockSchema),
+  stop_reason: z.string().min(1),
+  usage: z.object({
+    input_tokens: tokenCount,
+    output_tokens: tokenCount,
+    cache_creation_input_tokens: tokenCount.nullable().optional(),
+    cache_read_input_tokens: tokenCount.nullable().optional(),
+    iterations: z.array(z.unknown()).optional(),
+    cache_creation: z
+      .object({
+        ephemeral_1h_input_tokens: tokenCount.optional(),
+        ephemeral_5m_input_tokens: tokenCount.optional(),
+      })
+      .nullable()
+      .optional(),
+  }),
+});
 const MAX_EVENT_BYTES = 1024 * 1024;
 const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
 // The recovered SDK gates on the wire label before parsing data. An absent SSE
 // event is not promoted to "message", and a label does not replace body.type.
 const SSE_DATA_EVENTS = new Set([
-  "completion", "message_start", "message_delta", "message_stop", "content_block_start", "content_block_delta", "content_block_stop", "message",
-  "user.message", "user.interrupt", "user.tool_confirmation", "user.custom_tool_result", "user.tool_result",
-  "agent.message", "agent.thinking", "agent.tool_use", "agent.tool_result", "agent.mcp_tool_use", "agent.mcp_tool_result", "agent.custom_tool_use", "agent.thread_context_compacted",
-  "session.status_running", "session.status_idle", "session.status_rescheduled", "session.status_terminated", "session.error", "session.deleted", "session.updated",
-  "span.model_request_start", "span.model_request_end", "span.outcome_evaluation_start", "span.outcome_evaluation_ongoing", "span.outcome_evaluation_end", "user.define_outcome",
-  "agent.thread_message_received", "agent.thread_message_sent", "agent.session_thread_message_received", "agent.session_thread_message_sent",
-  "session.thread_created", "session.thread_status_created", "session.thread_status_running", "session.thread_status_idle", "session.thread_status_rescheduled", "session.thread_status_terminated",
-  "event_start", "event_delta", "system.message",
+  "completion",
+  "message_start",
+  "message_delta",
+  "message_stop",
+  "content_block_start",
+  "content_block_delta",
+  "content_block_stop",
+  "message",
+  "user.message",
+  "user.interrupt",
+  "user.tool_confirmation",
+  "user.custom_tool_result",
+  "user.tool_result",
+  "agent.message",
+  "agent.thinking",
+  "agent.tool_use",
+  "agent.tool_result",
+  "agent.mcp_tool_use",
+  "agent.mcp_tool_result",
+  "agent.custom_tool_use",
+  "agent.thread_context_compacted",
+  "session.status_running",
+  "session.status_idle",
+  "session.status_rescheduled",
+  "session.status_terminated",
+  "session.error",
+  "session.deleted",
+  "session.updated",
+  "span.model_request_start",
+  "span.model_request_end",
+  "span.outcome_evaluation_start",
+  "span.outcome_evaluation_ongoing",
+  "span.outcome_evaluation_end",
+  "user.define_outcome",
+  "agent.thread_message_received",
+  "agent.thread_message_sent",
+  "agent.session_thread_message_received",
+  "agent.session_thread_message_sent",
+  "session.thread_created",
+  "session.thread_status_created",
+  "session.thread_status_running",
+  "session.thread_status_idle",
+  "session.thread_status_rescheduled",
+  "session.thread_status_terminated",
+  "event_start",
+  "event_delta",
+  "system.message",
 ]);
-const MESSAGE_EVENT_TYPES = new Set(["ping", "message_start", "message_delta", "message_stop", "content_block_start", "content_block_delta", "content_block_stop"]);
-function abortIfNeeded(signal: AbortSignal): void { if (signal.aborted) throw new DOMException("Request aborted", "AbortError"); }
+const MESSAGE_EVENT_TYPES = new Set([
+  "ping",
+  "message_start",
+  "message_delta",
+  "message_stop",
+  "content_block_start",
+  "content_block_delta",
+  "content_block_stop",
+]);
+function abortIfNeeded(signal: AbortSignal): void {
+  if (signal.aborted) throw new DOMException("Request aborted", "AbortError");
+}
 class ModelFallback extends Error {}
 export class ModelUnavailableError extends Error {
-  constructor() { super("Selected model is unavailable"); this.name = "ModelUnavailableError"; }
+  constructor() {
+    super("Selected model is unavailable");
+    this.name = "ModelUnavailableError";
+  }
 }
 function withoutCacheControl<T extends object>(value: T): T {
   const rest = { ...value };
@@ -55,19 +191,32 @@ export const QUERY_EFFORT_BETA = "effort-2025-11-24";
 let resumptionHeaderRefused = false;
 const contextRefusedModels = new Set<string>();
 const effortRefusedModels = new Set<string>();
-type ContextRetry = { suppress: boolean; mode: "idle" | "retrying" | "guessing" | "spent" | "unproven" };
+type ContextRetry = {
+  suppress: boolean;
+  mode: "idle" | "retrying" | "guessing" | "spent" | "unproven";
+};
 
 export interface ProviderQueryEffortPolicy {
   /** Actual request model, including fallback. Undefined leaves undeclared requests untouched. */
   capabilities(model: string): QueryEffortCapabilities | undefined;
-  selection?(request: Readonly<CompletionRequest>): Omit<QueryEffortSelection, "capabilities" | "turnEffort">;
+  selection?(
+    request: Readonly<CompletionRequest>,
+  ): Omit<QueryEffortSelection, "capabilities" | "turnEffort">;
   /** Explicit extra-body output config, before ordinary effort insertion. */
-  outputConfig?(request: Readonly<CompletionRequest>): Readonly<Record<string, unknown>> | undefined;
+  outputConfig?(
+    request: Readonly<CompletionRequest>,
+  ): Readonly<Record<string, unknown>> | undefined;
 }
 function effortUnsupported(message: string, code?: string): boolean {
   const lower = message.toLowerCase();
-  return code === "effort_unsupported" || lower.includes("effort parameter") && lower.includes("not support") ||
-    lower.includes("output_config") && lower.includes("effort") && lower.includes("extra inputs are not permitted") || betaHeaderRejected(message, QUERY_EFFORT_BETA);
+  return (
+    code === "effort_unsupported" ||
+    (lower.includes("effort parameter") && lower.includes("not support")) ||
+    (lower.includes("output_config") &&
+      lower.includes("effort") &&
+      lower.includes("extra inputs are not permitted")) ||
+    betaHeaderRejected(message, QUERY_EFFORT_BETA)
+  );
 }
 
 export class AnthropicProvider implements Provider {
@@ -86,39 +235,97 @@ export class AnthropicProvider implements Provider {
   private readonly modelAvailable: ((model: string) => boolean) | undefined;
   private readonly queryEffortPolicy: ProviderQueryEffortPolicy | undefined;
   private contextFacts(model: string) {
-    return contextWindow(model, { ...this.contextPolicy, context1mRefused: this.contextPolicy.context1mRefused === true || contextRefusedModels.has(resolveModelFacts(model).wire.toLowerCase()) });
+    return contextWindow(model, {
+      ...this.contextPolicy,
+      context1mRefused:
+        this.contextPolicy.context1mRefused === true ||
+        contextRefusedModels.has(resolveModelFacts(model).wire.toLowerCase()),
+    });
   }
-  contextWindowTokens(model: string): number { return this.contextFacts(model).window; }
-  contextWindow(model: string) { return this.contextFacts(model); }
-  outputTokenLimit(model: string): number { return this.learnedOutputLimits.get(resolveModelFacts(model).wire.toLowerCase()) ?? Infinity; }
-  resetRequestLimits(): void { this.learnedOutputLimits.clear(); }
-  canUseModel(model: string): boolean { return this.modelAvailable?.(model) ?? true; }
+  contextWindowTokens(model: string): number {
+    return this.contextFacts(model).window;
+  }
+  contextWindow(model: string) {
+    return this.contextFacts(model);
+  }
+  outputTokenLimit(model: string): number {
+    return (
+      this.learnedOutputLimits.get(
+        resolveModelFacts(model).wire.toLowerCase(),
+      ) ?? Infinity
+    );
+  }
+  resetRequestLimits(): void {
+    this.learnedOutputLimits.clear();
+  }
+  canUseModel(model: string): boolean {
+    return this.modelAvailable?.(model) ?? true;
+  }
   get thinkingResumption(): boolean {
-    return this.enableThinkingResumption && !resumptionHeaderRefused && triBoolean(process.env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS) !== true;
+    return (
+      this.enableThinkingResumption &&
+      !resumptionHeaderRefused &&
+      triBoolean(process.env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS) !== true
+    );
   }
 
   /** Auxiliary direct-provider count request; independent of completion admission/recovery. */
-  async countFileTokens(request: { model: string; text: string; signal: AbortSignal }): Promise<number | undefined> {
+  async countFileTokens(request: {
+    model: string;
+    text: string;
+    signal: AbortSignal;
+  }): Promise<number | undefined> {
     if (!this.canUseModel(request.model)) return;
-    const body = JSON.stringify({ model: resolveModelFacts(request.model).wire,
-      messages: [{ role: "user", content: request.text }], tools: [] });
+    const body = JSON.stringify({
+      model: resolveModelFacts(request.model).wire,
+      messages: [{ role: "user", content: request.text }],
+      tools: [],
+    });
     for (let attempt = 0; attempt < 2; attempt++) {
       request.signal.throwIfAborted();
-      const deadline = new TransportDeadline(request.signal, this.timeoutPolicy, this.clock, false, Buffer.byteLength(body), false);
+      const deadline = new TransportDeadline(
+        request.signal,
+        this.timeoutPolicy,
+        this.clock,
+        false,
+        Buffer.byteLength(body),
+        false,
+      );
       let response: Response | undefined;
       let retry = false;
       try {
         try {
-          response = await fetch(`${this.endpoint}/count_tokens?beta=true`, { method: "POST", body, signal: deadline.signal, redirect: "manual",
-            headers: { "content-type": "application/json", "anthropic-version": "2023-06-01", "x-api-key": this.apiKey, "anthropic-beta": "token-counting-2024-11-01" } });
+          response = await fetch(`${this.endpoint}/count_tokens?beta=true`, {
+            method: "POST",
+            body,
+            signal: deadline.signal,
+            redirect: "manual",
+            headers: {
+              "content-type": "application/json",
+              "anthropic-version": "2023-06-01",
+              "x-api-key": this.apiKey,
+              "anthropic-beta": "token-counting-2024-11-01",
+            },
+          });
           deadline.headersReceived();
-        } catch { request.signal.throwIfAborted(); retry = true; }
+        } catch {
+          request.signal.throwIfAborted();
+          retry = true;
+        }
         if (response) {
           if (!response.ok) {
             retry = retryableStatus(response.status, response.headers);
             await response.body?.cancel().catch(() => {});
-          } else if (response.body && response.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase() === "application/json") {
-            const reader = response.body.getReader(), chunks: Uint8Array[] = [];
+          } else if (
+            response.body &&
+            response.headers
+              .get("content-type")
+              ?.split(";")[0]
+              ?.trim()
+              .toLowerCase() === "application/json"
+          ) {
+            const reader = response.body.getReader(),
+              chunks: Uint8Array[] = [];
             let bytes = 0;
             try {
               for (;;) {
@@ -130,191 +337,492 @@ export class AnthropicProvider implements Provider {
                 chunks.push(chunk.value);
               }
               deadline.check();
-              const parsed = z.object({ input_tokens: tokenCount }).safeParse(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks))));
+              const parsed = z
+                .object({ input_tokens: tokenCount })
+                .safeParse(
+                  JSON.parse(
+                    new TextDecoder("utf-8", { fatal: true }).decode(
+                      Buffer.concat(chunks),
+                    ),
+                  ),
+                );
               return parsed.success ? parsed.data.input_tokens : undefined;
-            } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
+            } finally {
+              await reader.cancel().catch(() => {});
+              reader.releaseLock();
+            }
           } else await response.body?.cancel().catch(() => {});
         }
-      } catch { request.signal.throwIfAborted(); return; }
-      finally { deadline.close(); }
+      } catch {
+        request.signal.throwIfAborted();
+        return;
+      } finally {
+        deadline.close();
+      }
       if (!retry || attempt === 1) return;
       // SDK count calls use downward jitter. Keep tau's existing 60-second retry wait ceiling.
       const headers = response?.headers;
-      const hint = headers?.get("retry-after-ms"), seconds = headers?.get("retry-after");
+      const hint = headers?.get("retry-after-ms"),
+        seconds = headers?.get("retry-after");
       let delay = hint ? Number.parseFloat(hint) : NaN;
-      if (!(delay > 0) && seconds) delay = Number.isNaN(Number.parseFloat(seconds)) ? Date.parse(seconds) - Date.now() : Number.parseFloat(seconds) * 1000;
-      if (!Number.isFinite(delay) || delay <= 0 || delay > 2147483647) delay = 500 * (1 - Math.random() * 0.25);
-      await wait(Math.min(MAX_RETRY_DELAY_MS, delay), undefined, { signal: request.signal });
+      if (!(delay > 0) && seconds)
+        delay = Number.isNaN(Number.parseFloat(seconds))
+          ? Date.parse(seconds) - Date.now()
+          : Number.parseFloat(seconds) * 1000;
+      if (!Number.isFinite(delay) || delay <= 0 || delay > 2147483647)
+        delay = 500 * (1 - Math.random() * 0.25);
+      await wait(Math.min(MAX_RETRY_DELAY_MS, delay), undefined, {
+        signal: request.signal,
+      });
     }
   }
 
-  constructor(options: { apiKey: string; baseUrl?: string; maxRetries?: number; allowNonStreamingFallback?: boolean; timeoutPolicy?: TimeoutPolicy; clock?: Clock; recoveryPolicy?: Partial<Omit<RecoveryPolicy, "maxRetries">>; fallbackModel?: string; thinking?: ThinkingOptions; thinkingResumption?: boolean; contextPolicy?: ContextPolicy; modelAvailable?: (model: string) => boolean; queryEffortPolicy?: ProviderQueryEffortPolicy }) {
+  constructor(options: {
+    apiKey: string;
+    baseUrl?: string;
+    maxRetries?: number;
+    allowNonStreamingFallback?: boolean;
+    timeoutPolicy?: TimeoutPolicy;
+    clock?: Clock;
+    recoveryPolicy?: Partial<Omit<RecoveryPolicy, "maxRetries">>;
+    fallbackModel?: string;
+    thinking?: ThinkingOptions;
+    thinkingResumption?: boolean;
+    contextPolicy?: ContextPolicy;
+    modelAvailable?: (model: string) => boolean;
+    queryEffortPolicy?: ProviderQueryEffortPolicy;
+  }) {
     this.apiKey = options.apiKey;
     this.thinkingOptions = options.thinking ?? {};
     this.contextPolicy = options.contextPolicy ?? {};
     this.modelAvailable = options.modelAvailable;
     this.queryEffortPolicy = options.queryEffortPolicy;
-    this.enableThinkingResumption = options.thinkingResumption ?? triBoolean(process.env.TAU_THINKING_RESUMPTION) === true;
-    this.fallbackModels = [...new Set(options.fallbackModel?.split(",").map(model => model.trim()).filter(Boolean) ?? [])];
-    if (options.fallbackModel !== undefined && this.fallbackModels.length === 0) throw new Error("Invalid fallback model");
-    this.allowNonStreamingFallback = (options.allowNonStreamingFallback ?? true) && triBoolean(process.env.CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK) !== true;
+    this.enableThinkingResumption =
+      options.thinkingResumption ??
+      triBoolean(process.env.TAU_THINKING_RESUMPTION) === true;
+    this.fallbackModels = [
+      ...new Set(
+        options.fallbackModel
+          ?.split(",")
+          .map((model) => model.trim())
+          .filter(Boolean) ?? [],
+      ),
+    ];
+    if (options.fallbackModel !== undefined && this.fallbackModels.length === 0)
+      throw new Error("Invalid fallback model");
+    this.allowNonStreamingFallback =
+      (options.allowNonStreamingFallback ?? true) &&
+      triBoolean(process.env.CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK) !==
+        true;
     const retries = resolveRetryConfiguration();
-    this.recoveryOptions = { persistent: retries.watchdog, persistentCapacityOnly: retries.capacityOnly, ...options.recoveryPolicy, hasFallbackModel: this.fallbackModels.length > 0 };
+    this.recoveryOptions = {
+      persistent: retries.watchdog,
+      persistentCapacityOnly: retries.capacityOnly,
+      ...options.recoveryPolicy,
+      hasFallbackModel: this.fallbackModels.length > 0,
+    };
     this.maxRetries = options.maxRetries ?? retries.maxRetries;
-    const broad = this.recoveryOptions.persistent === true && this.recoveryOptions.persistentCapacityOnly !== true;
-    if (!Number.isSafeInteger(this.maxRetries) || this.maxRetries < 0 || !broad && this.maxRetries > MAX_RETRIES) throw new Error(`maxRetries must be an integer from 0 to ${MAX_RETRIES} unless the persistent watchdog is enabled`);
+    const broad =
+      this.recoveryOptions.persistent === true &&
+      this.recoveryOptions.persistentCapacityOnly !== true;
+    if (
+      !Number.isSafeInteger(this.maxRetries) ||
+      this.maxRetries < 0 ||
+      (!broad && this.maxRetries > MAX_RETRIES)
+    )
+      throw new Error(
+        `maxRetries must be an integer from 0 to ${MAX_RETRIES} unless the persistent watchdog is enabled`,
+      );
     let base: URL;
     try {
       base = new URL(options.baseUrl ?? "https://api.anthropic.com");
     } catch {
       throw new Error("Invalid Messages API base URL");
     }
-    if (!["https:", "http:"].includes(base.protocol) || base.username || base.password || base.search || base.hash) {
+    if (
+      !["https:", "http:"].includes(base.protocol) ||
+      base.username ||
+      base.password ||
+      base.search ||
+      base.hash
+    ) {
       throw new Error("Invalid Messages API base URL");
     }
     this.endpoint = `${base.href.replace(/\/$/, "")}/v1/messages`;
-    this.timeoutPolicy = options.timeoutPolicy ?? resolveTimeoutPolicy({ baseUrl: base.href });
+    this.timeoutPolicy =
+      options.timeoutPolicy ?? resolveTimeoutPolicy({ baseUrl: base.href });
     this.clock = options.clock ?? systemClock;
   }
 
-  private async response(request: CompletionRequest, ledger: RequestAttemptLedger, streaming: boolean, prefixRepairs: { count: number }, contextRetry: ContextRetry, outputRepair: OutputLimitRepair): Promise<{ response: Response; streaming: boolean; deadline: TransportDeadline; startedAt: number; noteBegun: () => void }> {
+  private async response(
+    request: CompletionRequest,
+    ledger: RequestAttemptLedger,
+    streaming: boolean,
+    prefixRepairs: { count: number },
+    contextRetry: ContextRetry,
+    outputRepair: OutputLimitRepair,
+  ): Promise<{
+    response: Response;
+    streaming: boolean;
+    deadline: TransportDeadline;
+    startedAt: number;
+    noteBegun: () => void;
+  }> {
     const facts = resolveModelFacts(request.model);
-    const requestedMax = Math.min(request.useModelTokenDefaults ? defaultOutputTokens(request.model) : request.maxTokens, facts.upperOutput, process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS ? defaultOutputTokens(request.model) : Infinity);
+    const requestedMax = Math.min(
+      request.useModelTokenDefaults
+        ? defaultOutputTokens(request.model)
+        : request.maxTokens,
+      facts.upperOutput,
+      process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS
+        ? defaultOutputTokens(request.model)
+        : Infinity,
+    );
     let maxTokens = Math.min(requestedMax, outputRepair.limit);
-    let thinking = thinkingRequest(request.model, maxTokens, { ...this.thinkingOptions, ...request.thinking });
+    let thinking = thinkingRequest(request.model, maxTokens, {
+      ...this.thinkingOptions,
+      ...request.thinking,
+    });
     const effortPolicy = this.queryEffortPolicy;
     const effortCapabilities = effortPolicy?.capabilities(request.model);
     const existingOutputConfig = effortPolicy?.outputConfig?.(request);
-    if (!effortCapabilities && (request.queryEffort !== undefined || existingOutputConfig && Object.hasOwn(existingOutputConfig, "effort"))) throw new Error("Query effort requires an explicit model capability policy");
-    const effortSelection = effortCapabilities ? effortPolicy?.selection?.(request) ?? {} : {};
-    const environment = effortSelection.environment ?? process.env.CLAUDE_CODE_EFFORT_LEVEL;
-    const effort = effortCapabilities ? resolveQueryEffort({ ...effortSelection, capabilities: effortCapabilities,
-      ...(environment === undefined ? {} : { environment }), ...(request.queryEffort === undefined ? {} : { turnEffort: request.queryEffort }) }) : undefined;
+    if (
+      !effortCapabilities &&
+      (request.queryEffort !== undefined ||
+        (existingOutputConfig && Object.hasOwn(existingOutputConfig, "effort")))
+    )
+      throw new Error(
+        "Query effort requires an explicit model capability policy",
+      );
+    const effortSelection = effortCapabilities
+      ? (effortPolicy?.selection?.(request) ?? {})
+      : {};
+    const environment =
+      effortSelection.environment ?? process.env.CLAUDE_CODE_EFFORT_LEVEL;
+    const effort = effortCapabilities
+      ? resolveQueryEffort({
+          ...effortSelection,
+          capabilities: effortCapabilities,
+          ...(environment === undefined ? {} : { environment }),
+          ...(request.queryEffort === undefined
+            ? {}
+            : { turnEffort: request.queryEffort }),
+        })
+      : undefined;
     const effortModel = facts.wire.toLowerCase();
-    const projection = () => effortCapabilities ? queryEffortOutputConfig({ capabilities: effortCapabilities,
-      ...(effort === undefined ? {} : { effort }), ...(existingOutputConfig === undefined ? {} : { existing: existingOutputConfig }),
-      thinkingDisabled: thinking?.type === "disabled", mechanicallyDisabled: (request.thinking?.mechanical ?? this.thinkingOptions.mechanical) === true,
-      effortRefused: effortRefusedModels.has(effortModel) }) : { outputConfig: { ...existingOutputConfig }, needsEffortBeta: false };
+    const projection = () =>
+      effortCapabilities
+        ? queryEffortOutputConfig({
+            capabilities: effortCapabilities,
+            ...(effort === undefined ? {} : { effort }),
+            ...(existingOutputConfig === undefined
+              ? {}
+              : { existing: existingOutputConfig }),
+            thinkingDisabled: thinking?.type === "disabled",
+            mechanicallyDisabled:
+              (request.thinking?.mechanical ??
+                this.thinkingOptions.mechanical) === true,
+            effortRefused: effortRefusedModels.has(effortModel),
+          })
+        : { outputConfig: { ...existingOutputConfig }, needsEffortBeta: false };
     let projectedEffort = projection();
     let messages = request.messages;
     let wire = projectMessages(messages, request.resumeIncompleteThinking);
-    const serialize = () => JSON.stringify({ model: facts.wire, system: request.system,
-      messages: request.disablePromptCaching ? wire.map(row => ({ ...row, content: row.content.map(withoutCacheControl) })) : wire,
-      tools: request.disablePromptCaching ? request.tools.map(withoutCacheControl) : request.tools, max_tokens: maxTokens, thinking, stream: streaming,
-      ...(Object.keys(projectedEffort.outputConfig).length ? { output_config: projectedEffort.outputConfig } : {}) });
+    const serialize = () =>
+      JSON.stringify({
+        model: facts.wire,
+        system: request.system,
+        messages: request.disablePromptCaching
+          ? wire.map((row) => ({
+              ...row,
+              content: row.content.map(withoutCacheControl),
+            }))
+          : wire,
+        tools: request.disablePromptCaching
+          ? request.tools.map(withoutCacheControl)
+          : request.tools,
+        max_tokens: maxTokens,
+        thinking,
+        stream: streaming,
+        ...(Object.keys(projectedEffort.outputConfig).length
+          ? { output_config: projectedEffort.outputConfig }
+          : {}),
+      });
     let body = serialize();
     let phaseRetries = 0;
     for (;;) {
       abortIfNeeded(request.signal);
       maxTokens = Math.min(requestedMax, outputRepair.limit);
-      thinking = thinkingRequest(request.model, maxTokens, { ...this.thinkingOptions, ...request.thinking });
+      thinking = thinkingRequest(request.model, maxTokens, {
+        ...this.thinkingOptions,
+        ...request.thinking,
+      });
       projectedEffort = projection();
       body = serialize();
-      const resumptionBeta = this.thinkingResumption && supportsInterleavedThinking(request.model);
-      const contextBeta = !contextRetry.suppress && this.contextFacts(request.model).beta;
-      const betas = [resumptionBeta ? RESUMPTION_BETA : "", contextBeta ? LONG_CONTEXT_BETA : "", projectedEffort.needsEffortBeta ? QUERY_EFFORT_BETA : ""].filter(Boolean);
-      if (request.resumeIncompleteThinking && !resumptionBeta) throw new ProviderHttpError(400, "thinking_resumption_unavailable");
+      const resumptionBeta =
+        this.thinkingResumption && supportsInterleavedThinking(request.model);
+      const contextBeta =
+        !contextRetry.suppress && this.contextFacts(request.model).beta;
+      const betas = [
+        resumptionBeta ? RESUMPTION_BETA : "",
+        contextBeta ? LONG_CONTEXT_BETA : "",
+        projectedEffort.needsEffortBeta ? QUERY_EFFORT_BETA : "",
+      ].filter(Boolean);
+      if (request.resumeIncompleteThinking && !resumptionBeta)
+        throw new ProviderHttpError(400, "thinking_resumption_unavailable");
       ledger.takeAttempt();
       const startedAt = this.clock.monotonicNow();
-      const deadline = new TransportDeadline(request.signal, this.timeoutPolicy, this.clock, streaming, Buffer.byteLength(body), ledger.noResponse.escalated);
+      const deadline = new TransportDeadline(
+        request.signal,
+        this.timeoutPolicy,
+        this.clock,
+        streaming,
+        Buffer.byteLength(body),
+        ledger.noResponse.escalated,
+      );
       let response: Response;
       try {
         response = await fetch(this.endpoint, {
           method: "POST",
-          headers: { "content-type": "application/json", "anthropic-version": "2023-06-01", "x-api-key": this.apiKey, ...(betas.length ? { "anthropic-beta": betas.join(",") } : {}) },
-          body, signal: deadline.signal, redirect: "manual",
+          headers: {
+            "content-type": "application/json",
+            "anthropic-version": "2023-06-01",
+            "x-api-key": this.apiKey,
+            ...(betas.length ? { "anthropic-beta": betas.join(",") } : {}),
+          },
+          body,
+          signal: deadline.signal,
+          redirect: "manual",
         });
         deadline.headersReceived();
       } catch {
         const failure = deadline.failure;
         deadline.close();
         abortIfNeeded(request.signal);
-        const noResponseHeader = failure instanceof TransportTimeoutError && failure.stage === "first-header";
-        if (!ledger.retry({ kind: "noResponse", suspended: failure instanceof StreamSuspendedError, networkDown: false, turnedAwayOverloaded: false }, noResponseHeader)) throw failure ?? new Error("Messages API request failed");
-        await wait(retryDelay(++phaseRetries), undefined, { signal: request.signal });
+        const noResponseHeader =
+          failure instanceof TransportTimeoutError &&
+          failure.stage === "first-header";
+        if (
+          !ledger.retry(
+            {
+              kind: "noResponse",
+              suspended: failure instanceof StreamSuspendedError,
+              networkDown: false,
+              turnedAwayOverloaded: false,
+            },
+            noResponseHeader,
+          )
+        )
+          throw failure ?? new Error("Messages API request failed");
+        await wait(retryDelay(++phaseRetries), undefined, {
+          signal: request.signal,
+        });
         continue;
       }
-      if (response.ok) return { response, streaming, deadline, startedAt, noteBegun: () => {
-        outputRepair.onReplyBegun();
-        if (contextRetry.mode === "retrying" || contextRetry.mode === "guessing") {
-          contextRefusedModels.add(resolveModelFacts(request.model).wire.toLowerCase()); contextRetry.mode = "spent";
-        }
-      } };
+      if (response.ok)
+        return {
+          response,
+          streaming,
+          deadline,
+          startedAt,
+          noteBegun: () => {
+            outputRepair.onReplyBegun();
+            if (
+              contextRetry.mode === "retrying" ||
+              contextRetry.mode === "guessing"
+            ) {
+              contextRefusedModels.add(
+                resolveModelFacts(request.model).wire.toLowerCase(),
+              );
+              contextRetry.mode = "spent";
+            }
+          },
+        };
       try {
-        const possibleFallback = streaming && this.allowNonStreamingFallback && response.status === 404 && response.headers.get("x-should-retry") !== "false";
-        let terminal = terminalHttpFailure(response.status, response.headers, undefined);
+        const possibleFallback =
+          streaming &&
+          this.allowNonStreamingFallback &&
+          response.status === 404 &&
+          response.headers.get("x-should-retry") !== "false";
+        let terminal = terminalHttpFailure(
+          response.status,
+          response.headers,
+          undefined,
+        );
         let metadata: unknown;
-        if (!terminal && ([400, 402, 413, 422, 429].includes(response.status) || request.resumeIncompleteThinking || possibleFallback || ((ledger.retriesLeft > 0 || ledger.recovery.policy.persistent) && retryableStatus(response.status, response.headers)))) {
+        if (
+          !terminal &&
+          ([400, 402, 413, 422, 429].includes(response.status) ||
+            request.resumeIncompleteThinking ||
+            possibleFallback ||
+            ((ledger.retriesLeft > 0 || ledger.recovery.policy.persistent) &&
+              retryableStatus(response.status, response.headers)))
+        ) {
           metadata = await readErrorMetadata(response, deadline.signal);
-          terminal = terminalHttpFailure(response.status, response.headers, metadata);
+          terminal = terminalHttpFailure(
+            response.status,
+            response.headers,
+            metadata,
+          );
         }
         await response.body?.cancel().catch(() => undefined);
         deadline.check();
         const info = apiErrorInfo(metadata);
-        if (!terminal && response.status === 400 && !effortRefusedModels.has(effortModel) &&
-            (projectedEffort.needsEffortBeta || Object.hasOwn(projectedEffort.outputConfig, "effort")) && effortUnsupported(info.message, info.code)) {
+        if (
+          !terminal &&
+          response.status === 400 &&
+          !effortRefusedModels.has(effortModel) &&
+          (projectedEffort.needsEffortBeta ||
+            Object.hasOwn(projectedEffort.outputConfig, "effort")) &&
+          effortUnsupported(info.message, info.code)
+        ) {
           effortRefusedModels.add(effortModel);
           continue;
         }
         if (!terminal && response.status === 400) {
-          const explicit = info.message.includes(LONG_CONTEXT_BETA) || info.message.includes("long context beta");
-          const guessed = !explicit && info.message.includes("invalid beta flag");
-          if (contextRetry.mode !== "idle" && contextRetry.mode !== "spent") contextRetry.mode = contextRetry.mode === "guessing" && guessed ? "spent" : "unproven";
-          else if (contextRetry.mode === "idle" && contextBeta && (explicit || guessed)) {
-            contextRetry.suppress = true; contextRetry.mode = explicit ? "retrying" : "guessing"; continue;
+          const explicit =
+            info.message.includes(LONG_CONTEXT_BETA) ||
+            info.message.includes("long context beta");
+          const guessed =
+            !explicit && info.message.includes("invalid beta flag");
+          if (contextRetry.mode !== "idle" && contextRetry.mode !== "spent")
+            contextRetry.mode =
+              contextRetry.mode === "guessing" && guessed
+                ? "spent"
+                : "unproven";
+          else if (
+            contextRetry.mode === "idle" &&
+            contextBeta &&
+            (explicit || guessed)
+          ) {
+            contextRetry.suppress = true;
+            contextRetry.mode = explicit ? "retrying" : "guessing";
+            continue;
           }
         }
-        if (!terminal && response.status === 400 && resumptionBeta && betaHeaderRejected(info.message, RESUMPTION_BETA)) {
+        if (
+          !terminal &&
+          response.status === 400 &&
+          resumptionBeta &&
+          betaHeaderRejected(info.message, RESUMPTION_BETA)
+        ) {
           resumptionHeaderRefused = true;
-          if (request.resumeIncompleteThinking) throw new ProviderHttpError(response.status, info.code);
+          if (request.resumeIncompleteThinking)
+            throw new ProviderHttpError(response.status, info.code);
           continue;
         }
-        if (!terminal && response.status === 400 && !request.resumeIncompleteThinking && /not created in this conversation|bound to a different conversation/i.test(info.message)) {
-          const strip = planThinkingStrip(messages, wire, response.headers.get("anthropic-thinking-prefix-mismatch"), ++prefixRepairs.count);
+        if (
+          !terminal &&
+          response.status === 400 &&
+          !request.resumeIncompleteThinking &&
+          /not created in this conversation|bound to a different conversation/i.test(
+            info.message,
+          )
+        ) {
+          const strip = planThinkingStrip(
+            messages,
+            wire,
+            response.headers.get("anthropic-thinking-prefix-mismatch"),
+            ++prefixRepairs.count,
+          );
           if (strip) {
             messages = markThinkingStripped(messages, strip);
             request.onThinkingStrip?.(strip);
             abortIfNeeded(request.signal);
-            wire = projectMessages(messages); body = serialize(); continue;
+            wire = projectMessages(messages);
+            body = serialize();
+            continue;
           }
         }
-        if (!terminal && outputRepair.onError(response.status, info, maxTokens)) continue;
-        const httpError = new ProviderHttpError(response.status, info.code, terminal ? undefined : contextRejection(response.status, info.message));
-        if (request.resumeIncompleteThinking && resumePrefillRefused(httpError)) throw httpError;
+        if (!terminal && outputRepair.onError(response.status, info, maxTokens))
+          continue;
+        const httpError = new ProviderHttpError(
+          response.status,
+          info.code,
+          terminal
+            ? undefined
+            : contextRejection(response.status, info.message),
+        );
+        if (request.resumeIncompleteThinking && resumePrefillRefused(httpError))
+          throw httpError;
         if (!terminal && possibleFallback && ledger.fallback()) {
-          streaming = false; phaseRetries = 0;
+          streaming = false;
+          phaseRetries = 0;
           body = serialize();
           continue;
         }
-        const standardRetry = [408, 409, 429].includes(response.status) || response.status >= 500;
-        const failure = response.headers.get("x-should-retry") === "true" && !standardRetry
-          ? undefined : { kind: "httpError" as const, status: response.status, fallbackModelCouldHelp: false };
-        if (!terminal && failure && failure.status === 529 &&
-            decideRecovery(failure, ledger.recovery.counts(), ledger.recovery.policy).decision === "useFallbackModel") throw new ModelFallback("Messages API model fallback");
-        if (terminal || !retryableStatus(response.status, response.headers) || !ledger.retry(failure)) {
+        const standardRetry =
+          [408, 409, 429].includes(response.status) || response.status >= 500;
+        const failure =
+          response.headers.get("x-should-retry") === "true" && !standardRetry
+            ? undefined
+            : {
+                kind: "httpError" as const,
+                status: response.status,
+                fallbackModelCouldHelp: false,
+              };
+        if (
+          !terminal &&
+          failure &&
+          failure.status === 529 &&
+          decideRecovery(
+            failure,
+            ledger.recovery.counts(),
+            ledger.recovery.policy,
+          ).decision === "useFallbackModel"
+        )
+          throw new ModelFallback("Messages API model fallback");
+        if (
+          terminal ||
+          !retryableStatus(response.status, response.headers) ||
+          !ledger.retry(failure)
+        ) {
           throw httpError;
         }
         const delay = retryDelay(++phaseRetries, response.headers);
-        if (delay > MAX_RETRY_DELAY_MS) throw new Error(`Messages API retry delay exceeds ${MAX_RETRY_DELAY_MS} ms (HTTP ${response.status})`);
+        if (delay > MAX_RETRY_DELAY_MS)
+          throw new Error(
+            `Messages API retry delay exceeds ${MAX_RETRY_DELAY_MS} ms (HTTP ${response.status})`,
+          );
         deadline.close();
         await wait(delay, undefined, { signal: request.signal });
-      } finally { deadline.close(); }
+      } finally {
+        deadline.close();
+      }
     }
   }
 
   async complete(request: CompletionRequest): Promise<Completion> {
     abortIfNeeded(request.signal);
     const seenModels = new Set<string>();
-    const models = [request.model, ...(triBoolean(process.env.CLAUDE_CODE_NO_MODEL_FALLBACK) === true ? [] : this.fallbackModels)].filter(model => {
+    const models = [
+      request.model,
+      ...(triBoolean(process.env.CLAUDE_CODE_NO_MODEL_FALLBACK) === true
+        ? []
+        : this.fallbackModels),
+    ].filter((model) => {
       const wire = resolveModelFacts(model).wire.toLowerCase();
-      if (seenModels.has(wire)) return false; seenModels.add(wire); return true;
+      if (seenModels.has(wire)) return false;
+      seenModels.add(wire);
+      return true;
     });
     let modelIndex = 0;
-    let ledger = new RequestAttemptLedger(this.maxRetries, request.attemptBudget, { ...this.recoveryOptions, hasFallbackModel: models.length > 1 });
-    let streaming = true, model = request.model, changedModel = false;
+    let ledger = new RequestAttemptLedger(
+      this.maxRetries,
+      request.attemptBudget,
+      { ...this.recoveryOptions, hasFallbackModel: models.length > 1 },
+    );
+    let streaming = true,
+      model = request.model,
+      changedModel = false;
     let prefixRepairs = { count: 0 };
     let contextRetry: ContextRetry = { suppress: false, mode: "idle" };
-    const outputRepairFor = (name: string) => new OutputLimitRepair(name, resolveModelFacts(name).wire.toLowerCase(), this.learnedOutputLimits);
+    const outputRepairFor = (name: string) =>
+      new OutputLimitRepair(
+        name,
+        resolveModelFacts(name).wire.toLowerCase(),
+        this.learnedOutputLimits,
+      );
     let outputRepair = outputRepairFor(model);
     let messages = request.messages;
     const thinkingStrip = (strip: ThinkingStrip) => {
@@ -324,15 +832,26 @@ export class AnthropicProvider implements Provider {
     const advanceModel = () => {
       const next = models[modelIndex + 1];
       if (next === undefined) return false;
-      model = next; modelIndex++; changedModel = true; streaming = true;
-      ledger = new RequestAttemptLedger(this.maxRetries, request.attemptBudget, { ...this.recoveryOptions, hasFallbackModel: modelIndex + 1 < models.length });
+      model = next;
+      modelIndex++;
+      changedModel = true;
+      streaming = true;
+      ledger = new RequestAttemptLedger(
+        this.maxRetries,
+        request.attemptBudget,
+        {
+          ...this.recoveryOptions,
+          hasFallbackModel: modelIndex + 1 < models.length,
+        },
+      );
       prefixRepairs = { count: 0 };
       contextRetry = { suppress: false, mode: "idle" };
       outputRepair = outputRepairFor(model);
       return true;
     };
     const reset = (stream: MessageStream, replacement: string) => {
-      if (stream.visibleText !== replacement) request.onTextReset?.(replacement);
+      if (stream.visibleText !== replacement)
+        request.onTextReset?.(replacement);
       abortIfNeeded(request.signal);
     };
     for (;;) {
@@ -342,8 +861,16 @@ export class AnthropicProvider implements Provider {
         continue;
       }
       let accepted: Awaited<ReturnType<AnthropicProvider["response"]>>;
-      try { accepted = await this.response({ ...request, model, messages, onThinkingStrip: thinkingStrip }, ledger, streaming, prefixRepairs, contextRetry, outputRepair); }
-      catch (error) {
+      try {
+        accepted = await this.response(
+          { ...request, model, messages, onThinkingStrip: thinkingStrip },
+          ledger,
+          streaming,
+          prefixRepairs,
+          contextRetry,
+          outputRepair,
+        );
+      } catch (error) {
         if (!(error instanceof ModelFallback)) throw error;
         abortIfNeeded(request.signal);
         if (!advanceModel()) throw error;
@@ -351,9 +878,20 @@ export class AnthropicProvider implements Provider {
       }
       const { response, deadline, startedAt } = accepted;
       streaming = accepted.streaming;
-      const stream = new MessageStream(request.onText, request.onStreamProgress);
+      const stream = new MessageStream(
+        request.onText,
+        request.onStreamProgress,
+      );
       try {
-        const completion = streaming ? await this.streamCompletion(response, request, deadline, stream, accepted.noteBegun) : await this.jsonCompletion(response, request, deadline);
+        const completion = streaming
+          ? await this.streamCompletion(
+              response,
+              request,
+              deadline,
+              stream,
+              accepted.noteBegun,
+            )
+          : await this.jsonCompletion(response, request, deadline);
         if (!streaming) accepted.noteBegun();
         if (streaming) reset(stream, stream.retainedText);
         return { ...completion, ...(changedModel ? { model } : {}) };
@@ -363,22 +901,66 @@ export class AnthropicProvider implements Provider {
         deadline.close();
         if (streaming && failure instanceof StreamOutputLimit) {
           reset(stream, stream.retainedText);
-          return { ...stream.outputLimited(), ...(changedModel ? { model } : {}) };
+          return {
+            ...stream.outputLimited(),
+            ...(changedModel ? { model } : {}),
+          };
         }
         if (!streaming) {
-          if ((failure instanceof TransportTimeoutError || failure instanceof StreamSuspendedError || failure instanceof StreamFailure && failure.causeCode === "connectionLost") &&
-              ledger.retry({ kind: "noResponse", suspended: failure instanceof StreamSuspendedError, networkDown: false, turnedAwayOverloaded: false })) {
-            await wait(retryDelay(Math.max(1, ledger.recovery.counts().retries)), undefined, { signal: request.signal });
+          if (
+            (failure instanceof TransportTimeoutError ||
+              failure instanceof StreamSuspendedError ||
+              (failure instanceof StreamFailure &&
+                failure.causeCode === "connectionLost")) &&
+            ledger.retry({
+              kind: "noResponse",
+              suspended: failure instanceof StreamSuspendedError,
+              networkDown: false,
+              turnedAwayOverloaded: false,
+            })
+          ) {
+            await wait(
+              retryDelay(Math.max(1, ledger.recovery.counts().retries)),
+              undefined,
+              { signal: request.signal },
+            );
             continue;
           }
           throw failure;
         }
-        const cause = failure instanceof StreamSuspendedError ? "suspended" : failure instanceof TransportTimeoutError ? "stalled" : failure instanceof StreamFailure ? failure.causeCode : undefined;
+        const cause =
+          failure instanceof StreamSuspendedError
+            ? "suspended"
+            : failure instanceof TransportTimeoutError
+              ? "stalled"
+              : failure instanceof StreamFailure
+                ? failure.causeCode
+                : undefined;
         if (cause === undefined) throw failure;
-        const state = stream.failure(cause, this.clock.monotonicNow() - startedAt >= this.timeoutPolicy.nonStreamingMs);
-        if (state === undefined) { reset(stream, stream.retainedText); return { ...stream.completion(), ...(changedModel ? { model } : {}) }; }
-        const decision = ledger.recovery.onStreamFailed(state, this.allowNonStreamingFallback && !(cause === "stalled" && triBoolean(process.env.CLAUDE_CODE_REMOTE) === true));
-        if (decision === "keepPartial") { reset(stream, stream.retainedText); return { ...stream.partial(cause), ...(changedModel ? { model } : {}) }; }
+        const state = stream.failure(
+          cause,
+          this.clock.monotonicNow() - startedAt >=
+            this.timeoutPolicy.nonStreamingMs,
+        );
+        if (state === undefined) {
+          reset(stream, stream.retainedText);
+          return { ...stream.completion(), ...(changedModel ? { model } : {}) };
+        }
+        const decision = ledger.recovery.onStreamFailed(
+          state,
+          this.allowNonStreamingFallback &&
+            !(
+              cause === "stalled" &&
+              triBoolean(process.env.CLAUDE_CODE_REMOTE) === true
+            ),
+        );
+        if (decision === "keepPartial") {
+          reset(stream, stream.retainedText);
+          return {
+            ...stream.partial(cause),
+            ...(changedModel ? { model } : {}),
+          };
+        }
         if (decision === "fail") throw failure;
         stream.abandonProgress();
         if (decision === "useFallbackModel") {
@@ -387,19 +969,54 @@ export class AnthropicProvider implements Provider {
           continue;
         }
         reset(stream, "");
-        if (decision === "retryWithoutStreaming") { streaming = false; continue; }
+        if (decision === "retryWithoutStreaming") {
+          streaming = false;
+          continue;
+        }
         const counts = ledger.recovery.counts();
-        const delay = cause === "stalled" ? 0 : state.progress === "thinkingOnly" && !["serverError", "timedOut", "overloaded"].includes(cause)
-          ? 100 * counts.afterThinkingOnly : retryDelay(Math.max(1, cause === "overloaded" ? counts.overloaded : state.progress === "thinkingOnly" ? counts.afterThinkingOnly : counts.retries));
+        const delay =
+          cause === "stalled"
+            ? 0
+            : state.progress === "thinkingOnly" &&
+                !["serverError", "timedOut", "overloaded"].includes(cause)
+              ? 100 * counts.afterThinkingOnly
+              : retryDelay(
+                  Math.max(
+                    1,
+                    cause === "overloaded"
+                      ? counts.overloaded
+                      : state.progress === "thinkingOnly"
+                        ? counts.afterThinkingOnly
+                        : counts.retries,
+                  ),
+                );
         if (delay) await wait(delay, undefined, { signal: request.signal });
-      } finally { deadline.close(); }
+      } finally {
+        deadline.close();
+      }
     }
   }
 
-  private async streamCompletion(response: Response, request: CompletionRequest, deadline: TransportDeadline, stream: MessageStream, noteBegun: () => void): Promise<Completion> {
-    if (!response.body || response.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase() !== "text/event-stream") {
+  private async streamCompletion(
+    response: Response,
+    request: CompletionRequest,
+    deadline: TransportDeadline,
+    stream: MessageStream,
+    noteBegun: () => void,
+  ): Promise<Completion> {
+    if (
+      !response.body ||
+      response.headers
+        .get("content-type")
+        ?.split(";")[0]
+        ?.trim()
+        .toLowerCase() !== "text/event-stream"
+    ) {
       await response.body?.cancel();
-      throw new StreamFailure("malformed", "Messages API response is not an event stream");
+      throw new StreamFailure(
+        "malformed",
+        "Messages API response is not an event stream",
+      );
     }
     deadline.beginStream();
     const reader = response.body.getReader();
@@ -413,24 +1030,47 @@ export class AnthropicProvider implements Provider {
     let responseBytes = 0;
     const line = (value: string): void => {
       eventBytes += Buffer.byteLength(value, "utf8") + 1;
-      if (eventBytes > MAX_EVENT_BYTES) throw new Error("Messages API event exceeds size limit");
+      if (eventBytes > MAX_EVENT_BYTES)
+        throw new Error("Messages API event exceeds size limit");
       if (value.charCodeAt(0) === 0xfeff) value = value.slice(1);
       if (value === "") {
         if (eventName === "error") {
           // Error records take the SDK error path even when their JSON body has
           // an unrelated type or cannot be parsed. Never dispatch them as output.
           let raw: unknown;
-          try { raw = JSON.parse(data.join("\n")); } catch { /* SDK keeps the raw error string. */ }
+          try {
+            raw = JSON.parse(data.join("\n"));
+          } catch {
+            /* SDK keeps the raw error string. */
+          }
           const info = apiErrorInfo(raw);
-          const error = raw && typeof raw === "object" && "error" in raw ? raw.error : undefined;
-          const details = error && typeof error === "object" && "details" in error ? error.details : undefined;
-          stream.accept({ type: "error", error: { type: info.type ?? "error", message: info.message, ...(details !== undefined ? { details } : {}) } });
+          const error =
+            raw && typeof raw === "object" && "error" in raw
+              ? raw.error
+              : undefined;
+          const details =
+            error && typeof error === "object" && "details" in error
+              ? error.details
+              : undefined;
+          stream.accept({
+            type: "error",
+            error: {
+              type: info.type ?? "error",
+              message: info.message,
+              ...(details !== undefined ? { details } : {}),
+            },
+          });
         } else if (SSE_DATA_EVENTS.has(eventName)) {
           const body = parseJson(data.join("\n"));
           // The caller's first body.type read throws only for null. Non-null
           // primitives and arrays pass through its unknown-event progress path.
-          if (body === null) throw new StreamFailure("unknown", "Messages API stream protocol received a null event");
-          const type = typeof body === "object" && "type" in body ? body.type : undefined;
+          if (body === null)
+            throw new StreamFailure(
+              "unknown",
+              "Messages API stream protocol received a null event",
+            );
+          const type =
+            typeof body === "object" && "type" in body ? body.type : undefined;
           if (typeof type === "string" && MESSAGE_EVENT_TYPES.has(type)) {
             const parsed = streamEventSchema.safeParse(body);
             if (!parsed.success) throw protocolError();
@@ -479,34 +1119,58 @@ export class AnthropicProvider implements Provider {
           chunk = await reader.read();
         } catch {
           deadline.check();
-          throw new StreamFailure("connectionLost", "Messages API stream read failed");
+          throw new StreamFailure(
+            "connectionLost",
+            "Messages API stream read failed",
+          );
         }
         if (chunk.done) break;
         deadline.byteReceived();
         responseBytes += chunk.value.byteLength;
-        if (responseBytes > MAX_RESPONSE_BYTES) throw new Error("Messages API response exceeds size limit");
+        if (responseBytes > MAX_RESPONSE_BYTES)
+          throw new Error("Messages API response exceeds size limit");
         buffer += decoder.decode(chunk.value, { stream: true });
         drainLines();
-        if (eventBytes + Buffer.byteLength(buffer, "utf8") > MAX_EVENT_BYTES) throw new Error("Messages API event exceeds size limit");
+        if (eventBytes + Buffer.byteLength(buffer, "utf8") > MAX_EVENT_BYTES)
+          throw new Error("Messages API event exceeds size limit");
       }
       deadline.check();
       buffer += decoder.decode();
       if (buffer) {
         // The SDK parses remaining logical lines, but does not synthesize a
         // blank record delimiter. An unfinished event is discarded at EOF.
-        for (const value of buffer.replace(/\r$/, "").split(/\r\n|[\n\r]/)) line(value);
+        for (const value of buffer.replace(/\r$/, "").split(/\r\n|[\n\r]/))
+          line(value);
       }
-      if (stream.lacksResponseEnvelope) throw new StreamFailure("unknown", "Messages API stream protocol ended without a response");
+      if (stream.lacksResponseEnvelope)
+        throw new StreamFailure(
+          "unknown",
+          "Messages API stream protocol ended without a response",
+        );
       const completion = stream.completion();
-      return { ...completion, content: normalizeCommittedToolBlocks(completion.content, request) };
+      return {
+        ...completion,
+        content: normalizeCommittedToolBlocks(completion.content, request),
+      };
     } finally {
       await reader.cancel().catch(() => undefined);
       reader.releaseLock();
     }
   }
 
-  private async jsonCompletion(response: Response, request: CompletionRequest, deadline: TransportDeadline): Promise<Completion> {
-    if (!response.body || response.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase() !== "application/json") {
+  private async jsonCompletion(
+    response: Response,
+    request: CompletionRequest,
+    deadline: TransportDeadline,
+  ): Promise<Completion> {
+    if (
+      !response.body ||
+      response.headers
+        .get("content-type")
+        ?.split(";")[0]
+        ?.trim()
+        .toLowerCase() !== "application/json"
+    ) {
       await response.body?.cancel().catch(() => undefined);
       throw new Error("Messages API fallback response is not JSON");
     }
@@ -517,33 +1181,73 @@ export class AnthropicProvider implements Provider {
       for (;;) {
         deadline.check();
         let chunk: ReadableStreamReadResult<Uint8Array>;
-        try { chunk = await reader.read(); }
-        catch { deadline.check(); throw new StreamFailure("connectionLost", "Messages API fallback read failed"); }
+        try {
+          chunk = await reader.read();
+        } catch {
+          deadline.check();
+          throw new StreamFailure(
+            "connectionLost",
+            "Messages API fallback read failed",
+          );
+        }
         if (chunk.done) break;
         bytes += chunk.value.byteLength;
-        if (bytes > MAX_RESPONSE_BYTES) throw new Error("Messages API response exceeds size limit");
+        if (bytes > MAX_RESPONSE_BYTES)
+          throw new Error("Messages API response exceeds size limit");
         chunks.push(chunk.value);
       }
       deadline.check();
       let data: unknown;
-      try { data = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks))); }
-      catch { throw protocolError(); }
+      try {
+        data = JSON.parse(
+          new TextDecoder("utf-8", { fatal: true }).decode(
+            Buffer.concat(chunks),
+          ),
+        );
+      } catch {
+        throw protocolError();
+      }
       const parsed = jsonMessageSchema.safeParse(data);
       if (!parsed.success) throw protocolError();
       const message = parsed.data;
       message.content = normalizeCommittedToolBlocks(message.content, request);
-      const toolIds = message.content.filter(block => block.type === "tool_use").map(block => block.id);
+      const toolIds = message.content
+        .filter((block) => block.type === "tool_use")
+        .map((block) => block.id);
       if (new Set(toolIds).size !== toolIds.length) throw protocolError();
       for (const block of message.content) {
         deadline.check();
         if (block.type === "text" && block.text) request.onText(block.text);
       }
       deadline.check();
-      const usage = mergeUsage({ input_tokens: 0, output_tokens: 0 }, message.usage);
-      request.onStreamProgress?.({ type: "assistant", ...(message.id === undefined ? {} : { responseId: message.id }), usage: structuredClone(usage) });
-      return { content: message.content, stop_reason: message.stop_reason, usage,
-        ...(message.id === undefined ? {} : { responseId: message.id }), ...(message.model === undefined ? {} : { responseModel: message.model }), ...(typeof message.resumable === "boolean" ? { resumable: message.resumable } : {}),
-        ...(message.context_management == null ? {} : { contextClearedInputTokens: clearedInputTokens(message.context_management) }) };
+      const usage = mergeUsage(
+        { input_tokens: 0, output_tokens: 0 },
+        message.usage,
+      );
+      request.onStreamProgress?.({
+        type: "assistant",
+        ...(message.id === undefined ? {} : { responseId: message.id }),
+        usage: structuredClone(usage),
+      });
+      return {
+        content: message.content,
+        stop_reason: message.stop_reason,
+        usage,
+        ...(message.id === undefined ? {} : { responseId: message.id }),
+        ...(message.model === undefined
+          ? {}
+          : { responseModel: message.model }),
+        ...(typeof message.resumable === "boolean"
+          ? { resumable: message.resumable }
+          : {}),
+        ...(message.context_management == null
+          ? {}
+          : {
+              contextClearedInputTokens: clearedInputTokens(
+                message.context_management,
+              ),
+            }),
+      };
     } finally {
       await reader.cancel().catch(() => undefined);
       reader.releaseLock();

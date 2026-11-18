@@ -4,16 +4,16 @@ Thirteen bounded source spans and containing module hashes were verified against
 
 ## Source-derived contract
 
-| Boundary | Executable offset | Bytes |
-| --- | ---: | ---: |
-| Pure attempt-decision policy and initial counters | 296053027 | 3384 |
-| Shared ledger implementation | 296057553 | 1748 |
-| Query's new ledger construction | 296172381 | 367 |
-| Streaming fallback reuses ledger/options | 296209064 | 1221 |
-| 404 fallback entry | 296255490 | 847 |
-| Nonstreaming dispatch with `stream:false` | 296099508 | 3402 |
-| Attempt admission before client/request work | 296063779 | 130 |
-| Billing and generic retry predicates | 296085503 | 2283 |
+| Boundary                                          | Executable offset | Bytes |
+| ------------------------------------------------- | ----------------: | ----: |
+| Pure attempt-decision policy and initial counters |         296053027 |  3384 |
+| Shared ledger implementation                      |         296057553 |  1748 |
+| Query's new ledger construction                   |         296172381 |   367 |
+| Streaming fallback reuses ledger/options          |         296209064 |  1221 |
+| 404 fallback entry                                |         296255490 |   847 |
+| Nonstreaming dispatch with `stream:false`         |         296099508 |  3402 |
+| Attempt admission before client/request work      |         296063779 |   130 |
+| Billing and generic retry predicates              |         296085503 |  2283 |
 
 `GXn` is created within each `Chs` model query. Its retry counters start fresh; an optional caller-supplied `apiAttemptsLeft` object can survive across queries. Admission decrements that shared count before client/request work, refuses at zero, and remains unlimited when omitted. Retry counts and total-attempt allowance are distinct. Both streaming and nonstreaming paths receive the same ledger and remaining retry capacity.
 

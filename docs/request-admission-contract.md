@@ -26,13 +26,13 @@ The original specialized-error callback is substantially larger than this port. 
 
 The earlier implementation compacted every estimate above its threshold. Static `_cs`, `m0e`, `oNs`, and outer `Fl/Tf` gates show that this was too broad for the selected direct API route.
 
-| Selected window source | Admission behavior implemented |
-| --- | --- |
+| Selected window source                                    | Admission behavior implemented                                    |
+| --------------------------------------------------------- | ----------------------------------------------------------------- |
 | Default `auto`, including ordinary historical200k windows | Defer estimate-driven compaction and blocking to server admission |
-| Explicit environment/settings window | Use proactive threshold and blocking checks |
-| Native/model-default window | Use proactive checks |
-| Unknown model with default enforcement enabled | Use proactive checks |
-| Automatic compaction disabled | No automatic summary; enforce the local blocking limit |
+| Explicit environment/settings window                      | Use proactive threshold and blocking checks                       |
+| Native/model-default window                               | Use proactive checks                                              |
+| Unknown model with default enforcement enabled            | Use proactive checks                                              |
+| Automatic compaction disabled                             | No automatic summary; enforce the local blocking limit            |
 
 Threshold arithmetic remains documented in [context-contract.md](context-contract.md). A percentage override alone does not change the default source to a configured-window source. Tests which intend proactive200k compaction now explicitly set that window. Runtime profile recognition contributes to default source selection, while richer client-data/experiment/settings sources remain incomplete.
 

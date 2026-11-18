@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -33,129 +40,392 @@ createInterface({input:process.stdin}).on('line',line=>{
 
 `;
 
-function run(args: string[], env: NodeJS.ProcessEnv): Promise<{ code: number | null; out: string; err: string }> {
+function run(
+  args: string[],
+  env: NodeJS.ProcessEnv,
+): Promise<{ code: number | null; out: string; err: string }> {
   return new Promise((done, reject) => {
-    const child = spawn(process.execPath, [resolve("dist/src/cli.js"), ...args], { env, stdio: ["ignore", "pipe", "pipe"] });
-    let out = "", err = "";
-    child.stdout.setEncoding("utf8").on("data", chunk => { out += chunk; });
-    child.stderr.setEncoding("utf8").on("data", chunk => { err += chunk; });
-    child.on("error", reject); child.on("close", code => done({ code, out, err }));
+    const child = spawn(
+      process.execPath,
+      [resolve("dist/src/cli.js"), ...args],
+      { env, stdio: ["ignore", "pipe", "pipe"] },
+    );
+    let out = "",
+      err = "";
+    child.stdout.setEncoding("utf8").on("data", (chunk) => {
+      out += chunk;
+    });
+    child.stderr.setEncoding("utf8").on("data", (chunk) => {
+      err += chunk;
+    });
+    child.on("error", reject);
+    child.on("close", (code) => done({ code, out, err }));
   });
 }
 
-test("compiled MCP config→discovery→permitted rich call→refresh→save/resume and denied calls close every server", { timeout: 20000 }, async t => {
-  const directory = await realpath(await mkdtemp(join(tmpdir(), "tau-cli-mcp-")));
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  const script = join(directory, "fixture.cjs"), log = join(directory, "events.jsonl"), config = join(directory, "mcp.json");
-  await writeFile(script, serverSource);
-  await writeFile(config, JSON.stringify({ mcpServers: { fixture: { command: process.execPath, args: [script], env: { FIXTURE_LOG: log } } } }));
-  const bodies: any[] = [];
-  let scenario = "allowed", request = 0;
-  const api = createServer(async (incoming, response) => {
-    let raw = ""; for await (const chunk of incoming) raw += chunk;
-    const body = JSON.parse(raw); bodies.push(body); request++;
-    const content = scenario === "resume" || request === 2 ? { type: "text", text: scenario === "resume" ? "Resumed." : "Done." } :
-      { type: "tool_use", id: "mcp-call", name: "mcp__fixture__lookup", input: { query: { labels: ["a", "b"], limit: 2 } } };
-    response.writeHead(200, { "content-type": "text/event-stream" });
-    response.end(fixtureSse([
-      { type: "message_start", message: { role: "assistant", content: [], usage: { input_tokens: 10, output_tokens: 0 } } },
-      { type: "content_block_start", index: 0, content_block: content }, { type: "content_block_stop", index: 0 },
-      { type: "message_delta", delta: { stop_reason: content.type === "tool_use" ? "tool_use" : "end_turn" }, usage: { output_tokens: 4 } },
-      { type: "message_stop" },
-    ]));
-  });
-  t.after(() => new Promise<void>(done => { api.closeAllConnections(); api.close(() => done()); }));
-  await new Promise<void>(done => api.listen(0, "127.0.0.1", done));
-  const address = api.address(); assert.ok(address && typeof address !== "string");
-  const env = { ...process.env, ANTHROPIC_API_KEY: "dummy", ANTHROPIC_BASE_URL: `http://127.0.0.1:${address.port}`, TAU_HOME: join(directory, "state"),
-    MCP_PROTOCOL_NEGOTIATION: "auto", MCP_TIMEOUT: "3000", CLAUDE_CODE_DISABLE_AUTO_COMPACT: "1" };
-  const args = ["-p", "lookup", "--cwd", directory, "--mcp-config", config, "--tools", "", "--output-format", "json"];
-  const allowed = await run([...args, "--allowedTools", "mcp__fixture__lookup"], env);
-  assert.equal(allowed.code, 0, allowed.err);
-  const result = JSON.parse(allowed.out); assert.equal(result.result, "Done.");
-  assert.deepEqual(bodies[0].tools.map((tool: any) => tool.name), ["mcp__fixture__lookup"]);
-  assert.deepEqual(bodies[1].tools.map((tool: any) => tool.name), ["mcp__fixture__lookup", "mcp__fixture__followup"]);
-  const returned = bodies[1].messages.at(-1).content[0];
-  assert.deepEqual(returned.content, [
-    { type: "image", source: { type: "base64", media_type: "image/png", data: "aW1hZ2U=" } },
-    { type: "text", text: '{"found":{"labels":["a","b"],"limit":2}}' },
-  ]);
-  assert.equal(JSON.stringify(bodies).includes('"_meta"'), false);
-  scenario = "resume"; request = 0;
-  const resumed = await run([...args, "--resume", result.session_id], env);
-  assert.equal(resumed.code, 0, resumed.err); assert.equal(JSON.parse(resumed.out).result, "Resumed.");
-  assert.deepEqual(bodies.at(-1).messages.find((message: any) => message.content.some((block: any) => block.type === "tool_result")).content[0], returned);
-  for (const flags of [[], ["--allowedTools", "mcp__fixture__lookup", "--disallowedTools", "mcp__fixture__lookup"]]) {
-    scenario = "denied"; request = 0;
-    const denied = await run([...args, ...flags], env);
-    assert.equal(denied.code, 0, denied.err);
-    const error = bodies.at(-1).messages.at(-1).content[0];
-    assert.equal(error.is_error, true); assert.match(error.content, /Permission denied|denied by policy/);
-  }
-  const events = (await readFile(log, "utf8")).trim().split("\n").map(row => JSON.parse(row));
-  assert.equal(events.filter(event => event.event === "called").length, 1);
-  assert.deepEqual(events.find(event => event.event === "called").arguments, { query: { labels: ["a", "b"], limit: 2 } });
-  const started = events.filter(event => event.event === "start").map(event => event.pid).sort();
-  const exited = events.filter(event => event.event === "exit").map(event => event.pid).sort();
-  assert.equal(started.length, 4); assert.deepEqual(exited, started);
-});
+test(
+  "compiled MCP config→discovery→permitted rich call→refresh→save/resume and denied calls close every server",
+  { timeout: 20000 },
+  async (t) => {
+    const directory = await realpath(
+      await mkdtemp(join(tmpdir(), "tau-cli-mcp-")),
+    );
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    const script = join(directory, "fixture.cjs"),
+      log = join(directory, "events.jsonl"),
+      config = join(directory, "mcp.json");
+    await writeFile(script, serverSource);
+    await writeFile(
+      config,
+      JSON.stringify({
+        mcpServers: {
+          fixture: {
+            command: process.execPath,
+            args: [script],
+            env: { FIXTURE_LOG: log },
+          },
+        },
+      }),
+    );
+    const bodies: any[] = [];
+    let scenario = "allowed",
+      request = 0;
+    const api = createServer(async (incoming, response) => {
+      let raw = "";
+      for await (const chunk of incoming) raw += chunk;
+      const body = JSON.parse(raw);
+      bodies.push(body);
+      request++;
+      const content =
+        scenario === "resume" || request === 2
+          ? { type: "text", text: scenario === "resume" ? "Resumed." : "Done." }
+          : {
+              type: "tool_use",
+              id: "mcp-call",
+              name: "mcp__fixture__lookup",
+              input: { query: { labels: ["a", "b"], limit: 2 } },
+            };
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.end(
+        fixtureSse([
+          {
+            type: "message_start",
+            message: {
+              role: "assistant",
+              content: [],
+              usage: { input_tokens: 10, output_tokens: 0 },
+            },
+          },
+          { type: "content_block_start", index: 0, content_block: content },
+          { type: "content_block_stop", index: 0 },
+          {
+            type: "message_delta",
+            delta: {
+              stop_reason:
+                content.type === "tool_use" ? "tool_use" : "end_turn",
+            },
+            usage: { output_tokens: 4 },
+          },
+          { type: "message_stop" },
+        ]),
+      );
+    });
+    t.after(
+      () =>
+        new Promise<void>((done) => {
+          api.closeAllConnections();
+          api.close(() => done());
+        }),
+    );
+    await new Promise<void>((done) => api.listen(0, "127.0.0.1", done));
+    const address = api.address();
+    assert.ok(address && typeof address !== "string");
+    const env = {
+      ...process.env,
+      ANTHROPIC_API_KEY: "dummy",
+      ANTHROPIC_BASE_URL: `http://127.0.0.1:${address.port}`,
+      TAU_HOME: join(directory, "state"),
+      MCP_PROTOCOL_NEGOTIATION: "auto",
+      MCP_TIMEOUT: "3000",
+      CLAUDE_CODE_DISABLE_AUTO_COMPACT: "1",
+    };
+    const args = [
+      "-p",
+      "lookup",
+      "--cwd",
+      directory,
+      "--mcp-config",
+      config,
+      "--tools",
+      "",
+      "--output-format",
+      "json",
+    ];
+    const allowed = await run(
+      [...args, "--allowedTools", "mcp__fixture__lookup"],
+      env,
+    );
+    assert.equal(allowed.code, 0, allowed.err);
+    const result = JSON.parse(allowed.out);
+    assert.equal(result.result, "Done.");
+    assert.deepEqual(
+      bodies[0].tools.map((tool: any) => tool.name),
+      ["mcp__fixture__lookup"],
+    );
+    assert.deepEqual(
+      bodies[1].tools.map((tool: any) => tool.name),
+      ["mcp__fixture__lookup", "mcp__fixture__followup"],
+    );
+    const returned = bodies[1].messages.at(-1).content[0];
+    assert.deepEqual(returned.content, [
+      {
+        type: "image",
+        source: { type: "base64", media_type: "image/png", data: "aW1hZ2U=" },
+      },
+      { type: "text", text: '{"found":{"labels":["a","b"],"limit":2}}' },
+    ]);
+    assert.equal(JSON.stringify(bodies).includes('"_meta"'), false);
+    scenario = "resume";
+    request = 0;
+    const resumed = await run([...args, "--resume", result.session_id], env);
+    assert.equal(resumed.code, 0, resumed.err);
+    assert.equal(JSON.parse(resumed.out).result, "Resumed.");
+    assert.deepEqual(
+      bodies
+        .at(-1)
+        .messages.find((message: any) =>
+          message.content.some((block: any) => block.type === "tool_result"),
+        ).content[0],
+      returned,
+    );
+    for (const flags of [
+      [],
+      [
+        "--allowedTools",
+        "mcp__fixture__lookup",
+        "--disallowedTools",
+        "mcp__fixture__lookup",
+      ],
+    ]) {
+      scenario = "denied";
+      request = 0;
+      const denied = await run([...args, ...flags], env);
+      assert.equal(denied.code, 0, denied.err);
+      const error = bodies.at(-1).messages.at(-1).content[0];
+      assert.equal(error.is_error, true);
+      assert.match(error.content, /Permission denied|denied by policy/);
+    }
+    const events = (await readFile(log, "utf8"))
+      .trim()
+      .split("\n")
+      .map((row) => JSON.parse(row));
+    assert.equal(events.filter((event) => event.event === "called").length, 1);
+    assert.deepEqual(
+      events.find((event) => event.event === "called").arguments,
+      { query: { labels: ["a", "b"], limit: 2 } },
+    );
+    const started = events
+      .filter((event) => event.event === "start")
+      .map((event) => event.pid)
+      .sort();
+    const exited = events
+      .filter((event) => event.event === "exit")
+      .map((event) => event.pid)
+      .sort();
+    assert.equal(started.length, 4);
+    assert.deepEqual(exited, started);
+  },
+);
 
-test("compiled MCP autoload selects scopes before connecting and honors strict, rejection, overrides and local disables", { timeout: 20000 }, async t => {
-  const root = await realpath(await mkdtemp(join(tmpdir(), "tau-cli-mcp-scopes-")));
-  t.after(() => rm(root, { recursive: true, force: true }));
-  const cwd = join(root, "work"), user = join(root, "user"), managed = join(root, "managed");
-  for (const directory of [join(cwd, ".claude"), user, managed]) await mkdir(directory, { recursive: true });
-  const script = join(root, "fixture.cjs"), log = join(root, "events.jsonl"), explicit = join(root, "explicit.json");
-  await writeFile(script, serverSource);
-  const config = (origin: string) => ({ command: process.execPath, args: [script], env: { FIXTURE_LOG: log, FIXTURE_ORIGIN: origin } });
-  const global = (disabled: string[] = []) => ({ mcpServers: { fixture: config("user") }, projects: { [cwd]: {
-    mcpServers: { fixture: config("local") }, disabledMcpServers: disabled,
-  } } });
-  await writeFile(join(user, ".claude.json"), JSON.stringify(global()));
-  await writeFile(join(root, ".mcp.json"), JSON.stringify({ mcpServers: { fixture: config("ancestor") } }));
-  await writeFile(join(cwd, ".mcp.json"), JSON.stringify({ mcpServers: { fixture: config("project") } }));
-  await writeFile(explicit, JSON.stringify({ mcpServers: { fixture: config("explicit") } }));
-  const bodies: any[] = [];
-  let firstRequest = true;
-  const api = createServer(async (request, response) => {
-    let raw = ""; for await (const chunk of request) raw += chunk;
-    const body = JSON.parse(raw); bodies.push(body);
-    const call = firstRequest && body.tools.some((tool: any) => tool.name === "mcp__fixture__lookup");
-    firstRequest = false;
-    const block = call ? { type: "tool_use", id: "scope-call", name: "mcp__fixture__lookup", input: { query: { fixture: "scope" } } } : { type: "text", text: "Done." };
-    response.writeHead(200, { "content-type": "text/event-stream" });
-    response.end(fixtureSse([{ type: "message_start", message: { role: "assistant", content: [], usage: { input_tokens: 10, output_tokens: 0 } } },
-      { type: "content_block_start", index: 0, content_block: block }, { type: "content_block_stop", index: 0 },
-      { type: "message_delta", delta: { stop_reason: call ? "tool_use" : "end_turn" }, usage: { output_tokens: 2 } }, { type: "message_stop" }]));
-  });
-  t.after(() => new Promise<void>(done => { api.closeAllConnections(); api.close(() => done()); }));
-  await new Promise<void>(done => api.listen(0, "127.0.0.1", done));
-  const address = api.address(); assert.ok(address && typeof address !== "string");
-  const env = { ...process.env, CLAUDE_CONFIG_DIR: user, TAU_MANAGED_ROOT: managed,
-    TAU_HOME: join(root, "state"), ANTHROPIC_API_KEY: "dummy", ANTHROPIC_BASE_URL: `http://127.0.0.1:${address.port}`, MCP_TIMEOUT: "2000" };
-  const scenarios: Array<{ flags: string[]; origin?: string; rejected?: boolean; disabled?: boolean }> = [
-    { flags: [], origin: "local" },
-    { flags: ["--setting-sources", "user"], origin: "user" },
-    { flags: ["--setting-sources", "project"], origin: "project" },
-    { flags: ["--setting-sources", "local"], origin: "local" },
-    { flags: ["--setting-sources", ""] },
-    { flags: ["--mcp-config", explicit], origin: "explicit" },
-    { flags: ["--strict-mcp-config"] },
-    { flags: ["--strict-mcp-config", "--mcp-config", explicit], origin: "explicit" },
-    { flags: ["--setting-sources", "user,project"], origin: "user", rejected: true },
-    { flags: ["--strict-mcp-config", "--mcp-config", explicit], disabled: true },
-  ];
-  for (const scenario of scenarios) {
-    await writeFile(log, ""); firstRequest = true; const start = bodies.length;
-    await writeFile(join(user, ".claude.json"), JSON.stringify(global(scenario.disabled ? ["fixture"] : [])));
-    await writeFile(join(cwd, ".claude/settings.json"), JSON.stringify({ disabledMcpjsonServers: scenario.rejected ? ["fixture"] : [] }));
-    const result = await run(["-p", "lookup", "--cwd", cwd, "--tools", "", "--allowedTools", "mcp__fixture__lookup", "--output-format", "json", ...scenario.flags], env);
-    assert.equal(result.code, 0, result.err);
-    const events = (await readFile(log, "utf8")).trim().split("\n").filter(Boolean).map(line => JSON.parse(line));
-    assert.deepEqual(events.filter(event => event.event === "start").map(event => event.origin), scenario.origin ? [scenario.origin] : []);
-    assert.equal(events.filter(event => event.event === "called").length, scenario.origin ? 1 : 0);
-    assert.equal(bodies.length - start, scenario.origin ? 2 : 1);
-    const started = events.filter(event => event.event === "start").map(event => event.pid).sort();
-    assert.deepEqual(events.filter(event => event.event === "exit").map(event => event.pid).sort(), started);
-  }
-});
+test(
+  "compiled MCP autoload selects scopes before connecting and honors strict, rejection, overrides and local disables",
+  { timeout: 20000 },
+  async (t) => {
+    const root = await realpath(
+      await mkdtemp(join(tmpdir(), "tau-cli-mcp-scopes-")),
+    );
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const cwd = join(root, "work"),
+      user = join(root, "user"),
+      managed = join(root, "managed");
+    for (const directory of [join(cwd, ".claude"), user, managed])
+      await mkdir(directory, { recursive: true });
+    const script = join(root, "fixture.cjs"),
+      log = join(root, "events.jsonl"),
+      explicit = join(root, "explicit.json");
+    await writeFile(script, serverSource);
+    const config = (origin: string) => ({
+      command: process.execPath,
+      args: [script],
+      env: { FIXTURE_LOG: log, FIXTURE_ORIGIN: origin },
+    });
+    const global = (disabled: string[] = []) => ({
+      mcpServers: { fixture: config("user") },
+      projects: {
+        [cwd]: {
+          mcpServers: { fixture: config("local") },
+          disabledMcpServers: disabled,
+        },
+      },
+    });
+    await writeFile(join(user, ".claude.json"), JSON.stringify(global()));
+    await writeFile(
+      join(root, ".mcp.json"),
+      JSON.stringify({ mcpServers: { fixture: config("ancestor") } }),
+    );
+    await writeFile(
+      join(cwd, ".mcp.json"),
+      JSON.stringify({ mcpServers: { fixture: config("project") } }),
+    );
+    await writeFile(
+      explicit,
+      JSON.stringify({ mcpServers: { fixture: config("explicit") } }),
+    );
+    const bodies: any[] = [];
+    let firstRequest = true;
+    const api = createServer(async (request, response) => {
+      let raw = "";
+      for await (const chunk of request) raw += chunk;
+      const body = JSON.parse(raw);
+      bodies.push(body);
+      const call =
+        firstRequest &&
+        body.tools.some((tool: any) => tool.name === "mcp__fixture__lookup");
+      firstRequest = false;
+      const block = call
+        ? {
+            type: "tool_use",
+            id: "scope-call",
+            name: "mcp__fixture__lookup",
+            input: { query: { fixture: "scope" } },
+          }
+        : { type: "text", text: "Done." };
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.end(
+        fixtureSse([
+          {
+            type: "message_start",
+            message: {
+              role: "assistant",
+              content: [],
+              usage: { input_tokens: 10, output_tokens: 0 },
+            },
+          },
+          { type: "content_block_start", index: 0, content_block: block },
+          { type: "content_block_stop", index: 0 },
+          {
+            type: "message_delta",
+            delta: { stop_reason: call ? "tool_use" : "end_turn" },
+            usage: { output_tokens: 2 },
+          },
+          { type: "message_stop" },
+        ]),
+      );
+    });
+    t.after(
+      () =>
+        new Promise<void>((done) => {
+          api.closeAllConnections();
+          api.close(() => done());
+        }),
+    );
+    await new Promise<void>((done) => api.listen(0, "127.0.0.1", done));
+    const address = api.address();
+    assert.ok(address && typeof address !== "string");
+    const env = {
+      ...process.env,
+      CLAUDE_CONFIG_DIR: user,
+      TAU_MANAGED_ROOT: managed,
+      TAU_HOME: join(root, "state"),
+      ANTHROPIC_API_KEY: "dummy",
+      ANTHROPIC_BASE_URL: `http://127.0.0.1:${address.port}`,
+      MCP_TIMEOUT: "2000",
+    };
+    const scenarios: Array<{
+      flags: string[];
+      origin?: string;
+      rejected?: boolean;
+      disabled?: boolean;
+    }> = [
+      { flags: [], origin: "local" },
+      { flags: ["--setting-sources", "user"], origin: "user" },
+      { flags: ["--setting-sources", "project"], origin: "project" },
+      { flags: ["--setting-sources", "local"], origin: "local" },
+      { flags: ["--setting-sources", ""] },
+      { flags: ["--mcp-config", explicit], origin: "explicit" },
+      { flags: ["--strict-mcp-config"] },
+      {
+        flags: ["--strict-mcp-config", "--mcp-config", explicit],
+        origin: "explicit",
+      },
+      {
+        flags: ["--setting-sources", "user,project"],
+        origin: "user",
+        rejected: true,
+      },
+      {
+        flags: ["--strict-mcp-config", "--mcp-config", explicit],
+        disabled: true,
+      },
+    ];
+    for (const scenario of scenarios) {
+      await writeFile(log, "");
+      firstRequest = true;
+      const start = bodies.length;
+      await writeFile(
+        join(user, ".claude.json"),
+        JSON.stringify(global(scenario.disabled ? ["fixture"] : [])),
+      );
+      await writeFile(
+        join(cwd, ".claude/settings.json"),
+        JSON.stringify({
+          disabledMcpjsonServers: scenario.rejected ? ["fixture"] : [],
+        }),
+      );
+      const result = await run(
+        [
+          "-p",
+          "lookup",
+          "--cwd",
+          cwd,
+          "--tools",
+          "",
+          "--allowedTools",
+          "mcp__fixture__lookup",
+          "--output-format",
+          "json",
+          ...scenario.flags,
+        ],
+        env,
+      );
+      assert.equal(result.code, 0, result.err);
+      const events = (await readFile(log, "utf8"))
+        .trim()
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line));
+      assert.deepEqual(
+        events
+          .filter((event) => event.event === "start")
+          .map((event) => event.origin),
+        scenario.origin ? [scenario.origin] : [],
+      );
+      assert.equal(
+        events.filter((event) => event.event === "called").length,
+        scenario.origin ? 1 : 0,
+      );
+      assert.equal(bodies.length - start, scenario.origin ? 2 : 1);
+      const started = events
+        .filter((event) => event.event === "start")
+        .map((event) => event.pid)
+        .sort();
+      assert.deepEqual(
+        events
+          .filter((event) => event.event === "exit")
+          .map((event) => event.pid)
+          .sort(),
+        started,
+      );
+    }
+  },
+);

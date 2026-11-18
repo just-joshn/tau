@@ -4,7 +4,17 @@ import { mkdtemp, readFile, writeFile, rm, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { loadMcpConfigs, McpManager, McpProtocolError, parseMcpConfigs, qualifyMcpToolName, sanitizeMcpName, projectMcpResult, parseMcpCallResult, type McpStdioConfig } from "../src/mcp.js";
+import {
+  loadMcpConfigs,
+  McpManager,
+  McpProtocolError,
+  parseMcpConfigs,
+  qualifyMcpToolName,
+  sanitizeMcpName,
+  projectMcpResult,
+  parseMcpCallResult,
+  type McpStdioConfig,
+} from "../src/mcp.js";
 
 // Independently written local server; the recovered application is never executed.
 const fixture = String.raw`
@@ -60,21 +70,59 @@ createInterface({input:process.stdin}).on('line',(line)=>{
 
 async function harness(mode = "legacy") {
   const directory = await mkdtemp(join(tmpdir(), "tau-mcp-test-"));
-  const script = join(directory, "server.mjs"), log = join(directory, "events.jsonl");
+  const script = join(directory, "server.mjs"),
+    log = join(directory, "events.jsonl");
   await writeFile(script, fixture);
-  const config: McpStdioConfig = { command: process.execPath, args: [script, mode, log], env: { FIXTURE_EXPLICIT: "yes" } };
+  const config: McpStdioConfig = {
+    command: process.execPath,
+    args: [script, mode, log],
+    env: { FIXTURE_EXPLICIT: "yes" },
+  };
   const warnings: string[] = [];
   let manager: McpManager | undefined;
   return {
-    directory, script, log, config, warnings,
-    async connect(extra: Partial<Parameters<typeof McpManager.connect>[1]> = {}, configs?: Record<string, McpStdioConfig>) {
-      manager = await McpManager.connect(configs ?? { "fixture server": config }, { cwd: directory, env: { PATH: process.env.PATH }, onWarning: (message) => warnings.push(message), ...extra });
+    directory,
+    script,
+    log,
+    config,
+    warnings,
+    async connect(
+      extra: Partial<Parameters<typeof McpManager.connect>[1]> = {},
+      configs?: Record<string, McpStdioConfig>,
+    ) {
+      manager = await McpManager.connect(
+        configs ?? { "fixture server": config },
+        {
+          cwd: directory,
+          env: { PATH: process.env.PATH },
+          onWarning: (message) => warnings.push(message),
+          ...extra,
+        },
+      );
       return manager;
     },
-    async events(): Promise<Array<{ pid: number; event: string; explicit?: string; message?: { id?: string | number; method?: string; params?: Record<string, unknown>; result?: unknown } }>> {
-      return (await readFile(log, "utf8")).trim().split("\n").map((line) => JSON.parse(line) as { pid: number; event: string });
+    async events(): Promise<
+      Array<{
+        pid: number;
+        event: string;
+        explicit?: string;
+        message?: {
+          id?: string | number;
+          method?: string;
+          params?: Record<string, unknown>;
+          result?: unknown;
+        };
+      }>
+    > {
+      return (await readFile(log, "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { pid: number; event: string });
     },
-    async cleanup() { await manager?.close(); await rm(directory, { recursive: true, force: true }); },
+    async cleanup() {
+      await manager?.close();
+      await rm(directory, { recursive: true, force: true });
+    },
   };
 }
 const name = (tool: string) => qualifyMcpToolName("fixture server", tool);
@@ -83,17 +131,60 @@ const signal = () => new AbortController().signal;
 test("MCP explicit config files/inline JSON merge, interpolate and validate without shell expansion", async () => {
   const h = await harness();
   try {
-    await writeFile(join(h.directory, "mcp.json"), JSON.stringify({ mcpServers: { first: { command: "${BIN}", args: ["${EMPTY:-fallback}", "${MISSING:-fallback}", "$UNEXPANDED", "$(never-executed)"] }, replaced: { command: "old" } } }));
-    const configs = await loadMcpConfigs(["mcp.json", '{"mcpServers":{"replaced":{"command":"new"}}}'], h.directory, { BIN: process.execPath, EMPTY: "" });
+    await writeFile(
+      join(h.directory, "mcp.json"),
+      JSON.stringify({
+        mcpServers: {
+          first: {
+            command: "${BIN}",
+            args: [
+              "${EMPTY:-fallback}",
+              "${MISSING:-fallback}",
+              "$UNEXPANDED",
+              "$(never-executed)",
+            ],
+          },
+          replaced: { command: "old" },
+        },
+      }),
+    );
+    const configs = await loadMcpConfigs(
+      ["mcp.json", '{"mcpServers":{"replaced":{"command":"new"}}}'],
+      h.directory,
+      { BIN: process.execPath, EMPTY: "" },
+    );
     assert.equal(configs.first?.command, process.execPath);
-    assert.deepEqual(configs.first?.args, ["", "fallback", "$UNEXPANDED", "$(never-executed)"]);
+    assert.deepEqual(configs.first?.args, [
+      "",
+      "fallback",
+      "$UNEXPANDED",
+      "$(never-executed)",
+    ]);
     assert.equal(configs.replaced?.command, "new");
-    assert.throws(() => parseMcpConfigs({ mcpServers: { bad: { command: "${MISSING}" } } }, {}), /Missing environment variables: MISSING/);
-    assert.throws(() => parseMcpConfigs({ mcpServers: { bad: { type: "http", url: "https://invalid" } } }), /Unsupported MCP transport/);
-    assert.throws(() => parseMcpConfigs({ mcpServers: { bad: { command: "node", env: { BAD: 1 } } } }), /env must contain strings/);
+    assert.throws(
+      () =>
+        parseMcpConfigs({ mcpServers: { bad: { command: "${MISSING}" } } }, {}),
+      /Missing environment variables: MISSING/,
+    );
+    assert.throws(
+      () =>
+        parseMcpConfigs({
+          mcpServers: { bad: { type: "http", url: "https://invalid" } },
+        }),
+      /Unsupported MCP transport/,
+    );
+    assert.throws(
+      () =>
+        parseMcpConfigs({
+          mcpServers: { bad: { command: "node", env: { BAD: 1 } } },
+        }),
+      /env must contain strings/,
+    );
     assert.equal(sanitizeMcpName("a.. b"), "a___b");
     assert.equal(sanitizeMcpName("claude.ai A.. B"), "claude_ai_A_B");
-  } finally { await h.cleanup(); }
+  } finally {
+    await h.cleanup();
+  }
 });
 
 test("MCP legacy workflow probes and initializes one process, paginates and calls original tool names", async () => {
@@ -103,10 +194,19 @@ test("MCP legacy workflow probes and initializes one process, paginates and call
     assert.equal(manager.definitions.length, 10);
     assert.equal(manager.lookup(name("read.text"))?.isReadOnly, true);
     assert.equal(manager.lookup(name("read.text"))?.destructiveHint, false);
-    assert.equal(manager.lookup(name("tool-error"))?.requiresUserInteraction, true);
-    const result = await manager.callTool(name("read.text"), { value: "fixture" }, signal());
+    assert.equal(
+      manager.lookup(name("tool-error"))?.requiresUserInteraction,
+      true,
+    );
+    const result = await manager.callTool(
+      name("read.text"),
+      { value: "fixture" },
+      signal(),
+    );
     assert.equal(result.projection.text, "héllo fixture");
-    assert.deepEqual(result.projection.blocks, [{ type: "text", text: "héllo fixture" }]);
+    assert.deepEqual(result.projection.blocks, [
+      { type: "text", text: "héllo fixture" },
+    ]);
     assert.deepEqual(result.raw._meta, { private: "result" });
     assert.deepEqual(result.raw.content[0]?._meta, { private: "text" });
     await manager.close();
@@ -114,15 +214,31 @@ test("MCP legacy workflow probes and initializes one process, paginates and call
     const starts = events.filter((event) => event.event === "start");
     assert.equal(starts.length, 1);
     assert.equal(starts[0]?.explicit, "yes");
-    const messages = events.filter((event) => event.message).map((event) => ({ pid: event.pid, ...event.message }));
+    const messages = events
+      .filter((event) => event.message)
+      .map((event) => ({ pid: event.pid, ...event.message }));
     assert.equal(messages.filter((m) => m.method === "initialize").length, 1);
-    assert.equal(messages.find((m) => m.method === "server/discover")?.pid, starts[0]?.pid);
-    assert.equal(messages.find((m) => m.method === "initialize")?.pid, starts[0]?.pid);
-    assert.equal(messages.find((m) => m.method === "tools/call")?.pid, starts[0]?.pid);
-    assert.equal(messages.find((m) => m.method === "tools/call")?.params?.name, "read.text");
+    assert.equal(
+      messages.find((m) => m.method === "server/discover")?.pid,
+      starts[0]?.pid,
+    );
+    assert.equal(
+      messages.find((m) => m.method === "initialize")?.pid,
+      starts[0]?.pid,
+    );
+    assert.equal(
+      messages.find((m) => m.method === "tools/call")?.pid,
+      starts[0]?.pid,
+    );
+    assert.equal(
+      messages.find((m) => m.method === "tools/call")?.params?.name,
+      "read.text",
+    );
     assert.ok(messages.some((m) => m.id === "root-request" && m.result));
     assert.deepEqual(h.warnings, []);
-  } finally { await h.cleanup(); }
+  } finally {
+    await h.cleanup();
+  }
 });
 
 test("MCP modern workflow sends request envelopes and opens/cleans list-change subscription without initialize", async () => {
@@ -133,19 +249,48 @@ test("MCP modern workflow sends request envelopes and opens/cleans list-change s
     assert.equal(result.projection.text, "héllo world");
     await manager.close();
     const events = await h.events();
-    assert.equal(events.filter(event => event.event === "start").length, 1);
-    assert.equal(events.find(event => event.message?.method === "server/discover")?.pid,
-      events.find(event => event.message?.method === "tools/call")?.pid);
-    const messages = events.flatMap((event) => event.message ? [event.message] : []);
-    assert.equal(messages.some((message) => message.method === "initialize"), false);
-    const discover = messages.find((message) => message.method === "server/discover");
-    assert.equal((discover?.params?._meta as Record<string, unknown>)["io.modelcontextprotocol/protocolVersion"], "2026-07-28");
+    assert.equal(events.filter((event) => event.event === "start").length, 1);
+    assert.equal(
+      events.find((event) => event.message?.method === "server/discover")?.pid,
+      events.find((event) => event.message?.method === "tools/call")?.pid,
+    );
+    const messages = events.flatMap((event) =>
+      event.message ? [event.message] : [],
+    );
+    assert.equal(
+      messages.some((message) => message.method === "initialize"),
+      false,
+    );
+    const discover = messages.find(
+      (message) => message.method === "server/discover",
+    );
+    assert.equal(
+      (discover?.params?._meta as Record<string, unknown>)[
+        "io.modelcontextprotocol/protocolVersion"
+      ],
+      "2026-07-28",
+    );
     const call = messages.find((message) => message.method === "tools/call");
-    assert.equal((call?.params?._meta as Record<string, unknown>)["io.modelcontextprotocol/protocolVersion"], "2026-07-28");
-    assert.ok(messages.some((message) => message.method === "subscriptions/listen"));
-    assert.ok(messages.some((message) => message.method === "notifications/cancelled" && message.params?.requestId === "listen:0"));
+    assert.equal(
+      (call?.params?._meta as Record<string, unknown>)[
+        "io.modelcontextprotocol/protocolVersion"
+      ],
+      "2026-07-28",
+    );
+    assert.ok(
+      messages.some((message) => message.method === "subscriptions/listen"),
+    );
+    assert.ok(
+      messages.some(
+        (message) =>
+          message.method === "notifications/cancelled" &&
+          message.params?.requestId === "listen:0",
+      ),
+    );
     assert.deepEqual(h.warnings, []);
-  } finally { await h.cleanup(); }
+  } finally {
+    await h.cleanup();
+  }
 });
 
 test("MCP tools/list_changed refreshes complete paginated definitions", async () => {
@@ -156,8 +301,13 @@ test("MCP tools/list_changed refreshes complete paginated definitions", async ()
     await manager.callTool(name("refresh"), {}, signal());
     await manager.refreshTools();
     assert.ok(manager.lookup(name("new-tool")));
-    assert.equal((await manager.callTool(name("new-tool"), {}, signal())).projection.text, "héllo world");
-  } finally { await h.cleanup(); }
+    assert.equal(
+      (await manager.callTool(name("new-tool"), {}, signal())).projection.text,
+      "héllo world",
+    );
+  } finally {
+    await h.cleanup();
+  }
 });
 
 test("MCP distinguishes tool errors and JSON-RPC errors and never replays failed calls", async () => {
@@ -165,15 +315,42 @@ test("MCP distinguishes tool errors and JSON-RPC errors and never replays failed
   try {
     const manager = await h.connect({ negotiation: "legacy" });
     const result = await manager.callTool(name("tool-error"), {}, signal());
-    assert.deepEqual(result.projection, { text: "fixture error", blocks: [{ type: "text", text: "fixture error" }], isError: true });
+    assert.deepEqual(result.projection, {
+      text: "fixture error",
+      blocks: [{ type: "text", text: "fixture error" }],
+      isError: true,
+    });
     assert.deepEqual(result.raw.structuredContent, { misleading: "success" });
-    await assert.rejects(manager.callTool(name("rpc-error"), {}, signal()), (error) => error instanceof McpProtocolError && error.code === -32602 && (error.data as { detail: string }).detail === "specific");
-    await assert.rejects(manager.callTool(name("die"), {}, signal()), /closed the connection/);
-    await assert.rejects(manager.callTool(name("read.text"), {}, signal()), /disconnected/);
-    const calls = (await h.events()).filter((event) => event.message?.method === "tools/call");
-    assert.equal(calls.filter((event) => event.message?.params?.name === "die").length, 1);
-    assert.equal(calls.filter((event) => event.message?.params?.name === "rpc-error").length, 1);
-  } finally { await h.cleanup(); }
+    await assert.rejects(
+      manager.callTool(name("rpc-error"), {}, signal()),
+      (error) =>
+        error instanceof McpProtocolError &&
+        error.code === -32602 &&
+        (error.data as { detail: string }).detail === "specific",
+    );
+    await assert.rejects(
+      manager.callTool(name("die"), {}, signal()),
+      /closed the connection/,
+    );
+    await assert.rejects(
+      manager.callTool(name("read.text"), {}, signal()),
+      /disconnected/,
+    );
+    const calls = (await h.events()).filter(
+      (event) => event.message?.method === "tools/call",
+    );
+    assert.equal(
+      calls.filter((event) => event.message?.params?.name === "die").length,
+      1,
+    );
+    assert.equal(
+      calls.filter((event) => event.message?.params?.name === "rpc-error")
+        .length,
+      1,
+    );
+  } finally {
+    await h.cleanup();
+  }
 });
 
 test("MCP cancellation notifies server once and aborts without replay; a pre-aborted call does not send", async () => {
@@ -182,27 +359,65 @@ test("MCP cancellation notifies server once and aborts without replay; a pre-abo
     const manager = await h.connect({ negotiation: "legacy" });
     const controller = new AbortController();
     const pending = manager.callTool(name("hang"), {}, controller.signal);
-    await delay(30); controller.abort();
+    await delay(30);
+    controller.abort();
     await assert.rejects(pending, { name: "AbortError" });
-    await assert.rejects(manager.callTool(name("hang"), {}, controller.signal), { name: "AbortError" });
+    await assert.rejects(
+      manager.callTool(name("hang"), {}, controller.signal),
+      { name: "AbortError" },
+    );
     await delay(15);
-    const messages = (await h.events()).flatMap((event) => event.message ? [event.message] : []);
-    assert.equal(messages.filter((message) => message.method === "tools/call").length, 1);
-    assert.equal(messages.filter((message) => message.method === "notifications/cancelled").length, 1);
-  } finally { await h.cleanup(); }
+    const messages = (await h.events()).flatMap((event) =>
+      event.message ? [event.message] : [],
+    );
+    assert.equal(
+      messages.filter((message) => message.method === "tools/call").length,
+      1,
+    );
+    assert.equal(
+      messages.filter((message) => message.method === "notifications/cancelled")
+        .length,
+      1,
+    );
+  } finally {
+    await h.cleanup();
+  }
 });
 
 test("MCP progress extends idle deadline while the hard per-server timeout still aborts silent calls", async () => {
   const h = await harness();
   try {
-    const manager = await h.connect({ negotiation: "legacy", env: { PATH: process.env.PATH, MCP_TOOL_TIMEOUT: "1000", CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT: "150" } }, { "fixture server": h.config, hardcap: { ...h.config, timeout: 1000 } });
+    const manager = await h.connect(
+      {
+        negotiation: "legacy",
+        env: {
+          PATH: process.env.PATH,
+          MCP_TOOL_TIMEOUT: "1000",
+          CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT: "150",
+        },
+      },
+      { "fixture server": h.config, hardcap: { ...h.config, timeout: 1000 } },
+    );
     // Progress runs longer than the idle allowance; each notification resets it.
-    assert.equal((await manager.callTool(name("progress"), {}, signal())).projection.text, "progress complete");
+    assert.equal(
+      (await manager.callTool(name("progress"), {}, signal())).projection.text,
+      "progress complete",
+    );
     // A per-server timeout also sets the minimum idle allowance in the source.
-    await assert.rejects(manager.callTool(qualifyMcpToolName("hardcap", "hang"), {}, signal()), /timed out after 1000ms/);
+    await assert.rejects(
+      manager.callTool(qualifyMcpToolName("hardcap", "hang"), {}, signal()),
+      /timed out after 1000ms/,
+    );
     await delay(10);
-    assert.equal((await h.events()).filter((event) => event.message?.method === "notifications/cancelled").length, 1);
-  } finally { await h.cleanup(); }
+    assert.equal(
+      (await h.events()).filter(
+        (event) => event.message?.method === "notifications/cancelled",
+      ).length,
+      1,
+    );
+  } finally {
+    await h.cleanup();
+  }
 });
 
 test("MCP source projection keeps images, structured data, resources, and saved audio usable", async () => {
@@ -212,32 +427,105 @@ test("MCP source projection keeps images, structured data, resources, and saved 
     const image = await manager.callTool(name("image"), {}, signal());
     assert.equal(image.projection.blocks[0]?.type, "image");
     const structured = await manager.callTool(name("structured"), {}, signal());
-    assert.deepEqual(structured.projection.blocks, [{ type: "text", text: "[Resource link: manual] file:///manual (reference)" }, { type: "text", text: '{"answer":42}' }]);
+    assert.deepEqual(structured.projection.blocks, [
+      {
+        type: "text",
+        text: "[Resource link: manual] file:///manual (reference)",
+      },
+      { type: "text", text: '{"answer":42}' },
+    ]);
     assert.deepEqual(structured.raw._meta, { local: "metadata" });
     const audio = await manager.callTool(name("audio"), {}, signal());
-    assert.match(audio.projection.text, /\[Audio from fixture server\] Binary content \(audio\/wav, 8 bytes\) saved to/);
+    assert.match(
+      audio.projection.text,
+      /\[Audio from fixture server\] Binary content \(audio\/wav, 8 bytes\) saved to/,
+    );
     const directory = join(h.directory, ".tau", "mcp-results");
     const files = await readdir(directory);
     assert.equal(files.length, 1);
-    assert.equal((await readFile(join(directory, files[0]!))).toString(), "RIFFtest");
-  } finally { await h.cleanup(); }
+    assert.equal(
+      (await readFile(join(directory, files[0]!))).toString(),
+      "RIFFtest",
+    );
+  } finally {
+    await h.cleanup();
+  }
 });
 
 test("MCP source resource/PDF conversion and primitive structured fallback retain raw metadata", async () => {
   const pdf = Buffer.from("%PDF-fixture").toString("base64");
-  const raw = parseMcpCallResult({ content: [
-    { type: "resource", resource: { uri: "fixture:///text", text: "resource text" } },
-    { type: "resource", resource: { uri: "fixture:///pdf", mimeType: "application/pdf", blob: pdf } },
-    { type: "resource", resource: { uri: "fixture:///pdf2", mimeType: "application/pdf", blob: pdf } },
-  ] });
-  const projection = await projectMcpResult(raw, { serverName: "fixture", inlinePdfBytes: 1024 });
-  assert.deepEqual(projection.blocks, [{ type: "text", text: "[Resource from fixture at fixture:///text] resource text" }, { type: "document", source: { type: "base64", media_type: "application/pdf", data: pdf } }, { type: "text", text: "[Another PDF in this result was left out: only the first is shown.]" }]);
-  const primitive = parseMcpCallResult({ structuredContent: [1, 2], _meta: { trace: "local" } });
+  const raw = parseMcpCallResult({
+    content: [
+      {
+        type: "resource",
+        resource: { uri: "fixture:///text", text: "resource text" },
+      },
+      {
+        type: "resource",
+        resource: {
+          uri: "fixture:///pdf",
+          mimeType: "application/pdf",
+          blob: pdf,
+        },
+      },
+      {
+        type: "resource",
+        resource: {
+          uri: "fixture:///pdf2",
+          mimeType: "application/pdf",
+          blob: pdf,
+        },
+      },
+    ],
+  });
+  const projection = await projectMcpResult(raw, {
+    serverName: "fixture",
+    inlinePdfBytes: 1024,
+  });
+  assert.deepEqual(projection.blocks, [
+    {
+      type: "text",
+      text: "[Resource from fixture at fixture:///text] resource text",
+    },
+    {
+      type: "document",
+      source: { type: "base64", media_type: "application/pdf", data: pdf },
+    },
+    {
+      type: "text",
+      text: "[Another PDF in this result was left out: only the first is shown.]",
+    },
+  ]);
+  const primitive = parseMcpCallResult({
+    structuredContent: [1, 2],
+    _meta: { trace: "local" },
+  });
   assert.deepEqual(primitive.content, [{ type: "text", text: "[1,2]" }]);
-  assert.equal((await projectMcpResult(primitive, { serverName: "fixture" })).text, "[1,2]");
-  assert.equal((await projectMcpResult(parseMcpCallResult({ toolResult: 42 }), { serverName: "fixture" })).text, "42");
-  assert.equal((await projectMcpResult(parseMcpCallResult({ isError: true, error: "legacy failure" }), { serverName: "fixture" })).text, "legacy failure");
-  assert.throws(() => parseMcpCallResult({ content: [{ type: "text", text: 12 }] }), /Invalid or unsupported MCP/);
+  assert.equal(
+    (await projectMcpResult(primitive, { serverName: "fixture" })).text,
+    "[1,2]",
+  );
+  assert.equal(
+    (
+      await projectMcpResult(parseMcpCallResult({ toolResult: 42 }), {
+        serverName: "fixture",
+      })
+    ).text,
+    "42",
+  );
+  assert.equal(
+    (
+      await projectMcpResult(
+        parseMcpCallResult({ isError: true, error: "legacy failure" }),
+        { serverName: "fixture" },
+      )
+    ).text,
+    "legacy failure",
+  );
+  assert.throws(
+    () => parseMcpCallResult({ content: [{ type: "text", text: 12 }] }),
+    /Invalid or unsupported MCP/,
+  );
 });
 
 test("MCP ambiguous sanitized names are unavailable and pagination cursor loops terminate", async () => {
@@ -246,14 +534,23 @@ test("MCP ambiguous sanitized names are unavailable and pagination cursor loops 
     const manager = await collision.connect({ negotiation: "legacy" });
     assert.equal(manager.definitions.length, 0);
     assert.match(collision.warnings.join("\n"), /name collision/);
-  } finally { await collision.cleanup(); }
+  } finally {
+    await collision.cleanup();
+  }
   const cursor = await harness("bad-cursor");
   try {
     const manager = await cursor.connect({ negotiation: "legacy" });
     assert.deepEqual(manager.definitions, []);
     assert.deepEqual(cursor.warnings, []);
-    assert.equal((await cursor.events()).filter((event) => event.message?.method === "tools/list").length, 2);
-  } finally { await cursor.cleanup(); }
+    assert.equal(
+      (await cursor.events()).filter(
+        (event) => event.message?.method === "tools/list",
+      ).length,
+      2,
+    );
+  } finally {
+    await cursor.cleanup();
+  }
 });
 
 test("MCP malformed discovery reply falls back on its existing legacy process", async () => {
@@ -261,9 +558,14 @@ test("MCP malformed discovery reply falls back on its existing legacy process", 
   try {
     const manager = await h.connect();
     assert.equal(manager.definitions.length, 10);
-    assert.equal((await h.events()).filter((event) => event.event === "start").length, 1);
+    assert.equal(
+      (await h.events()).filter((event) => event.event === "start").length,
+      1,
+    );
     assert.deepEqual(h.warnings, []);
-  } finally { await h.cleanup(); }
+  } finally {
+    await h.cleanup();
+  }
 });
 
 test("MCP closed in-place discovery fails without launching a replacement server", async () => {
@@ -273,19 +575,33 @@ test("MCP closed in-place discovery fails without launching a replacement server
     assert.deepEqual(manager.definitions, []);
     assert.match(h.warnings.join("\n"), /closed the connection/);
     const events = await h.events();
-    assert.equal(events.filter(event => event.event === "start").length, 1);
-    assert.equal(events.some(event => event.message?.method === "initialize"), false);
-  } finally { await h.cleanup(); }
+    assert.equal(events.filter((event) => event.event === "start").length, 1);
+    assert.equal(
+      events.some((event) => event.message?.method === "initialize"),
+      false,
+    );
+  } finally {
+    await h.cleanup();
+  }
 });
 
 test("MCP startup abort disposes the child and rejects promptly", async () => {
   const h = await harness();
   try {
     const script = join(h.directory, "silent.mjs");
-    await writeFile(script, "process.stdin.resume(); process.stdin.on('end',()=>process.exit(0));");
+    await writeFile(
+      script,
+      "process.stdin.resume(); process.stdin.on('end',()=>process.exit(0));",
+    );
     const controller = new AbortController();
-    const pending = h.connect({ signal: controller.signal }, { silent: { command: process.execPath, args: [script] } });
-    await delay(40); controller.abort();
+    const pending = h.connect(
+      { signal: controller.signal },
+      { silent: { command: process.execPath, args: [script] } },
+    );
+    await delay(40);
+    controller.abort();
     await assert.rejects(pending, { name: "AbortError" });
-  } finally { await h.cleanup(); }
+  } finally {
+    await h.cleanup();
+  }
 });

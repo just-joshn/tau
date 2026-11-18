@@ -14,18 +14,18 @@ Accepted-body recovery is now wired through the query ledger, explicit provision
 
 Most application spans are in `chunk-4h798pp0.js`. The ledger metadata retains executable offsets, lengths and hashes. Useful module-relative anchors:
 
-| Anchor | Offset | Meaning |
-| --- | ---: | --- |
-| `Fb` | 3114488 | Broad watchdog versus capacity-only scope |
-| `DXn`, decision helpers | 3114820 vicinity | Fresh counters and pure recovery table |
-| `GXn` | 3119324 | Query-owned mutable ledger and optional caller allowance |
-| `lgs`, `zXn`, `dgs` | 3121072 onward | Request/stream failure classification |
-| `S9n` | 3122483 | Independent first-header failure retry cap, 1 |
-| Header admission | 3130912 vicinity | Check/increment before subsequent request recovery |
-| Suspended/reconnect admission | 3135859 vicinity | Separate extra allowances |
-| `T1r` | 3149557 | Ordinary/persistent defaults and explicit override clamp |
-| Query setup | 3234152 | Shared header count and model-call ledger construction |
-| Active stream recovery | 3305299 vicinity | Progress classification into ledger decision |
+| Anchor                        |           Offset | Meaning                                                  |
+| ----------------------------- | ---------------: | -------------------------------------------------------- |
+| `Fb`                          |          3114488 | Broad watchdog versus capacity-only scope                |
+| `DXn`, decision helpers       | 3114820 vicinity | Fresh counters and pure recovery table                   |
+| `GXn`                         |          3119324 | Query-owned mutable ledger and optional caller allowance |
+| `lgs`, `zXn`, `dgs`           |   3121072 onward | Request/stream failure classification                    |
+| `S9n`                         |          3122483 | Independent first-header failure retry cap, 1            |
+| Header admission              | 3130912 vicinity | Check/increment before subsequent request recovery       |
+| Suspended/reconnect admission | 3135859 vicinity | Separate extra allowances                                |
+| `T1r`                         |          3149557 | Ordinary/persistent defaults and explicit override clamp |
+| Query setup                   |          3234152 | Shared header count and model-call ledger construction   |
+| Active stream recovery        | 3305299 vicinity | Progress classification into ledger decision             |
 
 The typed setting bindings are separately verified in `chunk-07n5vvax.js`. Exact source spans are local evidence, not shipped application code.
 
@@ -41,13 +41,13 @@ The no-header count is separate from those counters. The first ordinary first-he
 
 ## Stream classification
 
-| Progress | Source condition |
-| --- | --- |
-| `nothing` | No qualifying parsed event or output |
-| `started` | Parsed events, no visible output or completed block |
-| `partialOutput` | Output began, no completed block |
-| `thinkingOnly` | At least one completed block, no ordinary output |
-| `output` | Completed block(s) and ordinary output |
+| Progress        | Source condition                                    |
+| --------------- | --------------------------------------------------- |
+| `nothing`       | No qualifying parsed event or output                |
+| `started`       | Parsed events, no visible output or completed block |
+| `partialOutput` | Output began, no completed block                    |
+| `thinkingOnly`  | At least one completed block, no ordinary output    |
+| `output`        | Completed block(s) and ordinary output              |
 
 Cause precedence is denial, output filter, overload, server error/timeout, stall, connection loss (truncation before suspension), malformed stream, bad request, unknown. Coherent complete envelopes can suppress selected transport failures, including a missing final `message_stop`; tau now supports this complete-envelope path.
 
@@ -55,25 +55,25 @@ Cause precedence is denial, output filter, overload, server error/timeout, stall
 
 Decisions are retry streaming, retry without streaming, use fallback model, keep partial content, or fail. Selected rows summarize the complete implementation:
 
-| State/cause | Decision/accounting |
-| --- | --- |
-| Request suspended | Spend slept-through allowance, then ordinary retry |
-| Request network down | Spend reconnect allowance, then ordinary retry |
-| Persistent capacity refusal | May retry without ordinary count, subject to profile/background gates |
-| HTTP 404, nonstream not yet tried | Admit nonstream, including at zero ordinary retries |
-| HTTP 529 | Count overload; ordinary/persistent, background and model fallback policy compose |
-| Denied | Fail at every progress state |
-| Output filtered before output/stop reason | One feature-controlled filtered retry, also spends ordinary retry |
-| Completed ordinary output | Keep partial for recognized transport/server failures; bad/unknown failure still fails |
-| Thinking-only stall | One streaming retry; exhausted path keeps partial |
-| Thinking-only connection/suspend/truncation/malformed | Up to two after-thinking retries; exhausted path keeps partial |
-| Thinking-only server error/timeout | Optional model fallback; otherwise two/one after-thinking retries; exhausted path fails |
-| Stall before any event | One streaming retry before nonstream fallback |
-| Stall after initial events | Nonstream fallback directly |
-| Truncation before stop reason | One streaming retry before fallback |
-| Partial visible output suspension | Ordinary retry rather than extra suspension allowance |
-| Early server error | Nonstream fallback; a sufficiently long failed stream can instead use after-thinking retry allowance |
-| Partial output overload | Nonstream fallback with overload count |
+| State/cause                                           | Decision/accounting                                                                                  |
+| ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| Request suspended                                     | Spend slept-through allowance, then ordinary retry                                                   |
+| Request network down                                  | Spend reconnect allowance, then ordinary retry                                                       |
+| Persistent capacity refusal                           | May retry without ordinary count, subject to profile/background gates                                |
+| HTTP 404, nonstream not yet tried                     | Admit nonstream, including at zero ordinary retries                                                  |
+| HTTP 529                                              | Count overload; ordinary/persistent, background and model fallback policy compose                    |
+| Denied                                                | Fail at every progress state                                                                         |
+| Output filtered before output/stop reason             | One feature-controlled filtered retry, also spends ordinary retry                                    |
+| Completed ordinary output                             | Keep partial for recognized transport/server failures; bad/unknown failure still fails               |
+| Thinking-only stall                                   | One streaming retry; exhausted path keeps partial                                                    |
+| Thinking-only connection/suspend/truncation/malformed | Up to two after-thinking retries; exhausted path keeps partial                                       |
+| Thinking-only server error/timeout                    | Optional model fallback; otherwise two/one after-thinking retries; exhausted path fails              |
+| Stall before any event                                | One streaming retry before nonstream fallback                                                        |
+| Stall after initial events                            | Nonstream fallback directly                                                                          |
+| Truncation before stop reason                         | One streaming retry before fallback                                                                  |
+| Partial visible output suspension                     | Ordinary retry rather than extra suspension allowance                                                |
+| Early server error                                    | Nonstream fallback; a sufficiently long failed stream can instead use after-thinking retry allowance |
+| Partial output overload                               | Nonstream fallback with overload count                                                               |
 
 Special counters alone do not guarantee a retry: ordinary retry capacity is checked too. Nonstream selection can consume one ordinary slot up to the configured maximum; it may still be admitted initially when that maximum is zero. A previously selected nonstream path can be selected again by the pure table while ordinary capacity remains. Application phase/history controls must govern actual dispatch; tau now connects these decisions to accepted-body recovery and JSON phases, with caller cancellation and shared admission.
 

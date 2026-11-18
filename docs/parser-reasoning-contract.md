@@ -44,15 +44,15 @@ CLI default limits recompute for a resumed or interactively selected model and f
 
 `src/reasoning.ts` supports this recovered first-party subset:
 
-| Input | Behavior |
-| --- | --- |
-| `--thinking enabled` or adaptive | Explicit enabled configuration; adaptive on supported models, otherwise a budget |
-| `--thinking disabled` | Explicit disabled configuration, subject to baked always-on model behavior |
-| No explicit mode | Truthy MAX_THINKING_TOKENS takes precedence over deprecated numeric CLI budget; otherwise default thinking is enabled |
-| `--max-thinking-tokens N` | Nonnegative legacy print-only budget; zero disables when no higher-precedence mode/environment value applies |
-| MAX_THINKING_TOKENS | Positive integer selects a budget; zero, negative or invalid truthy values disable the default |
-| CLAUDE_CODE_DISABLE_THINKING | Omits thinking from the request |
-| CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING | Suppresses adaptive selection for Opus/Sonnet 4.6, as the recovered source does |
+| Input                                 | Behavior                                                                                                              |
+| ------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `--thinking enabled` or adaptive      | Explicit enabled configuration; adaptive on supported models, otherwise a budget                                      |
+| `--thinking disabled`                 | Explicit disabled configuration, subject to baked always-on model behavior                                            |
+| No explicit mode                      | Truthy MAX_THINKING_TOKENS takes precedence over deprecated numeric CLI budget; otherwise default thinking is enabled |
+| `--max-thinking-tokens N`             | Nonnegative legacy print-only budget; zero disables when no higher-precedence mode/environment value applies          |
+| MAX_THINKING_TOKENS                   | Positive integer selects a budget; zero, negative or invalid truthy values disable the default                        |
+| CLAUDE_CODE_DISABLE_THINKING          | Omits thinking from the request                                                                                       |
+| CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING | Suppresses adaptive selection for Opus/Sonnet 4.6, as the recovered source does                                       |
 
 Capability overrides from `ANTHROPIC_DEFAULT_{FABLE,OPUS,SONNET,HAIKU}_MODEL[_SUPPORTED_CAPABILITIES]` and `ANTHROPIC_CUSTOM_MODEL_OPTION[_SUPPORTED_CAPABILITIES]` support thinking/adaptive_thinking declarations. Tau handles matching IDs in this subset; full original model equivalence/routing rules remain open.
 

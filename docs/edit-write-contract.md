@@ -33,7 +33,12 @@ A fresh Ghidra import decompiled one small direct caller of each of `_write`, `_
 ## Tau interface and behavior
 
 ```json
-{"file_path":"src/example.ts","old_string":"foo","new_string":"bar","replace_all":true}
+{
+  "file_path": "src/example.ts",
+  "old_string": "foo",
+  "new_string": "bar",
+  "replace_all": true
+}
 ```
 
 - `src/edit.ts` holds `applyEdit(content, {old_string, new_string, replace_all})`, a pure function implementing the Edit rules above: literal replacement, the uniqueness check on `old_string`, newline-on-delete, CRLF round trip and BOM preservation. Error text carries the same information as the original but uses tau's own wording for the match-count hint.

@@ -8,11 +8,11 @@ This investigation combines **actual Ghidra 12.1.4 native analysis** with direct
 
 The native entry at `0x1068e3808` compares the executable basename against the following strings and reaches separate shims:
 
-| Name | Native shim | Next selected native call |
-| --- | --- | --- |
-| `rg` | `0x1068d31b0` | `0x1055f1040` |
-| `ug`, `ugrep` | `0x1068d31a0` | `0x105447ef0` |
-| `bfs` | `0x1068d3170` | `0x1054cd42c` |
+| Name          | Native shim   | Next selected native call |
+| ------------- | ------------- | ------------------------- |
+| `rg`          | `0x1068d31b0` | `0x1055f1040`             |
+| `ug`, `ugrep` | `0x1068d31a0` | `0x105447ef0`             |
+| `bfs`         | `0x1068d3170` | `0x1054cd42c`             |
 
 The entry also reads and clears the literal environment key `ARGV0`. Its interaction with the basename is visible in selected control flow; this is not a general precedence specification for arbitrary launch environments.
 
@@ -31,14 +31,14 @@ Evidence:
 
 The parent checked bounded spans in the original executable, not merely the worker's conclusions:
 
-| Module/functions | Absolute file offset | Bytes | Evidence |
-| --- | ---: | ---: | --- |
-| `chunk-4h798pp0.js`, `NKr`/`Xct` schema and pagination | 294686429 | 2767 | `ev_216b57aaa0c5fd1431602d6b26cfab5add9d31887eb8f7f5583f258ff14f6aaf` |
-| Same, `WKr` execution | 294693935 | 5346 | `ev_a3924c115a7241609638442f31eb7c996a1e707623bc69acdb2aa9d3d0e8a36d` |
-| `chunk-z4j4mjgn.js`, `Kpe` backend selection | 288925406 | 390 | `ev_3bc15ebb12ed80a223af8122cb504333feb917a7fa1a440aa5923836fd949103` |
-| Same, `i3` spawn boundary | 288941309 | 3149 | `ev_72da28f809664e29360f014f142d33da218634b031a811d8a2544876d10acaed` |
-| Same, `lte` errors/results | 288946408 | 3207 | `ev_a5df586ddf5d444fee57d4afc8d3348ce0f2bb2b254b357b902550cb12528b5a` |
-| `chunk-4h798pp0.js`, `Ows` shell wrappers | 296561934 | 451 | `ev_7160d5227094eab18d17f2efef68207c0ed294b9e033581761b811340902fd9b` |
+| Module/functions                                       | Absolute file offset | Bytes | Evidence                                                              |
+| ------------------------------------------------------ | -------------------: | ----: | --------------------------------------------------------------------- |
+| `chunk-4h798pp0.js`, `NKr`/`Xct` schema and pagination |            294686429 |  2767 | `ev_216b57aaa0c5fd1431602d6b26cfab5add9d31887eb8f7f5583f258ff14f6aaf` |
+| Same, `WKr` execution                                  |            294693935 |  5346 | `ev_a3924c115a7241609638442f31eb7c996a1e707623bc69acdb2aa9d3d0e8a36d` |
+| `chunk-z4j4mjgn.js`, `Kpe` backend selection           |            288925406 |   390 | `ev_3bc15ebb12ed80a223af8122cb504333feb917a7fa1a440aa5923836fd949103` |
+| Same, `i3` spawn boundary                              |            288941309 |  3149 | `ev_72da28f809664e29360f014f142d33da218634b031a811d8a2544876d10acaed` |
+| Same, `lte` errors/results                             |            288946408 |  3207 | `ev_a5df586ddf5d444fee57d4afc8d3348ce0f2bb2b254b357b902550cb12528b5a` |
+| `chunk-4h798pp0.js`, `Ows` shell wrappers              |            296561934 |   451 | `ev_7160d5227094eab18d17f2efef68207c0ed294b9e033581761b811340902fd9b` |
 
 Source-observed contract:
 
@@ -63,7 +63,15 @@ Exact native ABI, bundled regex version/edge cases, environment-dependent behavi
 Supported input:
 
 ```json
-{"pattern":"^export (async )?function", "path":"src", "output_mode":"content", "-n":true, "-i":false, "head_limit":250, "offset":0}
+{
+  "pattern": "^export (async )?function",
+  "path": "src",
+  "output_mode": "content",
+  "-n": true,
+  "-i": false,
+  "head_limit": 250,
+  "offset": 0
+}
 ```
 
 - All three output modes; default files mode and source-derived pagination defaults.
@@ -104,4 +112,3 @@ Verification artifacts:
 - **76 passing tests**: `ev_4aa1b7cd9881c30de69fbabb93e3ca77a83efd9c7a345bee883b16afb8b96570`.
 - Interactive PTY help/modes/approval/write/cancellation/status/clean exit: `ev_fbb7a8437b01c3733efd446bfada32af5b3cf027bc5317395e9bf37edf96d6cb`.
 - Static real-target metadata: `ev_ef11e44e37d347d785db25084e4543ed1eecb97e933851317fb6180d189eb0c5`.
-

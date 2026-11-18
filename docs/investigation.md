@@ -194,7 +194,6 @@ Actual Ghidra reuses the existing timing project for two unresolved sleep helper
 
 The overall reconstruction remains active. Next useful work is the outer watchdog-error retry/model-fallback state machine and richer event handling, retaining explicit boundaries for unsupported partial-stream recovery. Cloud/gateway routing, live flags and full product parity remain open. No original executable or recovered module was executed, no personal Claude account files were read, and all analysis artifacts remain ignored.
 
-
 ## Continuation: model-query recovery table and TLS terminal chain
 
 Twenty executable-verified source spans establish the full pure recovery decision table, query ledger, five stream progress states, independent special counters, header cap and settings. Tau now independently implements these in `src/recovery.ts` and uses them for request/header/HTTP admission. Ordinary default changes from tau's earlier two to the recovered ten; broad persistent mode defaults300. First-header ordinary retries cap at one independently of ordinary capacity, and suspension uses its own allowance first. See [the recovery contract](recovery-contract.md) for all branches and the precise integration boundary. Source evidence `ev_e351e9150a073910c2e39241c71141d4e5ffe21779efa50850cef910e6f24954`, verification `ev_a975242f1d5d4f2adf426b7ed5906f9f649085b054c25557729f7289407e06e7`.

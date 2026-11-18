@@ -18,12 +18,12 @@ The new repository files are independent instrumentation, not recovered applicat
 
 ### Native and JavaScript entries differ — derived
 
-| Item | File offset | Preferred virtual address |
-|---|---:|---:|
-| Native `LC_MAIN` entry | 109983752 | `0x1068e3808` |
-| Bun section | 129744896 | `0x107d98000` |
-| Graph contents, after its length prefix | 129744904 | `0x107d98008` |
-| JavaScript entry module 7 contents | 281710139 | `0x110e84e3b` |
+| Item                                    | File offset | Preferred virtual address |
+| --------------------------------------- | ----------: | ------------------------: |
+| Native `LC_MAIN` entry                  |   109983752 |             `0x1068e3808` |
+| Bun section                             |   129744896 |             `0x107d98000` |
+| Graph contents, after its length prefix |   129744904 |             `0x107d98008` |
+| JavaScript entry module 7 contents      |   281710139 |             `0x110e84e3b` |
 
 `LC_MAIN` requests an 18 MiB stack. These are preferred image addresses, **not live ASLR-adjusted addresses**. The JavaScript entry ID is not a native function address.
 
@@ -77,12 +77,12 @@ The application-level Glob wrapper is specified separately in [the Glob contract
 
 A bounded scan of aligned direct `BL` words in `__text`, using Mach-O import stubs and `LC_FUNCTION_STARTS`, selected two small `_pread$NOCANCEL` callers and two `_read`/`_read$NOCANCEL` callers. Ghidra completed **4/4** entries, then **5/5** with a stack-failure thunk annotation. This is selected direct-call coverage, not complete call discovery.
 
-| Entry | Selected imported call | Scope of derived observation |
-| --- | --- | --- |
-| `0x1055368e0` | `_pread$NOCANCEL` | Accumulates bytes/position, caps each request at `0x7fffffff`, retries negative results when errno is numeric 4, distinguishes short EOF from fulfilling the requested count |
-| `0x1066a262c` | `_pread$NOCANCEL` | Similar byte/position loop; returns a count or structured error-shaped data whose full ABI is not recovered |
-| `0x10449ed7c` | `_read$NOCANCEL` | Reads one byte from descriptor 0, with a numeric-4 error retry |
-| `0x1042ca3c4` | `_read` | Repeats 32-byte reads while each result is 32; application purpose remains unknown |
+| Entry         | Selected imported call | Scope of derived observation                                                                                                                                                 |
+| ------------- | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `0x1055368e0` | `_pread$NOCANCEL`      | Accumulates bytes/position, caps each request at `0x7fffffff`, retries negative results when errno is numeric 4, distinguishes short EOF from fulfilling the requested count |
+| `0x1066a262c` | `_pread$NOCANCEL`      | Similar byte/position loop; returns a count or structured error-shaped data whose full ABI is not recovered                                                                  |
+| `0x10449ed7c` | `_read$NOCANCEL`       | Reads one byte from descriptor 0, with a numeric-4 error retry                                                                                                               |
+| `0x1042ca3c4` | `_read`                | Repeats 32-byte reads while each result is 32; application purpose remains unknown                                                                                           |
 
 Marking imported `___stack_chk_fail` at `0x106a95c60..0x106a95c6b` as `noreturn` removes the last caller's spurious stack-failure fallthrough into adjacent close/callback code. The thunk's indirect external target remains untyped; its own pseudocode is not a recovered ABI.
 
@@ -96,14 +96,14 @@ Evidence: complete baseline `ev_646dc8af2eb3b36697a63acb5b950eacd7cef012c818b1d9
 
 `scripts/ghidra/select-callers.py` generalizes the earlier one-off selector: aligned direct `BL` words in `__text`, Mach-O import stubs and `LC_FUNCTION_STARTS` bounds. Rerun with `_pread _read`, it reproduces `claude-2.1.326-io-ranges.tsv` byte for byte. It selected the smallest direct caller of each of `_write`, `_pwrite`, `_ftruncate`, `_fsync`, `_fchmod`, `_rename` and `_renameat`. Seventeen write-path families have direct callers; these seven make up a whole-file write. This is selected direct-call coverage, not complete call discovery.
 
-| Entry | Import | Derived observation |
-| --- | --- | --- |
-| `0x1009954c0` | `_pwrite$NOCANCEL` | One call clamped to `0x7fffffff`, retried on errno 4; no accumulation of short writes, unlike the `_pread` loop |
-| `0x1066a303c` | `_ftruncate` | Retry on errno 4; error record tag `0x13` |
-| `0x1043e68a4` | `_fsync` | Error record tag `0x12` after errno normalization |
-| `0x1066a2c70` | `_fchmod` | Retry on errno 4; tag `0x0b` |
-| `0x1066a0500` | `_renameat` | Retry on errno 4; copies the path into the error record; tag `0x28` |
-| `0x100f2e480` | `_rename` | Takes a pending temp path from a mutex-guarded global, closes the descriptor, renames onto the destination, and on failure unlinks the temp path and calls a fallback |
+| Entry         | Import             | Derived observation                                                                                                                                                   |
+| ------------- | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `0x1009954c0` | `_pwrite$NOCANCEL` | One call clamped to `0x7fffffff`, retried on errno 4; no accumulation of short writes, unlike the `_pread` loop                                                       |
+| `0x1066a303c` | `_ftruncate`       | Retry on errno 4; error record tag `0x13`                                                                                                                             |
+| `0x1043e68a4` | `_fsync`           | Error record tag `0x12` after errno normalization                                                                                                                     |
+| `0x1066a2c70` | `_fchmod`          | Retry on errno 4; tag `0x0b`                                                                                                                                          |
+| `0x1066a0500` | `_renameat`        | Retry on errno 4; copies the path into the error record; tag `0x28`                                                                                                   |
+| `0x100f2e480` | `_rename`          | Takes a pending temp path from a mutex-guarded global, closes the descriptor, renames onto the destination, and on failure unlinks the temp path and calls a fallback |
 
 The `_pread`, `_pwrite`, `_ftruncate`, `_fsync`, `_fchmod` and `_renameat` wrappers fill one error record shape: errno as a 16-bit value at `+0x24` and a per-call tag byte at `+0x26`. Reading the tag as a syscall identifier is an inference.
 
@@ -117,11 +117,11 @@ Reports: ignored `artifacts/editwrite-pass/write.txt` and `write-typed.txt`. Man
 
 A fresh static import selected the smallest direct caller of each `_fstat`, `_stat` and `_lstat`, plus the imported stack-failure thunk marked `noreturn`. Actual Ghidra 12.1.4 completed **4/4**. SHA-pinned manifest: `scripts/ghidra/claude-2.1.326-stat-ranges.tsv`. Reproduce using that manifest in the command below; require `COMPLETE requested=4 succeeded=4 failed=0` in the fresh report. Local run script/report: ignored `artifacts/staleness-pass/run-ghidra.sh` and `stat.txt`.
 
-| Entry | Import | Derived observation |
-| --- | --- | --- |
+| Entry         | Import   | Derived observation                                                                                           |
+| ------------- | -------- | ------------------------------------------------------------------------------------------------------------- |
 | `0x100e2961c` | `_fstat` | Retries numeric errno 4; clamps a signed result field to nonnegative and returns a tagged result/error record |
-| `0x1065b9ab0` | `_stat` | Zeroes a local result area, copies it to the output on success, encodes errno on failure |
-| `0x1065b9b88` | `_lstat` | Similar result copying/error encoding with a different imported call |
+| `0x1065b9ab0` | `_stat`  | Zeroes a local result area, copies it to the output on success, encodes errno on failure                      |
+| `0x1065b9b88` | `_lstat` | Similar result copying/error encoding with a different imported call                                          |
 
 Evidence: first report page `ev_7c8d5436d502b4093a1ebaa6aed9035d643f05de8a344038397e25cf858bfbd2`; final page and completion `ev_adc5830e39068b8d4e723aa7f42ed990de704b23331526a314f18962a61372c6`. The `_lstat` function retains a generated `boundary_` name because the selected preceding function caused that marker to be created first; it is explicitly selected and decompiled, not a newly discovered application label.
 
@@ -143,13 +143,13 @@ Actual Ghidra completed a **4/4** direct-call timing baseline, then a fresh **5/
 
 Compile-only arm64 SDK assertions establish CLOCK_MONOTONIC=6, 16-byte timespec/timeval layouts, 32-bit timeval microseconds and 8-byte Mach timebase data: `ev_1230778a7921ebd371fff9d79b4f9f7a415f9e409720070fe95d4396ae385111`; SDK dump pages `ev_7b482eee42a2a0e1d3822e76384c24015db68c78250604a1e20de7c2b36a00f8`, `ev_28efe3aec9c1877192f0af488b17223625799ea4549323a2c96813e7e98933ac`. No generated executable was run.
 
-| Entry | Derived observation |
-| --- | --- |
-| `0x106685b00` | Requests CLOCK_MONOTONIC and returns the seconds/nanoseconds pair |
-| `0x10668a9a4` | One TLS/global-conditioned path repeats nanosleep with constant timespec `{1,0}`; other paths remain untyped |
+| Entry         | Derived observation                                                                                                                  |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `0x106685b00` | Requests CLOCK_MONOTONIC and returns the seconds/nanoseconds pair                                                                    |
+| `0x10668a9a4` | One TLS/global-conditioned path repeats nanosleep with constant timespec `{1,0}`; other paths remain untyped                         |
 | `0x104d5f438` | Reads mach_absolute_time, applies global ratio fields and divides by 1000; ratio initialization/units at this site remain unverified |
-| `0x104de2180` | Uses gettimeofday or an object callback, then returns/clamps timeval seconds and microseconds |
-| `0x1063b8628` | Initializes a distinct global timebase object and aborts on failure |
+| `0x104de2180` | Uses gettimeofday or an object callback, then returns/clamps timeval seconds and microseconds                                        |
+| `0x1063b8628` | Initializes a distinct global timebase object and aborts on failure                                                                  |
 
 The initializer initially spilled into pthread_once, continuous-clock and unrelated predicate code. The SDK declares abort `__dead2` (`ev_9bca9d7f4de6d7b4ab089a19d80dba797166a1e6f28941eaaf1505a8b195afa7`). Applying the standard noreturn annotation removes that continuation, reducing the report section from 33 to 17 lines. Before: `ev_e33d474a65592e894d3e3dfc06849f35c28fe9fc2308d396463a5ad23a54517b`; final **5/5**: `ev_0d4cd9720089366fe8beee7aea0e4a003108c68c12096c9cdc5608b1dbc7dd4f`.
 
@@ -179,12 +179,12 @@ Manifest: `claude-2.1.326-tls-unwind-ranges.tsv`. Ignored runners/reports: `arti
 
 Aligned direct import calls select the smallest caller of recv, recvfrom, poll and connect: **4/4** actual Ghidra decompilations, then **4/4** with checked Darwin import types. Manifest `claude-2.1.326-network-ranges.tsv`; instrumentation `InspectNetworkAbi.java`. This selected scope is not all networking paths or a link to the application provider.
 
-| Entry | Derived observation |
-| --- | --- |
+| Entry         | Derived observation                                                                          |
+| ------------- | -------------------------------------------------------------------------------------------- |
 | `0x104e5ed18` | One-byte recv with flags0x82, EINTR retry, separate zero/positive/EAGAIN/other-error results |
-| `0x103eca428` | recvfrom/close and errno paths; wrapper/out-record conventions remain inferred |
-| `0x104c2c328` | Zero-timeout poll of one descriptor, checking returned error/hangup flags |
-| `0x10426eb28` | Connect with a16-byte address record; EAFNOSUPPORT handled specially |
+| `0x103eca428` | recvfrom/close and errno paths; wrapper/out-record conventions remain inferred               |
+| `0x104c2c328` | Zero-timeout poll of one descriptor, checking returned error/hangup flags                    |
+| `0x10426eb28` | Connect with a16-byte address record; EAFNOSUPPORT handled specially                         |
 
 Compile-only arm64 SDK assertions check ssize_t8, socklen_t/nfds_t4, sockaddr16, pollfd8 with fd/events/revents offsets0/4/6, MSG_PEEK2, MSG_DONTWAIT128, EINTR4, EAGAIN35, EAFNOSUPPORT47 and poll flags. Function-pointer type assertions check the imported prototypes. No generated executable runs. Typed stack-failure noreturn metadata removes the connect caller's false continuation into adjacent setsockopt code.
 

@@ -62,7 +62,11 @@ test("static inspector exposes bounded graph coordinates and inert module metada
 
 function nativeFixture(): Buffer {
   const base = fixture();
-  const buffer = Buffer.concat([base.subarray(0, section), Buffer.alloc(104), base.subarray(section)]);
+  const buffer = Buffer.concat([
+    base.subarray(0, section),
+    Buffer.alloc(104),
+    base.subarray(section),
+  ]);
   buffer.writeUInt32LE(3, 16);
   buffer.writeUInt32LE(248, 20);
   buffer.writeBigUInt64LE(0x200000000n, 56);
@@ -87,13 +91,23 @@ function nativeFixture(): Buffer {
 
 test("distinguishes native LC_MAIN from the bundled JavaScript entry and maps virtual addresses", () => {
   const result = inspectBun(nativeFixture());
-  assert.deepEqual(result.nativeEntry, { offset: 280, address: 0x100000118, stackSize: 4096 });
+  assert.deepEqual(result.nativeEntry, {
+    offset: 280,
+    address: 0x100000118,
+    stackSize: 4096,
+  });
   assert.equal(result.footer.entryPointId, 0);
   assert.equal(result.section.address, 0x200000000);
   assert.equal(result.section.graphAddress, 0x200000008);
   assert.equal(result.modules[0]?.pointers.contents.address, 0x200000018);
-  assert.equal(result.segments.find(segment => segment.name === "__BUN")?.executable, false);
-  assert.equal(result.segments.find(segment => segment.name === "__TEXT")?.executable, true);
+  assert.equal(
+    result.segments.find((segment) => segment.name === "__BUN")?.executable,
+    false,
+  );
+  assert.equal(
+    result.segments.find((segment) => segment.name === "__TEXT")?.executable,
+    true,
+  );
 });
 
 test("native mapping uses the segment's file offset rather than assuming address equals image base plus file offset", () => {
@@ -106,16 +120,20 @@ test("native mapping uses the segment's file offset rather than assuming address
 
 test("rejects malformed native entries, segment mappings and unsafe addresses", () => {
   const corruptions: Array<(buffer: Buffer) => void> = [
-    b => b.writeUInt32LE(16, 260),
-    b => b.writeBigUInt64LE(281n, 264),
-    b => b.writeBigUInt64LE(288n, 264),
-    b => b.writeBigUInt64LE(2n ** 63n, 264),
-    b => b.writeUInt32LE(1, 244),
-    b => b.writeBigUInt64LE(0x100000001n, 208),
-    b => b.writeBigUInt64LE(2n ** 53n - 5n, 208),
-    b => b.writeBigUInt64LE(1n, 216),
-    b => b.writeBigUInt64LE(1n, 136),
-    b => { b.writeUInt32LE(5, 92); b.writeBigUInt64LE(280n, 72); b.writeUInt32LE(280, 152); },
+    (b) => b.writeUInt32LE(16, 260),
+    (b) => b.writeBigUInt64LE(281n, 264),
+    (b) => b.writeBigUInt64LE(288n, 264),
+    (b) => b.writeBigUInt64LE(2n ** 63n, 264),
+    (b) => b.writeUInt32LE(1, 244),
+    (b) => b.writeBigUInt64LE(0x100000001n, 208),
+    (b) => b.writeBigUInt64LE(2n ** 53n - 5n, 208),
+    (b) => b.writeBigUInt64LE(1n, 216),
+    (b) => b.writeBigUInt64LE(1n, 136),
+    (b) => {
+      b.writeUInt32LE(5, 92);
+      b.writeBigUInt64LE(280n, 72);
+      b.writeUInt32LE(280, 152);
+    },
   ];
   for (const [index, corrupt] of corruptions.entries()) {
     const buffer = nativeFixture();
@@ -127,7 +145,10 @@ test("rejects malformed native entries, segment mappings and unsafe addresses", 
 test("rejects every truncated native fixture prefix", () => {
   const buffer = nativeFixture();
   for (let length = 0; length < buffer.length; length++) {
-    assert.throws(() => inspectBun(buffer.subarray(0, length)), `native prefix ${length}`);
+    assert.throws(
+      () => inspectBun(buffer.subarray(0, length)),
+      `native prefix ${length}`,
+    );
   }
 });
 
@@ -160,34 +181,39 @@ test("Bun length prefix bounds the graph independently of unused section padding
 test("rejects every truncated prefix", () => {
   const buffer = fixture();
   for (let length = 0; length < buffer.length; length++) {
-    assert.throws(() => inspectBun(buffer.subarray(0, length)), `prefix ${length}`);
+    assert.throws(
+      () => inspectBun(buffer.subarray(0, length)),
+      `prefix ${length}`,
+    );
   }
 });
 
 test("rejects malformed headers, commands, footers and each graph pointer", () => {
   const corruptions: Array<(buffer: Buffer) => void> = [
-    b => b.writeUInt32LE(0, 0),
-    b => b.writeUInt32LE(0, 4),
-    b => b.writeUInt32LE(2, 16),
-    b => b.writeUInt32LE(144, 20),
-    b => b.writeUInt32LE(0, 36),
-    b => b.writeUInt32LE(8, 36),
-    b => b.writeUInt32LE(2, 96),
-    b => b.writeBigUInt64LE(2n ** 63n, 144),
-    b => b.writeUInt32LE(section - 1, 152),
-    b => b.writeBigUInt64LE(0n, section),
-    b => b.writeUInt8(0, b.length - 1),
-    b => b.writeBigUInt64LE(BigInt(byteCount + 1), footer),
-    b => b.writeUInt32LE(byteCount, footer + 8),
-    b => b.writeUInt32LE(51, footer + 12),
-    b => b.writeUInt32LE(0, footer + 12),
-    b => b.writeUInt32LE(1, footer + 16),
-    b => b.writeUInt32LE(byteCount + 1, footer + 20),
-    b => b.writeUInt32LE(byteCount + 1, footer + 24),
+    (b) => b.writeUInt32LE(0, 0),
+    (b) => b.writeUInt32LE(0, 4),
+    (b) => b.writeUInt32LE(2, 16),
+    (b) => b.writeUInt32LE(144, 20),
+    (b) => b.writeUInt32LE(0, 36),
+    (b) => b.writeUInt32LE(8, 36),
+    (b) => b.writeUInt32LE(2, 96),
+    (b) => b.writeBigUInt64LE(2n ** 63n, 144),
+    (b) => b.writeUInt32LE(section - 1, 152),
+    (b) => b.writeBigUInt64LE(0n, section),
+    (b) => b.writeUInt8(0, b.length - 1),
+    (b) => b.writeBigUInt64LE(BigInt(byteCount + 1), footer),
+    (b) => b.writeUInt32LE(byteCount, footer + 8),
+    (b) => b.writeUInt32LE(51, footer + 12),
+    (b) => b.writeUInt32LE(0, footer + 12),
+    (b) => b.writeUInt32LE(1, footer + 16),
+    (b) => b.writeUInt32LE(byteCount + 1, footer + 20),
+    (b) => b.writeUInt32LE(byteCount + 1, footer + 24),
   ];
   for (let field = 0; field < 6; field++) {
-    corruptions.push(b => b.writeUInt32LE(byteCount + 1, record + field * 8));
-    corruptions.push(b => b.writeUInt32LE(byteCount + 1, record + field * 8 + 4));
+    corruptions.push((b) => b.writeUInt32LE(byteCount + 1, record + field * 8));
+    corruptions.push((b) =>
+      b.writeUInt32LE(byteCount + 1, record + field * 8 + 4),
+    );
   }
   for (const [index, corrupt] of corruptions.entries()) {
     const buffer = fixture();

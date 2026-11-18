@@ -4,8 +4,20 @@ import { lstat, mkdir, open, opendir, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { TextDecoder } from "node:util";
 import { z } from "zod";
-import type { PermissionMode, ToolDefinition, ToolExecutor, ToolResult, ToolUse } from "./types.js";
-import { appendPreHookContext, appendFailureHookContext, type PreToolHookResult, type ToolFailureHookResult, type ToolHookRuntime } from "./tool-hook-runtime.js";
+import type {
+  PermissionMode,
+  ToolDefinition,
+  ToolExecutor,
+  ToolResult,
+  ToolUse,
+} from "./types.js";
+import {
+  appendPreHookContext,
+  appendFailureHookContext,
+  type PreToolHookResult,
+  type ToolFailureHookResult,
+  type ToolHookRuntime,
+} from "./tool-hook-runtime.js";
 import { findRipgrep, grepInputSchema, searchText } from "./grep.js";
 import { createGlobMatcher, MAX_GLOB_PATTERN } from "./glob.js";
 import { applyEdit, editInputFields } from "./edit.js";
@@ -13,13 +25,31 @@ import { writeAtomic } from "./write.js";
 import { readInputSchema } from "./read.js";
 import { ReadState } from "./read-state.js";
 import { prepareFileRestoration } from "./file-restoration.js";
-import { FILE_READ_BYTES, FileReadByteLimit, FileReadTokenLimit, fileReadTokenLimit, largeReadHint, renderSelectedText, selectTextFile, type FileTokenCounter } from "./file-read.js";
+import {
+  FILE_READ_BYTES,
+  FileReadByteLimit,
+  FileReadTokenLimit,
+  fileReadTokenLimit,
+  largeReadHint,
+  renderSelectedText,
+  selectTextFile,
+  type FileTokenCounter,
+} from "./file-read.js";
 import { readAllowance, type ReadToolContext } from "./context-room.js";
 import { MAX_EDIT_BYTES, readFileSnapshot } from "./file-snapshot.js";
 import { sensitiveWriteReason } from "./permission-sensitive.js";
 import { unparsedToolInput } from "./tool-input.js";
 import { decodeTextFile, encodeTextFile } from "./text-file.js";
-import { inheritedReadDeny, matchingToolRule, ToolInputRejected, ToolPermissionDenied, toolNameSchema, toolPolicySchema, type ToolName, type ToolPolicy } from "./tool-policy.js";
+import {
+  inheritedReadDeny,
+  matchingToolRule,
+  ToolInputRejected,
+  ToolPermissionDenied,
+  toolNameSchema,
+  toolPolicySchema,
+  type ToolName,
+  type ToolPolicy,
+} from "./tool-policy.js";
 
 const MAX_BYTES = 64 * 1024;
 const MAX_ENTRIES = 5000;
@@ -30,111 +60,267 @@ const schemas = {
   Write: fileInput.extend({ content: z.string() }),
   Edit: fileInput.extend(editInputFields),
   Glob: z.strictObject({
-    pattern: z.string().min(1).max(MAX_GLOB_PATTERN).refine(value => !value.includes("\0"), "Glob pattern cannot contain NUL bytes"),
-    path: z.string().refine(value => !value.includes("\0"), "Glob path cannot contain NUL bytes").default("."),
+    pattern: z
+      .string()
+      .min(1)
+      .max(MAX_GLOB_PATTERN)
+      .refine(
+        (value) => !value.includes("\0"),
+        "Glob pattern cannot contain NUL bytes",
+      ),
+    path: z
+      .string()
+      .refine(
+        (value) => !value.includes("\0"),
+        "Glob path cannot contain NUL bytes",
+      )
+      .default("."),
   }),
   Grep: grepInputSchema,
-  Bash: z.object({ command: z.string().min(1), timeout: z.number().int().min(1).max(120000).default(30000) }),
+  Bash: z.object({
+    command: z.string().min(1),
+    timeout: z.number().int().min(1).max(120000).default(30000),
+  }),
 };
 function bounded(text: string): string {
   const bytes = Buffer.from(text);
-  return bytes.length > MAX_BYTES ? new TextDecoder("utf-8", { ignoreBOM: true }).decode(bytes.subarray(0, MAX_BYTES), { stream: true }) + "\n[output truncated]" : text;
+  return bytes.length > MAX_BYTES
+    ? new TextDecoder("utf-8", { ignoreBOM: true }).decode(
+        bytes.subarray(0, MAX_BYTES),
+        { stream: true },
+      ) + "\n[output truncated]"
+    : text;
 }
 /** A valid single-region text patch. Disjoint canonical diff grouping is a separate formatter gap. */
-function textPatch(original: string, updated: string): Array<{ oldStart: number; oldLines: number; newStart: number; newLines: number; lines: string[] }> {
+function textPatch(
+  original: string,
+  updated: string,
+): Array<{
+  oldStart: number;
+  oldLines: number;
+  newStart: number;
+  newLines: number;
+  lines: string[];
+}> {
   if (original === updated) return [];
-  const split = (text: string) => { const lines = text.replace(/\r\n/g, "\n").split("\n"); if (lines.at(-1) === "") lines.pop(); return lines; };
-  const before = split(original), after = split(updated);
-  let first = 0, last = 0;
-  while (first < Math.min(before.length, after.length) && before[first] === after[first]) first++;
-  if (original.endsWith("\n") !== updated.endsWith("\n") && first === Math.min(before.length, after.length)) first = Math.max(0, first - 1);
-  while (last < Math.min(before.length, after.length) - first && before[before.length - 1 - last] === after[after.length - 1 - last]) last++;
-  const start = Math.max(0, first - 4), tail = Math.min(4, last);
-  const endBefore = before.length - last, endAfter = after.length - last;
+  const split = (text: string) => {
+    const lines = text.replace(/\r\n/g, "\n").split("\n");
+    if (lines.at(-1) === "") lines.pop();
+    return lines;
+  };
+  const before = split(original),
+    after = split(updated);
+  let first = 0,
+    last = 0;
+  while (
+    first < Math.min(before.length, after.length) &&
+    before[first] === after[first]
+  )
+    first++;
+  if (
+    original.endsWith("\n") !== updated.endsWith("\n") &&
+    first === Math.min(before.length, after.length)
+  )
+    first = Math.max(0, first - 1);
+  while (
+    last < Math.min(before.length, after.length) - first &&
+    before[before.length - 1 - last] === after[after.length - 1 - last]
+  )
+    last++;
+  const start = Math.max(0, first - 4),
+    tail = Math.min(4, last);
+  const endBefore = before.length - last,
+    endAfter = after.length - last;
   const lines: string[] = [];
-  const append = (line: string, prefix: string, terminal: boolean, newline: boolean) => { lines.push(prefix + line); if (terminal && !newline) lines.push("\\ No newline at end of file"); };
-  const run = (rows: string[], from: number, to: number, prefix: string, newline: boolean) => { for (const [j, row] of rows.slice(from, to).entries()) append(row, prefix, from + j + 1 === rows.length, newline); };
+  const append = (
+    line: string,
+    prefix: string,
+    terminal: boolean,
+    newline: boolean,
+  ) => {
+    lines.push(prefix + line);
+    if (terminal && !newline) lines.push("\\ No newline at end of file");
+  };
+  const run = (
+    rows: string[],
+    from: number,
+    to: number,
+    prefix: string,
+    newline: boolean,
+  ) => {
+    for (const [j, row] of rows.slice(from, to).entries())
+      append(row, prefix, from + j + 1 === rows.length, newline);
+  };
   run(before, start, first, " ", original.endsWith("\n"));
   run(before, first, endBefore, "-", original.endsWith("\n"));
   run(after, first, endAfter, "+", updated.endsWith("\n"));
   run(before, endBefore, endBefore + tail, " ", original.endsWith("\n"));
-  return [{ oldStart: before.length ? start + 1 : 0, oldLines: endBefore + tail - start, newStart: after.length ? start + 1 : 0, newLines: endAfter + tail - start, lines }];
+  return [
+    {
+      oldStart: before.length ? start + 1 : 0,
+      oldLines: endBefore + tail - start,
+      newStart: after.length ? start + 1 : 0,
+      newLines: endAfter + tail - start,
+      lines,
+    },
+  ];
 }
-function shell(command: string, cwd: string, timeout: number, signal: AbortSignal): Promise<{ content: string; stdout: string; stderr: string; is_error: boolean }> {
+function shell(
+  command: string,
+  cwd: string,
+  timeout: number,
+  signal: AbortSignal,
+): Promise<{
+  content: string;
+  stdout: string;
+  stderr: string;
+  is_error: boolean;
+}> {
   signal.throwIfAborted();
   return new Promise((resolve, reject) => {
-    const child = spawn("/bin/sh", ["-c", command], { cwd, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn("/bin/sh", ["-c", command], {
+      cwd,
+      detached: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     const chunks: Buffer[] = [];
-    const stdout: Buffer[] = [], stderr: Buffer[] = [];
+    const stdout: Buffer[] = [],
+      stderr: Buffer[] = [];
     let size = 0;
     let truncated = false;
     let finished = false;
     const collect = (stream: Buffer[]) => (chunk: Buffer) => {
       if (size + chunk.length > MAX_BYTES) truncated = true;
       const part = chunk.subarray(0, Math.max(0, MAX_BYTES - size));
-      if (part.length) { chunks.push(part); stream.push(part); }
+      if (part.length) {
+        chunks.push(part);
+        stream.push(part);
+      }
       size += part.length;
     };
-    child.stdout.on("data", collect(stdout)); child.stderr.on("data", collect(stderr));
+    child.stdout.on("data", collect(stdout));
+    child.stderr.on("data", collect(stderr));
     const kill = () => {
-      if (child.pid) { try { process.kill(-child.pid, "SIGKILL"); } catch { /* Already exited. */ } }
+      if (child.pid) {
+        try {
+          process.kill(-child.pid, "SIGKILL");
+        } catch {
+          /* Already exited. */
+        }
+      }
     };
     const finish = (error?: Error, code?: number | null) => {
       if (finished) return;
-      finished = true; clearTimeout(timer); signal.removeEventListener("abort", abort); kill();
+      finished = true;
+      clearTimeout(timer);
+      signal.removeEventListener("abort", abort);
+      kill();
       if (error) {
-        child.stdout.destroy(); child.stderr.destroy();
+        child.stdout.destroy();
+        child.stderr.destroy();
         reject(error);
-      } else resolve({
-        content: Buffer.concat(chunks).toString() + (truncated ? "\n[output truncated]" : "") + `\n[exit ${code}]`,
-        stdout: Buffer.concat(stdout).toString(), stderr: Buffer.concat(stderr).toString(),
-        is_error: code !== 0,
-      });
+      } else
+        resolve({
+          content:
+            Buffer.concat(chunks).toString() +
+            (truncated ? "\n[output truncated]" : "") +
+            `\n[exit ${code}]`,
+          stdout: Buffer.concat(stdout).toString(),
+          stderr: Buffer.concat(stderr).toString(),
+          is_error: code !== 0,
+        });
     };
     const abort = () => finish(new Error("Bash aborted"));
-    const timer = setTimeout(() => finish(new Error("Bash timed out")), timeout);
+    const timer = setTimeout(
+      () => finish(new Error("Bash timed out")),
+      timeout,
+    );
     signal.addEventListener("abort", abort, { once: true });
-    child.on("error", error => finish(error));
+    child.on("error", (error) => finish(error));
     child.on("exit", kill);
-    child.on("close", code => finish(undefined, code));
+    child.on("close", (code) => finish(undefined, code));
     if (signal.aborted) abort();
   });
 }
 
 export function toolDefinitions(names: readonly ToolName[]): ToolDefinition[] {
-  return names.map(name => ({
+  return names.map((name) => ({
     name,
-    description: name === "Bash" ? "Run an unsandboxed shell command in the workspace." : name === "Grep"
-      ? "Regex search using standalone rg. Defaults to files_with_matches; also content/count. Supports -i, -n and pagination. Searches bounded file prefixes; no multiline/context/glob/type filters."
-      : name === "Read" ? "Read UTF-8 or BOM-marked UTF-16LE regular text. Whole-file byte limit 262144; default token limit 25000, with partial pages on whole-read token overflow. Optional allow_large uses available context room shared by this reply's large reads. Numbered lines; offset defaults to 1 (0 labels the first line 0), optional positive limit scans that range. No media or PDF pages."
-      : name === "Write" || name === "Edit" ? `${name} workspace files, preserving existing encoding and BOM. Existing files require a complete, untruncated Read first; reread after external changes.${name === "Edit" ? " Empty old_string creates a file or replaces whitespace-only content. Literal matching first, then curly-quote matching." : ""}`
-      : `${name} workspace files. Glob supports *, ** and ?.` ,
-    input_schema: { ...z.toJSONSchema(schemas[name], { io: "input" }), type: "object" },
+    description:
+      name === "Bash"
+        ? "Run an unsandboxed shell command in the workspace."
+        : name === "Grep"
+          ? "Regex search using standalone rg. Defaults to files_with_matches; also content/count. Supports -i, -n and pagination. Searches bounded file prefixes; no multiline/context/glob/type filters."
+          : name === "Read"
+            ? "Read UTF-8 or BOM-marked UTF-16LE regular text. Whole-file byte limit 262144; default token limit 25000, with partial pages on whole-read token overflow. Optional allow_large uses available context room shared by this reply's large reads. Numbered lines; offset defaults to 1 (0 labels the first line 0), optional positive limit scans that range. No media or PDF pages."
+            : name === "Write" || name === "Edit"
+              ? `${name} workspace files, preserving existing encoding and BOM. Existing files require a complete, untruncated Read first; reread after external changes.${name === "Edit" ? " Empty old_string creates a file or replaces whitespace-only content. Literal matching first, then curly-quote matching." : ""}`
+              : `${name} workspace files. Glob supports *, ** and ?.`,
+    input_schema: {
+      ...z.toJSONSchema(schemas[name], { io: "input" }),
+      type: "object",
+    },
   }));
 }
 
 /** The local file call has passed input/hook/permission guards, but filesystem work may still fail. */
-export interface FileToolCallContext { name: "Read" | "Write" | "Edit"; path: string; signal: AbortSignal }
+export interface FileToolCallContext {
+  name: "Read" | "Write" | "Edit";
+  path: string;
+  signal: AbortSignal;
+}
 
-export function createTools(options: { cwd: string; mode: PermissionMode; policy?: ToolPolicy; readState?: ReadState; restorationExcludedPaths?: string[]; readTokenCounter?: FileTokenCounter; fileReadMaxTokens?: number; sensitiveWritePaths?: readonly string[]; hooks?: ToolHookRuntime;
+export function createTools(options: {
+  cwd: string;
+  mode: PermissionMode;
+  policy?: ToolPolicy;
+  readState?: ReadState;
+  restorationExcludedPaths?: string[];
+  readTokenCounter?: FileTokenCounter;
+  fileReadMaxTokens?: number;
+  sensitiveWritePaths?: readonly string[];
+  hooks?: ToolHookRuntime;
   onFileToolCall?: (context: FileToolCallContext) => void | Promise<void>;
-  extraPathAdmission?: (request: { operation: string; requestedPath: string; signal?: AbortSignal }) => Promise<string | undefined>;
-  planWriteEligibility?: (request: { operation: string; requestedPath: string; canonicalPath: string; signal?: AbortSignal }) => Promise<boolean>;
-  approve: (description: string) => Promise<boolean> }): ToolExecutor {
+  extraPathAdmission?: (request: {
+    operation: string;
+    requestedPath: string;
+    signal?: AbortSignal;
+  }) => Promise<string | undefined>;
+  planWriteEligibility?: (request: {
+    operation: string;
+    requestedPath: string;
+    canonicalPath: string;
+    signal?: AbortSignal;
+  }) => Promise<boolean>;
+  approve: (description: string) => Promise<boolean>;
+}): ToolExecutor {
   const readState = options.readState ?? new ReadState();
   let readContext: ReadToolContext | undefined;
   const readMaxTokens = options.fileReadMaxTokens ?? fileReadTokenLimit();
-  if (!Number.isFinite(readMaxTokens) || readMaxTokens <= 0) throw new Error("File Read token limit must be positive and finite");
+  if (!Number.isFinite(readMaxTokens) || readMaxTokens <= 0)
+    throw new Error("File Read token limit must be positive and finite");
   const policy = toolPolicySchema.parse(options.policy ?? {});
-  const available = (name: ToolName) => (policy.tools === undefined || policy.tools.includes(name)) && matchingToolRule(policy, "deny", name) === undefined;
+  const available = (name: ToolName) =>
+    (policy.tools === undefined || policy.tools.includes(name)) &&
+    matchingToolRule(policy, "deny", name) === undefined;
   const rootPromise = realpath(options.cwd);
-  async function safePath(input: string, operation?: ToolName, signal?: AbortSignal): Promise<string> {
+  async function safePath(
+    input: string,
+    operation?: ToolName,
+    signal?: AbortSignal,
+  ): Promise<string> {
     const root = await rootPromise;
     const target = path.resolve(root, input);
     const check = (candidate: string) => {
       const relative = path.relative(root, candidate);
-      if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new ToolPermissionDenied("Path escapes workspace root");
-      if (relative.split(path.sep).some(part => ignored.has(part))) throw new ToolPermissionDenied("Path is excluded");
+      if (
+        relative === ".." ||
+        relative.startsWith(`..${path.sep}`) ||
+        path.isAbsolute(relative)
+      )
+        throw new ToolPermissionDenied("Path escapes workspace root");
+      if (relative.split(path.sep).some((part) => ignored.has(part)))
+        throw new ToolPermissionDenied("Path is excluded");
     };
     try {
       check(target);
@@ -142,17 +328,36 @@ export function createTools(options: { cwd: string; mode: PermissionMode; policy
       const missing: string[] = [];
       for (;;) {
         try {
-          const resolved = await realpath(existing); check(resolved);
-          const result = path.join(resolved, ...missing.reverse()); check(result); return result;
+          const resolved = await realpath(existing);
+          check(resolved);
+          const result = path.join(resolved, ...missing.reverse());
+          check(result);
+          return result;
         } catch (error) {
-          if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOENT") throw error;
+          if (
+            !(error instanceof Error) ||
+            !("code" in error) ||
+            error.code !== "ENOENT"
+          )
+            throw error;
           if (existing === root) throw error;
-          missing.push(path.basename(existing)); existing = path.dirname(existing);
+          missing.push(path.basename(existing));
+          existing = path.dirname(existing);
         }
       }
     } catch (error) {
-      if (!(error instanceof ToolPermissionDenied) || error.message !== "Path escapes workspace root" || !operation || !options.extraPathAdmission) throw error;
-      const admitted = await options.extraPathAdmission({ operation, requestedPath: target, ...(signal ? { signal } : {}) });
+      if (
+        !(error instanceof ToolPermissionDenied) ||
+        error.message !== "Path escapes workspace root" ||
+        !operation ||
+        !options.extraPathAdmission
+      )
+        throw error;
+      const admitted = await options.extraPathAdmission({
+        operation,
+        requestedPath: target,
+        ...(signal ? { signal } : {}),
+      });
       signal?.throwIfAborted();
       if (admitted === undefined || !path.isAbsolute(admitted)) throw error;
       return path.resolve(admitted);
@@ -161,13 +366,26 @@ export function createTools(options: { cwd: string; mode: PermissionMode; policy
   async function refuseSymlink(input: string): Promise<void> {
     const lexical = path.resolve(await rootPromise, input);
     try {
-      if ((await lstat(lexical)).isSymbolicLink()) throw new Error("Refusing to write through a symlink");
+      if ((await lstat(lexical)).isSymbolicLink())
+        throw new Error("Refusing to write through a symlink");
     } catch (error) {
-      if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOENT") throw error;
+      if (
+        !(error instanceof Error) ||
+        !("code" in error) ||
+        error.code !== "ENOENT"
+      )
+        throw error;
     }
   }
-  async function readBytes(file: string, signal: AbortSignal, maximum = MAX_BYTES): Promise<{ bytes: Buffer; mtimeMs: number; truncated: boolean }> {
-    const handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  async function readBytes(
+    file: string,
+    signal: AbortSignal,
+    maximum = MAX_BYTES,
+  ): Promise<{ bytes: Buffer; mtimeMs: number; truncated: boolean }> {
+    const handle = await open(
+      file,
+      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+    );
     try {
       const info = await handle.stat();
       if (!info.isFile()) throw new Error("Not a regular file");
@@ -175,23 +393,36 @@ export function createTools(options: { cwd: string; mode: PermissionMode; policy
       let bytesRead = 0;
       while (bytesRead < buffer.length) {
         signal.throwIfAborted();
-        const next = await handle.read(buffer, bytesRead, buffer.length - bytesRead, bytesRead);
+        const next = await handle.read(
+          buffer,
+          bytesRead,
+          buffer.length - bytesRead,
+          bytesRead,
+        );
         if (next.bytesRead === 0) break;
         bytesRead += next.bytesRead;
       }
       signal.throwIfAborted();
-      return { bytes: buffer.subarray(0, bytesRead), mtimeMs: info.mtimeMs, truncated: info.size > maximum || bytesRead > maximum };
-    } finally { await handle.close(); }
+      return {
+        bytes: buffer.subarray(0, bytesRead),
+        mtimeMs: info.mtimeMs,
+        truncated: info.size > maximum || bytesRead > maximum,
+      };
+    } finally {
+      await handle.close();
+    }
   }
   async function files(start: string, signal: AbortSignal): Promise<string[]> {
-    const found: string[] = []; let visited = 0;
+    const found: string[] = [];
+    let visited = 0;
     async function walk(dir: string, depth: number): Promise<void> {
       signal.throwIfAborted();
       if (depth > 64) throw new Error("Traversal depth limit exceeded");
       const entries = await opendir(dir);
       for await (const entry of entries) {
         signal.throwIfAborted();
-        if (++visited > MAX_ENTRIES) throw new Error("Traversal entry limit exceeded");
+        if (++visited > MAX_ENTRIES)
+          throw new Error("Traversal entry limit exceeded");
         if (ignored.has(entry.name) || entry.isSymbolicLink()) continue;
         const file = await safePath(path.join(dir, entry.name));
         if (entry.isDirectory()) await walk(file, depth + 1);
@@ -199,95 +430,222 @@ export function createTools(options: { cwd: string; mode: PermissionMode; policy
       }
     }
     if ((await stat(start)).isFile()) return [start];
-    await walk(start, 0); return found;
+    await walk(start, 0);
+    return found;
   }
-  function recheck(input: string, file: string, expected: Buffer | null, signal: AbortSignal, operation: "Write" | "Edit"): () => Promise<void> {
+  function recheck(
+    input: string,
+    file: string,
+    expected: Buffer | null,
+    signal: AbortSignal,
+    operation: "Write" | "Edit",
+  ): () => Promise<void> {
     return async () => {
       signal.throwIfAborted();
-      if (await safePath(input, operation, signal) !== file) throw new Error("File path changed before write; Read it again");
+      if ((await safePath(input, operation, signal)) !== file)
+        throw new Error("File path changed before write; Read it again");
       await refuseSymlink(input);
       const current = await readFileSnapshot(file, signal, { expected });
       if (current === null && expected !== null) {
-        throw new Error("File content changed before write; Read it again before retrying");
+        throw new Error(
+          "File content changed before write; Read it again before retrying",
+        );
       }
       signal.throwIfAborted();
     };
   }
-  async function permit(name: ToolName, description: string, signal: AbortSignal, fileContext?: { canonical: string; input: string }, hookPermission?: PreToolHookResult["permission"]): Promise<void> {
+  async function permit(
+    name: ToolName,
+    description: string,
+    signal: AbortSignal,
+    fileContext?: { canonical: string; input: string },
+    hookPermission?: PreToolHookResult["permission"],
+  ): Promise<void> {
     const readonly = name === "Read" || name === "Glob" || name === "Grep";
-    const asks = matchingToolRule(policy, "ask", name) !== undefined || hookPermission === "ask";
-    const planFile = !readonly && fileContext !== undefined && options.planWriteEligibility !== undefined &&
-      await options.planWriteEligibility({ operation: name, requestedPath: path.resolve(await rootPromise, fileContext.input), canonicalPath: fileContext.canonical, signal });
+    const asks =
+      matchingToolRule(policy, "ask", name) !== undefined ||
+      hookPermission === "ask";
+    const planFile =
+      !readonly &&
+      fileContext !== undefined &&
+      options.planWriteEligibility !== undefined &&
+      (await options.planWriteEligibility({
+        operation: name,
+        requestedPath: path.resolve(await rootPromise, fileContext.input),
+        canonicalPath: fileContext.canonical,
+        signal,
+      }));
     signal.throwIfAborted();
     // The designated session plan bypasses the ordinary plan/sensitive hold.
     // Explicit deny/ask and full validation retain their earlier authority.
-    if (options.mode === "plan" && !readonly && !planFile) throw new ToolPermissionDenied("Plan mode is read only");
+    if (options.mode === "plan" && !readonly && !planFile)
+      throw new ToolPermissionDenied("Plan mode is read only");
     if (planFile && !asks) return;
     const root = fileContext === undefined ? undefined : await rootPromise;
-    const sensitive = fileContext === undefined || root === undefined ? undefined :
-      sensitiveWriteReason(fileContext.input, root, options.sensitiveWritePaths) ?? sensitiveWriteReason(fileContext.canonical, root, options.sensitiveWritePaths);
-    const safetyAsk = !planFile && sensitive !== undefined && options.mode !== "bypassPermissions";
-    if (!asks && !safetyAsk && (hookPermission === "allow" || readonly || matchingToolRule(policy, "allow", name) !== undefined || options.mode === "bypassPermissions" || options.mode === "acceptEdits" && name !== "Bash")) return;
+    const sensitive =
+      fileContext === undefined || root === undefined
+        ? undefined
+        : (sensitiveWriteReason(
+            fileContext.input,
+            root,
+            options.sensitiveWritePaths,
+          ) ??
+          sensitiveWriteReason(
+            fileContext.canonical,
+            root,
+            options.sensitiveWritePaths,
+          ));
+    const safetyAsk =
+      !planFile &&
+      sensitive !== undefined &&
+      options.mode !== "bypassPermissions";
+    if (
+      !asks &&
+      !safetyAsk &&
+      (hookPermission === "allow" ||
+        readonly ||
+        matchingToolRule(policy, "allow", name) !== undefined ||
+        options.mode === "bypassPermissions" ||
+        (options.mode === "acceptEdits" && name !== "Bash"))
+    )
+      return;
     let approved: boolean;
-    try { approved = await options.approve(safetyAsk ? `${sensitive}. Once approval is required.\n${description}` : description); }
-    catch (error) { throw new ToolPermissionDenied(error instanceof Error ? error.message : "Permission approval did not complete"); }
-    if (signal.aborted) throw new ToolPermissionDenied("Permission approval aborted");
+    try {
+      approved = await options.approve(
+        safetyAsk
+          ? `${sensitive}. Once approval is required.\n${description}`
+          : description,
+      );
+    } catch (error) {
+      throw new ToolPermissionDenied(
+        error instanceof Error
+          ? error.message
+          : "Permission approval did not complete",
+      );
+    }
+    if (signal.aborted)
+      throw new ToolPermissionDenied("Permission approval aborted");
     if (!approved) throw new ToolPermissionDenied("Permission denied");
   }
-  async function checkSensitiveReadPrecondition(file: string, input: string): Promise<void> {
+  async function checkSensitiveReadPrecondition(
+    file: string,
+    input: string,
+  ): Promise<void> {
     const root = await rootPromise;
-    if (sensitiveWriteReason(input, root, options.sensitiveWritePaths) === undefined && sensitiveWriteReason(file, root, options.sensitiveWritePaths) === undefined) return;
-    try { if ((await stat(file)).isFile()) readState.requireComplete(file); }
-    catch (error) { if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error; }
+    if (
+      sensitiveWriteReason(input, root, options.sensitiveWritePaths) ===
+        undefined &&
+      sensitiveWriteReason(file, root, options.sensitiveWritePaths) ===
+        undefined
+    )
+      return;
+    try {
+      if ((await stat(file)).isFile()) readState.requireComplete(file);
+    } catch (error) {
+      if (!(
+        error instanceof Error &&
+        "code" in error &&
+        error.code === "ENOENT"
+      ))
+        throw error;
+    }
   }
   function protectReadDeniedFile(operation: "written" | "edited"): void {
-    if (inheritedReadDeny(policy)) throw new ToolPermissionDenied(`File is covered by a Read deny rule and cannot be ${operation}`);
+    if (inheritedReadDeny(policy))
+      throw new ToolPermissionDenied(
+        `File is covered by a Read deny rule and cannot be ${operation}`,
+      );
   }
-  async function validateInput(name: ToolName, value: unknown, signal: AbortSignal): Promise<unknown> {
+  async function validateInput(
+    name: ToolName,
+    value: unknown,
+    signal: AbortSignal,
+  ): Promise<unknown> {
     const input = schemas[name].parse(value);
     if (name === "Write" || name === "Edit") {
       protectReadDeniedFile(name === "Write" ? "written" : "edited");
-      const mutation = name === "Write" ? schemas.Write.parse(input) : schemas.Edit.parse(input);
+      const mutation =
+        name === "Write"
+          ? schemas.Write.parse(input)
+          : schemas.Edit.parse(input);
       const file = await safePath(mutation.file_path, name, signal);
       await refuseSymlink(mutation.file_path);
-      const previous = await readFileSnapshot(file, signal, { ...(name === "Edit" ? { maximum: MAX_EDIT_BYTES } : {}), requireRead: () => readState.requireComplete(file) });
+      const previous = await readFileSnapshot(file, signal, {
+        ...(name === "Edit" ? { maximum: MAX_EDIT_BYTES } : {}),
+        requireRead: () => readState.requireComplete(file),
+      });
       if (previous !== null) readState.assertCurrent(file, previous);
       if (name === "Edit") {
         const edit = schemas.Edit.parse(input);
-        if (previous === null && edit.old_string !== "") throw new Error("Edit requires an existing file unless old_string is empty");
+        if (previous === null && edit.old_string !== "")
+          throw new Error(
+            "Edit requires an existing file unless old_string is empty",
+          );
         applyEdit(previous === null ? "" : decodeTextFile(previous).text, edit);
       }
-    } else if (name === "Read") await safePath(schemas.Read.parse(input).file_path, name, signal);
-    else if (name === "Glob") await safePath(schemas.Glob.parse(input).path, name, signal);
-    else if (name === "Grep") await safePath(schemas.Grep.parse(input).path, name, signal);
+    } else if (name === "Read")
+      await safePath(schemas.Read.parse(input).file_path, name, signal);
+    else if (name === "Glob")
+      await safePath(schemas.Glob.parse(input).path, name, signal);
+    else if (name === "Grep")
+      await safePath(schemas.Grep.parse(input).path, name, signal);
     signal.throwIfAborted();
     // Execution defaults are applied when the call runs. Hook payloads retain
     // omission of these optional inputs, as observed in the original fixture.
     const normalized: Record<string, unknown> = { ...input };
     if (typeof value === "object" && value !== null) {
-      if (name === "Read" && !Object.hasOwn(value, "offset")) delete normalized.offset;
-      if (name === "Bash" && !Object.hasOwn(value, "timeout")) delete normalized.timeout;
+      if (name === "Read" && !Object.hasOwn(value, "offset"))
+        delete normalized.offset;
+      if (name === "Bash" && !Object.hasOwn(value, "timeout"))
+        delete normalized.timeout;
     }
     if (name === "Write" || name === "Edit" || name === "Read") {
-      return { ...normalized, file_path: path.resolve(await rootPromise, schemas[name].parse(input).file_path) };
+      return {
+        ...normalized,
+        file_path: path.resolve(
+          await rootPromise,
+          schemas[name].parse(input).file_path,
+        ),
+      };
     }
     return normalized;
   }
   return {
     definitions: toolDefinitions(toolNameSchema.options.filter(available)),
-    setReadContext(context) { readContext = context; },
+    setReadContext(context) {
+      readContext = context;
+    },
     async prepareCompaction(input) {
       const cwd = await rootPromise;
       // CLAUDE.md is the instruction file currently loaded by tau's prompt builder.
-      const excludedPaths = [path.join(cwd, "CLAUDE.md"), ...options.restorationExcludedPaths ?? []];
-      try { excludedPaths.push(await safePath("CLAUDE.md")); } catch { /* Missing/unavailable instructions. */ }
-      return prepareFileRestoration({ ...input, cwd, state: readState, excludedPaths, read: async (file, signal) => {
-        if (!available("Read")) throw new Error("Read disabled or denied by policy");
-        const resolved = await safePath(file, "Read", signal);
-        await permit("Read", `Read ${resolved} to restore file context`, signal);
-        if (resolved !== file) throw new Error("File path changed since Read");
-        return readBytes(resolved, signal, FILE_READ_BYTES);
-      } });
+      const excludedPaths = [
+        path.join(cwd, "CLAUDE.md"),
+        ...(options.restorationExcludedPaths ?? []),
+      ];
+      try {
+        excludedPaths.push(await safePath("CLAUDE.md"));
+      } catch {
+        /* Missing/unavailable instructions. */
+      }
+      return prepareFileRestoration({
+        ...input,
+        cwd,
+        state: readState,
+        excludedPaths,
+        read: async (file, signal) => {
+          if (!available("Read"))
+            throw new Error("Read disabled or denied by policy");
+          const resolved = await safePath(file, "Read", signal);
+          await permit(
+            "Read",
+            `Read ${resolved} to restore file context`,
+            signal,
+          );
+          if (resolved !== file)
+            throw new Error("File path changed since Read");
+          return readBytes(resolved, signal, FILE_READ_BYTES);
+        },
+      });
     },
     async execute(call, signal) {
       let pre: PreToolHookResult | undefined;
@@ -296,33 +654,88 @@ export function createTools(options: { cwd: string; mode: PermissionMode; policy
       try {
         signal.throwIfAborted();
         const name = toolNameSchema.parse(call.name);
-        if (!available(name)) throw new ToolPermissionDenied(`Tool disabled or denied by policy: ${name}`);
+        if (!available(name))
+          throw new ToolPermissionDenied(
+            `Tool disabled or denied by policy: ${name}`,
+          );
         const unparsed = unparsedToolInput(call.input);
-        if (unparsed) throw new ToolInputRejected(`input JSON failed to parse — ${unparsed.len} bytes`);
+        if (unparsed)
+          throw new ToolInputRejected(
+            `input JSON failed to parse — ${unparsed.len} bytes`,
+          );
         const validate = async (input: unknown) => {
-          try { return await validateInput(name, input, signal); }
-          catch (error) {
+          try {
+            return await validateInput(name, input, signal);
+          } catch (error) {
             signal.throwIfAborted();
-            if (error instanceof ToolPermissionDenied || error instanceof ToolInputRejected || error instanceof z.ZodError) throw error;
-            throw new ToolInputRejected(error instanceof Error ? error.message : "Tool input validation failed");
+            if (
+              error instanceof ToolPermissionDenied ||
+              error instanceof ToolInputRejected ||
+              error instanceof z.ZodError
+            )
+              throw error;
+            throw new ToolInputRejected(
+              error instanceof Error
+                ? error.message
+                : "Tool input validation failed",
+            );
           }
         };
         effectiveCall = { ...call, input: await validate(call.input) };
         if (options.hooks) {
           pre = await options.hooks.before(effectiveCall, signal, validate);
           signal.throwIfAborted();
-          if (pre.preventContinuation) return appendPreHookContext({ type: "tool_result", tool_use_id: call.id,
-            content: pre.stopReason ?? "Tool call stopped by hook", is_error: true }, pre, effectiveCall, pre.stopReason ?? "Continuation stopped by hook");
-          if (pre.permission === "deny" || pre.permission === "defer") throw new ToolPermissionDenied(pre.reason ?? (pre.permission === "defer" ? "Hook requested deferred approval; this runner cannot resume deferred tool calls" : "Tool denied by hook"));
-          if (pre.updatedInput !== undefined) effectiveCall = { ...call, input: await validate(pre.updatedInput) };
+          if (pre.preventContinuation)
+            return appendPreHookContext(
+              {
+                type: "tool_result",
+                tool_use_id: call.id,
+                content: pre.stopReason ?? "Tool call stopped by hook",
+                is_error: true,
+              },
+              pre,
+              effectiveCall,
+              pre.stopReason ?? "Continuation stopped by hook",
+            );
+          if (pre.permission === "deny" || pre.permission === "defer")
+            throw new ToolPermissionDenied(
+              pre.reason ??
+                (pre.permission === "defer"
+                  ? "Hook requested deferred approval; this runner cannot resume deferred tool calls"
+                  : "Tool denied by hook"),
+            );
+          if (pre.updatedInput !== undefined)
+            effectiveCall = {
+              ...call,
+              input: await validate(pre.updatedInput),
+            };
         }
         const finish = async (result: ToolResult): Promise<ToolResult> => {
-          const annotated = appendPreHookContext({ ...result, ...(pre?.updatedInput === undefined ? {} : { effectiveToolInput: effectiveCall.input }) }, pre, effectiveCall);
-          return options.hooks ? options.hooks.after(effectiveCall, annotated, signal) : annotated;
+          const annotated = appendPreHookContext(
+            {
+              ...result,
+              ...(pre?.updatedInput === undefined
+                ? {}
+                : { effectiveToolInput: effectiveCall.input }),
+            },
+            pre,
+            effectiveCall,
+          );
+          return options.hooks
+            ? options.hooks.after(effectiveCall, annotated, signal)
+            : annotated;
         };
         const responsePath = (effectivePath: string): string => {
-          const original = call.input !== null && typeof call.input === "object" && "file_path" in call.input && typeof call.input.file_path === "string" ? call.input.file_path : effectivePath;
-          return path.resolve(options.cwd, original) === effectivePath ? original : effectivePath;
+          const original =
+            call.input !== null &&
+            typeof call.input === "object" &&
+            "file_path" in call.input &&
+            typeof call.input.file_path === "string"
+              ? call.input.file_path
+              : effectivePath;
+          return path.resolve(options.cwd, original) === effectivePath
+            ? original
+            : effectivePath;
         };
         let hookResponse: unknown;
         let content: string;
@@ -330,28 +743,95 @@ export function createTools(options: { cwd: string; mode: PermissionMode; policy
           case "Read": {
             const input = schemas.Read.parse(effectiveCall.input);
             const file = await safePath(input.file_path, "Read", signal);
-            await permit(name, `Read ${file}`, signal, undefined, pre?.permission);
+            await permit(
+              name,
+              `Read ${file}`,
+              signal,
+              undefined,
+              pre?.permission,
+            );
             inCall = true;
             await options.onFileToolCall?.({ name, path: file, signal });
             signal.throwIfAborted();
-            const context = readContext, initial = input.allow_large ? readAllowance(context, readMaxTokens, FILE_READ_BYTES) : {};
+            const context = readContext,
+              initial = input.allow_large
+                ? readAllowance(context, readMaxTokens, FILE_READ_BYTES)
+                : {};
             try {
-              const handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+              const handle = await open(
+                file,
+                constants.O_RDONLY |
+                  constants.O_NOFOLLOW |
+                  constants.O_NONBLOCK,
+              );
               const selected = await (async () => {
-                try { return await selectTextFile(handle, input, signal, readMaxTokens, initial.raised?.maxSizeBytes); }
-                finally { await handle.close(); }
+                try {
+                  return await selectTextFile(
+                    handle,
+                    input,
+                    signal,
+                    readMaxTokens,
+                    initial.raised?.maxSizeBytes,
+                  );
+                } finally {
+                  await handle.close();
+                }
               })();
-              const view = await renderSelectedText(selected, input, file, readMaxTokens, signal, context?.countTokens ?? options.readTokenCounter, { initial, context });
-              if (view.complete) readState.remember(file, Buffer.from(view.baseline), selected.mtimeMs);
+              const view = await renderSelectedText(
+                selected,
+                input,
+                file,
+                readMaxTokens,
+                signal,
+                context?.countTokens ?? options.readTokenCounter,
+                { initial, context },
+              );
+              if (view.complete)
+                readState.remember(
+                  file,
+                  Buffer.from(view.baseline),
+                  selected.mtimeMs,
+                );
               else readState.rememberPartial(file, selected.mtimeMs);
               inCall = false;
-              return await finish({ type: "tool_result", tool_use_id: call.id, content: view.content,
-                ...(options.hooks ? { hookResponse: { type: "text", file: { filePath: responsePath(input.file_path), content: view.baseline,
-                  numLines: selected.lineCount === 0 ? 0 : view.baseline.split("\n").length, startLine: input.offset, totalLines: selected.totalLines } } } : {}) });
+              return await finish({
+                type: "tool_result",
+                tool_use_id: call.id,
+                content: view.content,
+                ...(options.hooks
+                  ? {
+                      hookResponse: {
+                        type: "text",
+                        file: {
+                          filePath: responsePath(input.file_path),
+                          content: view.baseline,
+                          numLines:
+                            selected.lineCount === 0
+                              ? 0
+                              : view.baseline.split("\n").length,
+                          startLine: input.offset,
+                          totalLines: selected.totalLines,
+                        },
+                      },
+                    }
+                  : {}),
+              });
             } catch (error) {
-              if (error instanceof FileReadByteLimit || error instanceof FileReadTokenLimit)
-                throw new Error(error.message + largeReadHint(context, input.allow_large === true, readMaxTokens,
-                  error instanceof FileReadByteLimit ? { bytes: error.bytes } : { tokens: error.tokens }));
+              if (
+                error instanceof FileReadByteLimit ||
+                error instanceof FileReadTokenLimit
+              )
+                throw new Error(
+                  error.message +
+                    largeReadHint(
+                      context,
+                      input.allow_large === true,
+                      readMaxTokens,
+                      error instanceof FileReadByteLimit
+                        ? { bytes: error.bytes }
+                        : { tokens: error.tokens },
+                    ),
+                );
               throw error;
             }
           }
@@ -360,7 +840,13 @@ export function createTools(options: { cwd: string; mode: PermissionMode; policy
             const input = schemas.Write.parse(effectiveCall.input);
             let file = await safePath(input.file_path, "Write", signal);
             await checkSensitiveReadPrecondition(file, input.file_path);
-            await permit(name, `Write ${file}\nProposed content:\n${bounded(input.content)}`, signal, { canonical: file, input: input.file_path }, pre?.permission);
+            await permit(
+              name,
+              `Write ${file}\nProposed content:\n${bounded(input.content)}`,
+              signal,
+              { canonical: file, input: input.file_path },
+              pre?.permission,
+            );
             inCall = true;
             file = await safePath(input.file_path, "Write", signal);
             await refuseSymlink(input.file_path);
@@ -369,76 +855,167 @@ export function createTools(options: { cwd: string; mode: PermissionMode; policy
             await mkdir(path.dirname(file), { recursive: true });
             file = await safePath(input.file_path, "Write", signal);
             await refuseSymlink(input.file_path);
-            const previous = await readFileSnapshot(file, signal, { requireRead: () => readState.requireComplete(file) });
+            const previous = await readFileSnapshot(file, signal, {
+              requireRead: () => readState.requireComplete(file),
+            });
             if (previous !== null) readState.assertCurrent(file, previous);
-            const updated = encodeTextFile(input.content, previous === null ? undefined : decodeTextFile(previous));
-            const mtimeMs = await writeAtomic(file, updated, recheck(input.file_path, file, previous, signal, "Write"));
+            const updated = encodeTextFile(
+              input.content,
+              previous === null ? undefined : decodeTextFile(previous),
+            );
+            const mtimeMs = await writeAtomic(
+              file,
+              updated,
+              recheck(input.file_path, file, previous, signal, "Write"),
+            );
             readState.remember(file, updated, mtimeMs);
             if (options.hooks) {
-              const originalFile = previous === null ? null : decodeTextFile(previous).text;
-              hookResponse = { type: previous === null ? "create" : "update", filePath: responsePath(input.file_path), content: input.content,
-                structuredPatch: originalFile === null ? [] : textPatch(originalFile, input.content), originalFile, userModified: false };
+              const originalFile =
+                previous === null ? null : decodeTextFile(previous).text;
+              hookResponse = {
+                type: previous === null ? "create" : "update",
+                filePath: responsePath(input.file_path),
+                content: input.content,
+                structuredPatch:
+                  originalFile === null
+                    ? []
+                    : textPatch(originalFile, input.content),
+                originalFile,
+                userModified: false,
+              };
             }
-            content = "File written"; break;
+            content = "File written";
+            break;
           }
           case "Edit": {
             protectReadDeniedFile("edited");
             const input = schemas.Edit.parse(effectiveCall.input);
             let file = await safePath(input.file_path, "Edit", signal);
             await checkSensitiveReadPrecondition(file, input.file_path);
-            await permit(name, `Edit ${file}\n${bounded(`Replace:\n${input.old_string}\nWith:\n${input.new_string}`)}`, signal, { canonical: file, input: input.file_path }, pre?.permission);
+            await permit(
+              name,
+              `Edit ${file}\n${bounded(`Replace:\n${input.old_string}\nWith:\n${input.new_string}`)}`,
+              signal,
+              { canonical: file, input: input.file_path },
+              pre?.permission,
+            );
             inCall = true;
             file = await safePath(input.file_path, "Edit", signal);
             await refuseSymlink(input.file_path);
             await options.onFileToolCall?.({ name, path: file, signal });
             signal.throwIfAborted();
-            const previous = await readFileSnapshot(file, signal, { maximum: MAX_EDIT_BYTES, requireRead: () => readState.requireComplete(file) });
-            if (previous === null && input.old_string !== "") throw new Error("Edit requires an existing file unless old_string is empty");
+            const previous = await readFileSnapshot(file, signal, {
+              maximum: MAX_EDIT_BYTES,
+              requireRead: () => readState.requireComplete(file),
+            });
+            if (previous === null && input.old_string !== "")
+              throw new Error(
+                "Edit requires an existing file unless old_string is empty",
+              );
             if (previous !== null) readState.assertCurrent(file, previous);
-            const original = previous === null ? undefined : decodeTextFile(previous);
-            const updated = encodeTextFile(applyEdit(original?.text ?? "", input), original);
+            const original =
+              previous === null ? undefined : decodeTextFile(previous);
+            const updated = encodeTextFile(
+              applyEdit(original?.text ?? "", input),
+              original,
+            );
             await mkdir(path.dirname(file), { recursive: true });
-            const mtimeMs = await writeAtomic(file, updated, recheck(input.file_path, file, previous, signal, "Edit"));
+            const mtimeMs = await writeAtomic(
+              file,
+              updated,
+              recheck(input.file_path, file, previous, signal, "Edit"),
+            );
             readState.remember(file, updated, mtimeMs);
-            if (options.hooks) hookResponse = { filePath: responsePath(input.file_path), oldString: input.old_string, newString: input.new_string,
-              originalFile: original?.text ?? "", structuredPatch: textPatch(original?.text ?? "", decodeTextFile(updated).text), userModified: false, replaceAll: input.replace_all };
-            content = "File edited"; break;
+            if (options.hooks)
+              hookResponse = {
+                filePath: responsePath(input.file_path),
+                oldString: input.old_string,
+                newString: input.new_string,
+                originalFile: original?.text ?? "",
+                structuredPatch: textPatch(
+                  original?.text ?? "",
+                  decodeTextFile(updated).text,
+                ),
+                userModified: false,
+                replaceAll: input.replace_all,
+              };
+            content = "File edited";
+            break;
           }
           case "Glob": {
             const input = schemas.Glob.parse(effectiveCall.input);
             const start = await safePath(input.path);
-            await permit(name, `Glob ${input.pattern} in ${start}`, signal, undefined, pre?.permission);
+            await permit(
+              name,
+              `Glob ${input.pattern} in ${start}`,
+              signal,
+              undefined,
+              pre?.permission,
+            );
             inCall = true;
-            if (!(await stat(start)).isDirectory()) throw new Error("Glob path must be a directory");
+            if (!(await stat(start)).isDirectory())
+              throw new Error("Glob path must be a directory");
             const root = await rootPromise;
             const matches: string[] = [];
             const matchesPattern = createGlobMatcher(input.pattern);
             for (const file of await files(start, signal)) {
               signal.throwIfAborted();
-              if (matchesPattern(path.relative(start, file).split(path.sep).join("/"))) {
-                matches.push(path.relative(root, file).split(path.sep).join("/"));
+              if (
+                matchesPattern(
+                  path.relative(start, file).split(path.sep).join("/"),
+                )
+              ) {
+                matches.push(
+                  path.relative(root, file).split(path.sep).join("/"),
+                );
               }
-              if (matches.length >= 1000) { matches.push("[results truncated]"); break; }
+              if (matches.length >= 1000) {
+                matches.push("[results truncated]");
+                break;
+              }
             }
-            content = bounded(matches.join("\n")); break;
+            content = bounded(matches.join("\n"));
+            break;
           }
           case "Grep": {
             const input = schemas.Grep.parse(effectiveCall.input);
             const start = await safePath(input.path);
-            await permit(name, `Grep ${input.pattern} in ${start}`, signal, undefined, pre?.permission);
+            await permit(
+              name,
+              `Grep ${input.pattern} in ${start}`,
+              signal,
+              undefined,
+              pre?.permission,
+            );
             inCall = true;
             const root = await rootPromise;
             const directory = (await stat(start)).isDirectory();
             const executable = await findRipgrep();
             const deadline = Date.now() + 20000;
-            const search = (text: string) => searchText({ executable, input, text, signal, timeout: deadline - Date.now() });
+            const search = (text: string) =>
+              searchText({
+                executable,
+                input,
+                text,
+                signal,
+                timeout: deadline - Date.now(),
+              });
             await search(""); // Validate regex even when the workspace/filter has no candidates.
-            const rows: Array<{ text: string; name: string; mtimeMs: number }> = [];
-            let retainedBytes = 0; let incomplete = false; let prefixes = false;
+            const rows: Array<{ text: string; name: string; mtimeMs: number }> =
+              [];
+            let retainedBytes = 0;
+            let incomplete = false;
+            let prefixes = false;
             for (const file of (await files(start, signal)).sort()) {
               signal.throwIfAborted();
-              const relative = path.relative(root, file).split(path.sep).join("/");
-              const { bytes, mtimeMs, truncated } = await readBytes(file, signal);
+              const relative = path
+                .relative(root, file)
+                .split(path.sep)
+                .join("/");
+              const { bytes, mtimeMs, truncated } = await readBytes(
+                file,
+                signal,
+              );
               if (truncated) prefixes = true;
               const prefix = bytes.subarray(0, MAX_BYTES);
               if (prefix.includes(0)) continue;
@@ -446,63 +1023,160 @@ export function createTools(options: { cwd: string; mode: PermissionMode; policy
               if (!result.matched) continue;
               let entries: string[];
               switch (input.output_mode) {
-                case "files_with_matches": entries = [relative]; break;
+                case "files_with_matches":
+                  entries = [relative];
+                  break;
                 case "count": {
                   const count = result.output.trim();
-                  if (!/^[1-9]\d*$/.test(count)) throw new Error("Invalid Grep count response");
-                  entries = [`${relative}:${count}`]; break;
+                  if (!/^[1-9]\d*$/.test(count))
+                    throw new Error("Invalid Grep count response");
+                  entries = [`${relative}:${count}`];
+                  break;
                 }
-                case "content": entries = result.output.replace(/\n$/, "").split("\n").map(line => directory ? `${relative}:${line}` : line); break;
-                default: { const exhaustive: never = input.output_mode; throw new Error(`Unknown Grep mode: ${exhaustive}`); }
+                case "content":
+                  entries = result.output
+                    .replace(/\n$/, "")
+                    .split("\n")
+                    .map((line) => (directory ? `${relative}:${line}` : line));
+                  break;
+                default: {
+                  const exhaustive: never = input.output_mode;
+                  throw new Error(`Unknown Grep mode: ${exhaustive}`);
+                }
               }
               for (const text of entries) {
                 rows.push({ text, name: relative, mtimeMs });
                 retainedBytes += Buffer.byteLength(text);
-                if (rows.length >= 20000 || retainedBytes >= 1024 * 1024) { incomplete = true; break; }
+                if (rows.length >= 20000 || retainedBytes >= 1024 * 1024) {
+                  incomplete = true;
+                  break;
+                }
               }
               if (incomplete) break;
             }
             signal.throwIfAborted();
             if (Date.now() >= deadline) throw new Error("Grep timed out");
-            if (input.output_mode === "files_with_matches") rows.sort((a, b) => b.mtimeMs - a.mtimeMs || a.name.localeCompare(b.name));
-            const end = input.head_limit === 0 ? undefined : input.offset + input.head_limit;
+            if (input.output_mode === "files_with_matches")
+              rows.sort(
+                (a, b) => b.mtimeMs - a.mtimeMs || a.name.localeCompare(b.name),
+              );
+            const end =
+              input.head_limit === 0
+                ? undefined
+                : input.offset + input.head_limit;
             const page = rows.slice(input.offset, end);
-            content = page.length ? page.map(row => row.text).join("\n") : (rows.length ? "No entries at this offset" : input.output_mode === "files_with_matches" ? "No files found" : "No matches found");
-            if (end !== undefined && rows.length > end) content += `\n[more results: limit ${input.head_limit}, offset ${input.offset}]`;
-            if (prefixes) content += "\n[search incomplete: only the first 65536 bytes of each file were searched]";
-            if (incomplete) content += "\n[search results truncated by resource limit]";
+            content = page.length
+              ? page.map((row) => row.text).join("\n")
+              : rows.length
+                ? "No entries at this offset"
+                : input.output_mode === "files_with_matches"
+                  ? "No files found"
+                  : "No matches found";
+            if (end !== undefined && rows.length > end)
+              content += `\n[more results: limit ${input.head_limit}, offset ${input.offset}]`;
+            if (prefixes)
+              content +=
+                "\n[search incomplete: only the first 65536 bytes of each file were searched]";
+            if (incomplete)
+              content += "\n[search results truncated by resource limit]";
             break;
           }
           case "Bash": {
             const input = schemas.Bash.parse(effectiveCall.input);
-            await permit(name, `Run Bash (shell is NOT sandboxed and can access files outside the workspace): ${input.command}`, signal, undefined, pre?.permission);
+            await permit(
+              name,
+              `Run Bash (shell is NOT sandboxed and can access files outside the workspace): ${input.command}`,
+              signal,
+              undefined,
+              pre?.permission,
+            );
             inCall = true;
-            const result = await shell(input.command, await rootPromise, input.timeout, signal);
+            const result = await shell(
+              input.command,
+              await rootPromise,
+              input.timeout,
+              signal,
+            );
             inCall = false;
             const lines = result.stdout.trimEnd().split("\n");
             while (lines[0]?.trim() === "") lines.shift();
-            const mapped: ToolResult = { type: "tool_result", tool_use_id: call.id, content: result.content, ...(result.is_error ? { is_error: true } : {}),
-              ...(options.hooks ? { hookResponse: { stdout: lines.join("\n"), stderr: result.stderr, interrupted: false, isImage: false } } : {}) };
+            const mapped: ToolResult = {
+              type: "tool_result",
+              tool_use_id: call.id,
+              content: result.content,
+              ...(result.is_error ? { is_error: true } : {}),
+              ...(options.hooks
+                ? {
+                    hookResponse: {
+                      stdout: lines.join("\n"),
+                      stderr: result.stderr,
+                      interrupted: false,
+                      isImage: false,
+                    },
+                  }
+                : {}),
+            };
             // The original Bash call treats nonzero command exit as a thrown
             // tool failure, although our legacy shell adapter returns an error
             // result. Preserve that hook outcome distinction explicitly.
             if (result.is_error) {
-              const failure = await options.hooks?.failure?.(effectiveCall, new Error(result.content), signal);
-              return appendFailureHookContext(appendPreHookContext(mapped, pre, effectiveCall), failure);
+              const failure = await options.hooks?.failure?.(
+                effectiveCall,
+                new Error(result.content),
+                signal,
+              );
+              return appendFailureHookContext(
+                appendPreHookContext(mapped, pre, effectiveCall),
+                failure,
+              );
             }
             return await finish(mapped);
           }
-          default: { const exhaustive: never = name; throw new Error(`Unknown tool: ${exhaustive}`); }
+          default: {
+            const exhaustive: never = name;
+            throw new Error(`Unknown tool: ${exhaustive}`);
+          }
         }
         inCall = false;
-        return await finish({ type: "tool_result", tool_use_id: call.id, content: bounded(content), ...(hookResponse === undefined ? {} : { hookResponse }) });
+        return await finish({
+          type: "tool_result",
+          tool_use_id: call.id,
+          content: bounded(content),
+          ...(hookResponse === undefined ? {} : { hookResponse }),
+        });
       } catch (error) {
         let failure: ToolFailureHookResult | void = undefined;
-        if (inCall && options.hooks?.failure) try { failure = await options.hooks.failure(effectiveCall, error, signal); } catch { signal.throwIfAborted(); }
-        return appendFailureHookContext(appendPreHookContext({ type: "tool_result", tool_use_id: call.id, content: bounded(error instanceof Error ? error.message : String(error)), is_error: true,
-          ...(pre?.updatedInput === undefined ? {} : { effectiveToolInput: effectiveCall.input }),
-          ...(error instanceof ToolPermissionDenied ? { permissionDenied: true } : {}),
-          ...(error instanceof ToolInputRejected || error instanceof z.ZodError ? { inputRejected: true } : {}) }, pre, effectiveCall), failure);
+        if (inCall && options.hooks?.failure)
+          try {
+            failure = await options.hooks.failure(effectiveCall, error, signal);
+          } catch {
+            signal.throwIfAborted();
+          }
+        return appendFailureHookContext(
+          appendPreHookContext(
+            {
+              type: "tool_result",
+              tool_use_id: call.id,
+              content: bounded(
+                error instanceof Error ? error.message : String(error),
+              ),
+              is_error: true,
+              ...(pre?.updatedInput === undefined
+                ? {}
+                : { effectiveToolInput: effectiveCall.input }),
+              ...(error instanceof ToolPermissionDenied
+                ? { permissionDenied: true }
+                : {}),
+              ...(error instanceof ToolInputRejected ||
+              error instanceof z.ZodError
+                ? { inputRejected: true }
+                : {}),
+            },
+            pre,
+            effectiveCall,
+          ),
+          failure,
+        );
       }
     },
   };

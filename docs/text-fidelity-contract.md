@@ -2,15 +2,15 @@
 
 Seven complete source spans and their containing module hashes were verified against the pinned executable. Evidence: source `ev_b0a14a433482875f7c69e40e8582200250bfbac2316b16407c433e221c5b5e74`, verification `ev_d37ada60b4bf8fefaf0ecfe77cec8b7e7d15a3382d8256f6e2a1c804a1d1575d`. Reproduce with `python3 -I artifacts/text-fidelity-pass/verify-spans.py`. Extracted code remains ignored and is never imported or executed.
 
-| Source boundary | Executable byte offset | Bytes |
-| --- | ---: | ---: |
-| Encoding detection and BOM | 282607883 | 746 |
-| Text decoding and newlines | 282608727 | 1048 |
-| Quote/escape matching and style | 292521406 | 2703 |
-| Creation, uniqueness and replacement | 292524109 | 1861 |
-| Edit execution and encoded write | 298375276 | 4766 |
-| Write execution and encoded write | 294659588 | 975 |
-| Newline restoration/write verification | 283336304 | 1207 |
+| Source boundary                        | Executable byte offset | Bytes |
+| -------------------------------------- | ---------------------: | ----: |
+| Encoding detection and BOM             |              282607883 |   746 |
+| Text decoding and newlines             |              282608727 |  1048 |
+| Quote/escape matching and style        |              292521406 |  2703 |
+| Creation, uniqueness and replacement   |              292524109 |  1861 |
+| Edit execution and encoded write       |              298375276 |  4766 |
+| Write execution and encoded write      |              294659588 |   975 |
+| Newline restoration/write verification |              283336304 |  1207 |
 
 ## Source-derived behavior
 

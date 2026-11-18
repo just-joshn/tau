@@ -82,21 +82,21 @@ Ctrl-C cancels an active request/tool; Ctrl-C at an idle prompt exits. Tool exec
 
 ## Tools and permissions
 
-| Tool | Behavior |
-| --- | --- |
-| `Read` | Numbered regular text; whole-file byte/token limits, token-aware pages and streaming explicit line ranges |
-| `Write` | Creates or replaces a project file; proposed content preview before approval |
-| `Edit` | Literal/quote/Unicode-escape matching, unique or replace_all replacement; empty old_string creates missing or whitespace-only files |
-| `Glob` | Bounded state-machine matching of project file paths; `*`, `**`, `?` syntax |
-| `Grep` | Bounded regex search using standalone rg; files (default), content, or matching-line counts; case/line-number control and pagination |
-| `Bash` | Runs `/bin/sh -c` in the project; bounded output and timeout |
+| Tool    | Behavior                                                                                                                             |
+| ------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `Read`  | Numbered regular text; whole-file byte/token limits, token-aware pages and streaming explicit line ranges                            |
+| `Write` | Creates or replaces a project file; proposed content preview before approval                                                         |
+| `Edit`  | Literal/quote/Unicode-escape matching, unique or replace_all replacement; empty old_string creates missing or whitespace-only files  |
+| `Glob`  | Bounded state-machine matching of project file paths; `*`, `**`, `?` syntax                                                          |
+| `Grep`  | Bounded regex search using standalone rg; files (default), content, or matching-line counts; case/line-number control and pagination |
+| `Bash`  | Runs `/bin/sh -c` in the project; bounded output and timeout                                                                         |
 
-| Mode | Read/search | Write/Edit | Shell |
-| --- | --- | --- | --- |
-| `default` | Allow | Ask | Ask |
-| `acceptEdits` | Allow | Allow | Ask |
-| `plan` | Allow | Deny | Deny |
-| `bypassPermissions` | Allow | Allow | Allow |
+| Mode                | Read/search | Write/Edit | Shell |
+| ------------------- | ----------- | ---------- | ----- |
+| `default`           | Allow       | Ask        | Ask   |
+| `acceptEdits`       | Allow       | Allow      | Ask   |
+| `plan`              | Allow       | Deny       | Deny  |
+| `bypassPermissions` | Allow       | Allow      | Allow |
 
 ### Tool selection and explicit rules
 

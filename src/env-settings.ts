@@ -3,9 +3,16 @@ const grouped = /^[+-]?\d{1,3}([_,\u00a0\u202f ])\d{3}(?:\1\d{3})*$/;
 const scientific = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)[eE][+-]?\d+$/;
 
 function groupedNumber(text: string): number | undefined {
-  return text.length <= 32 && grouped.test(text) ? Number(text.replace(/[_,\u00a0\u202f ]/g, "")) : undefined;
+  return text.length <= 32 && grouped.test(text)
+    ? Number(text.replace(/[_,\u00a0\u202f ]/g, ""))
+    : undefined;
 }
-export function integerSetting(value: string | undefined, minimum = -Infinity, maximum = Infinity, digitsOnly = false): number | undefined {
+export function integerSetting(
+  value: string | undefined,
+  minimum = -Infinity,
+  maximum = Infinity,
+  digitsOnly = false,
+): number | undefined {
   if (value === undefined) return;
   const text = value.trim();
   if (digitsOnly && !/^[+-]?\d+$/.test(text)) return;
@@ -15,9 +22,13 @@ export function integerSetting(value: string | undefined, minimum = -Infinity, m
     parsed = Number.isInteger(numeric) ? numeric : NaN;
   }
   parsed ??= parseInt(text, 10);
-  return Number.isFinite(parsed) && parsed >= minimum && parsed <= maximum ? parsed : undefined;
+  return Number.isFinite(parsed) && parsed >= minimum && parsed <= maximum
+    ? parsed
+    : undefined;
 }
-export function positiveRawNumber(value: string | undefined): number | undefined {
+export function positiveRawNumber(
+  value: string | undefined,
+): number | undefined {
   if (value === undefined) return;
   const numeric = Number(value);
   const parsed = Number.isNaN(numeric) ? groupedNumber(value.trim()) : numeric;

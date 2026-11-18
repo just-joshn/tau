@@ -6,19 +6,19 @@ Eleven bounded spans and their module hashes were verified against the pinned Cl
 
 The active coding-stream client is created with SDK `maxRetries:0` inside the application's `_je` generator. Messages create is inside that wrapper, which receives a shared model-call ledger and `retriesLeft()` budget. The SDK's default two retries therefore do not establish the active CLI policy.
 
-| Boundary | Executable offset | Bytes |
-| --- | ---: | ---: |
-| Active client construction | 296213836 | 326 |
-| Messages create and outer options | 296216755 | 1593 |
-| Outer constants | 296060612 | 191 |
-| Outer loop entry | 296063065 | 994 |
-| Eligibility and budget selection | 296085503 | 2761 |
-| Ordinary delay-bound path | 296079021 | 438 |
-| Millisecond/date header path | 293239926 | 709 |
-| Application backoff wrapper | 292143621 | 238 |
-| Jitter math | 281829226 | 354 |
-| Application retry-after parser | 286202816 | 78 |
-| Embedded SDK comparison | 289738294 | 940 |
+| Boundary                          | Executable offset | Bytes |
+| --------------------------------- | ----------------: | ----: |
+| Active client construction        |         296213836 |   326 |
+| Messages create and outer options |         296216755 |  1593 |
+| Outer constants                   |         296060612 |   191 |
+| Outer loop entry                  |         296063065 |   994 |
+| Eligibility and budget selection  |         296085503 |  2761 |
+| Ordinary delay-bound path         |         296079021 |   438 |
+| Millisecond/date header path      |         293239926 |   709 |
+| Application backoff wrapper       |         292143621 |   238 |
+| Jitter math                       |         281829226 |   354 |
+| Application retry-after parser    |         286202816 |    78 |
+| Embedded SDK comparison           |         289738294 |   940 |
 
 Ordinary application backoff starts at 500 ms, doubles, caps the exponential component at 32 seconds, then adds up to 25% proportional jitter. Server waits are also jittered upward and used as lower bounds. The SDK instead has a smaller cap and downward jitter.
 
