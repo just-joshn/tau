@@ -1,0 +1,18 @@
+{
+  "environment-update-heading": "iXo=\"# Environment update\"",
+  "environment-worktree-left": "The primary working directory is no longer a git worktree.",
+  "environment-update-was": "r.push(`Primary working directory: ${mp(e.workingDirectory)}${h}`)",
+  "environment-diff-git": "if(a!==void 0&&n.isGitRepo!==e.isGitRepo)r.push({field:\"isGitRepo\"})",
+  "task-reminder-lead": "The task tools haven't been used recently. If you're working on tasks that would benefit from tracking progress, consider using ",
+  "task-reminder-list": "Here are the existing tasks:",
+  "task-reminder-cadence": "TURNS_SINCE_WRITE:10,TURNS_BETWEEN_REMINDERS:10",
+  "task-reminder-mode": "return s.CLAUDE_CODE_TODO_REMINDER_MODE??\"baseline\"",
+  "context-management-edit": "type:\"clear_thinking_20251015\",keep:\"all\"",
+  "context-management-beta": "lxe=M(\"context_management\",\"context-management-2025-06-27\")",
+  "context-management-refusal": "context_management: Extra inputs are not permitted",
+  "display-updates-beta": "cxe=M(\"thinking_display_updates\",\"thinking-display-updates-2026-08-18\")",
+  "display-updates-env": "return s.CLAUDE_CODE_THINKING_DISPLAY_UPDATES??!0",
+  "display-session-rule": "function Q7o({isNonInteractive:e,outputFormat:n,verbose:r}){return e&&(n===\"text\"||n===\"json\"&&!r)}",
+  "display-probe-retry": "`retry:thinking-display-unclaimed:${tf}`",
+  "date-change": "e.changed?`The date has changed. Today's date is now ${e.date}. No need to announce the new date"
+}
