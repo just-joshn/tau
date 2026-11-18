@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { admitSessionPersistence, isInteractiveLaunch } from "./launch-mode.js";
 import { realpath } from "node:fs/promises";
+import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout, stderr } from "node:process";
@@ -51,6 +52,7 @@ import { createSessionAgentHost } from "./agent-session.js";
 import { wrapCatalogTools } from "./catalog-session.js";
 import { TOOL_SEARCH, toolSearchEnabled } from "./tool-search.js";
 import { formatBackgroundNotification } from "./background-notifications.js";
+import type { RewakeNotification } from "./async-hooks.js";
 import type { BackgroundAgentCompletion } from "./background-agent-runtime.js";
 import { createBackgroundTaskTools } from "./background-task-tools.js";
 import { createWebTools } from "./web-tools.js";
@@ -530,8 +532,20 @@ async function main(): Promise<void> {
         env: process.env,
         maxOutputBytes: 16 * 1024 * 1024,
         attended: interactive,
+        // Source lY `zs`: interactive or streaming input. Print runs keep a lone asyncRewake synchronous.
+        asyncRewakeBackgrounds: interactive,
       }),
       onDiagnostic: (message) => stderr.write(`Hooks: ${safe(message)}\n`),
+      asyncHooks: {
+        enqueueWake: (wake) =>
+          notifications.push({
+            sessionId: hookSessionId,
+            notification: { kind: "hook-rewake", wake },
+          }),
+        homeDir: homedir(),
+        posixShell: (hook) =>
+          hook.shell !== "powershell" && !process.env.CLAUDE_CODE_SHELL_PREFIX,
+      },
     });
     return {
       ...host,
@@ -613,7 +627,9 @@ async function main(): Promise<void> {
   const retiredHookHosts: ReturnType<typeof createHookHost>[] = [];
   const notifications: {
     sessionId: string;
-    notification: Readonly<BackgroundAgentCompletion>;
+    notification:
+      | { kind: "agent"; completion: Readonly<BackgroundAgentCompletion> }
+      | { kind: "hook-rewake"; wake: RewakeNotification };
   }[] = [];
   const notificationSessions = new Map<string, string>();
   const commitNotifications = () => {
@@ -625,7 +641,10 @@ async function main(): Promise<void> {
         role: "user",
         content: ready.map((entry) => ({
           type: "text",
-          text: formatBackgroundNotification(entry.notification),
+          text:
+            entry.notification.kind === "agent"
+              ? formatBackgroundNotification(entry.notification.completion)
+              : entry.notification.wake.value,
         })),
       });
     return ready.length;
@@ -884,7 +903,7 @@ async function main(): Promise<void> {
           notifications.push({
             sessionId:
               notificationSessions.get(ownerSessionId) ?? ownerSessionId,
-            notification,
+            notification: { kind: "agent", completion: notification },
           });
         },
       },
@@ -1688,6 +1707,7 @@ async function main(): Promise<void> {
       );
     }
     if (prompt) await turn(prompt);
+    if (!terminal) await activeHooks().settleRewakes();
     while (terminal && !closing) {
       let input: string;
       try {
