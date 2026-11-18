@@ -99,8 +99,11 @@ create("text-summary").execute(
 const violations: string[] = [];
 const total = map.getCoverageSummary();
 checkFloor("total branches", total.branches, BRANCH_FLOOR);
-checkFloor("total lines", total.lines, LINE_FLOOR);
-checkFloor("total functions", total.functions, FUNCTION_FLOOR);
+// The line and function floors are whole-suite totals, so a focused run skips them.
+if (focus.length === 0) {
+  checkFloor("total lines", total.lines, LINE_FLOOR);
+  checkFloor("total functions", total.functions, FUNCTION_FLOOR);
+}
 for (const file of map.files().sort())
   checkFloor(
     `${relative(root, file)} branches`,
