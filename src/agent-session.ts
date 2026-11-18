@@ -24,6 +24,7 @@ import {
 import { createTools } from "./tools.js";
 import { ReadState } from "./read-state.js";
 import { createInstructionCatalog } from "./instructions.js";
+import { autoMemoryIndexOption } from "./auto-memory.js";
 import { InstructionContext } from "./instruction-context.js";
 import { runAgent } from "./agent.js";
 import { defaultOutputTokens, resolveModelFacts } from "./reasoning.js";
@@ -697,6 +698,7 @@ export async function createSessionAgentHost(options: {
               kind === "Managed" ||
               kind === "User" ||
               !inheritedReadDeny(policy()),
+            ...autoMemoryIndexOption(options.memory?.autoMemory),
             managedInstructionsOnly:
               options.launch.snapshot.effective.managedInstructionsOnly ===
               true,

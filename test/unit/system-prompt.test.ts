@@ -16,6 +16,7 @@ import {
   totalTokensText,
   type PromptContext,
 } from "../../src/system-prompt.js";
+import { resolveAutoMemoryStore } from "../../src/auto-memory.js";
 
 const context = (overrides: Partial<PromptContext> = {}): PromptContext => ({
   model: "claude-sonnet-4-5-20250929",
@@ -83,6 +84,36 @@ test("sections shared with the pinned original's print-mode request are byte-ide
       "Environment",
       "Context management",
     ],
+  );
+});
+
+test("the auto memory section matches the pinned original between session guidance and environment", () => {
+  const directory =
+    "/private/tmp/tau-differential-kmi858e8/config/projects/-private-tmp-tau-differential-kmi858e8-work/memory/";
+  const store = resolveAutoMemoryStore({
+    enabled: true,
+    env: { CLAUDE_COWORK_MEMORY_PATH_OVERRIDE: directory },
+    configDirectory: "/unused",
+    home: "/unused",
+    cwd: "/unused",
+    canonicalGitRoot: null,
+    settings: {},
+    projectSettingsAdmitted: true,
+  });
+  const body = sections(renderSystemPrompt(context({ autoMemory: store })));
+  assert.equal(
+    sha(body.get("auto memory")),
+    "b23d6f14beae9ff9fbdd189e5520160e80176c17883056cc4d542f2662b2b55b",
+  );
+  const order = [...body.keys()];
+  assert.equal(
+    order.indexOf("auto memory"),
+    order.indexOf("Session-specific guidance") + 1,
+  );
+  assert.equal(order.indexOf("Environment"), order.indexOf("auto memory") + 1);
+  assert.equal(
+    renderSystemPrompt(context({ autoMemory: { ...store, enabled: false } })),
+    renderSystemPrompt(context()),
   );
 });
 

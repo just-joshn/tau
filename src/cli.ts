@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { admitSessionPersistence, isInteractiveLaunch } from "./launch-mode.js";
 import { existsSync } from "node:fs";
-import { realpath } from "node:fs/promises";
+import { mkdir, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
@@ -44,6 +44,7 @@ import { AnthropicProvider } from "./provider.js";
 import { newSession, SessionStore } from "./session.js";
 import { importNativeSessionFile } from "./native-session-import.js";
 import { createLaunchAgentMemoryHost } from "./agent-memory-launch.js";
+import { autoMemoryIndexOption } from "./auto-memory.js";
 import { createLaunchScopedPermissionHost } from "./scoped-permission-launch.js";
 import { createTools } from "./tools.js";
 import { describedShell } from "./bash-shell.js";
@@ -319,6 +320,7 @@ async function main(): Promise<void> {
         hasSkills: skills.length > 0,
         interactive,
         env: process.env,
+        autoMemory: memoryHost.autoMemory,
       },
       {
         replacement: options.systemPrompt,
@@ -1006,6 +1008,11 @@ async function main(): Promise<void> {
     launch,
     model: currentModel,
   });
+  // Source He: the prompt promises the folder exists; a failure stays silent.
+  if (memoryHost.autoMemory.enabled)
+    await mkdir(memoryHost.autoMemory.directory, { recursive: true }).catch(
+      () => undefined,
+    );
   const permissionOwners = new Map<
     string,
     ReturnType<typeof createLaunchScopedPermissionHost>
@@ -1384,6 +1391,7 @@ async function main(): Promise<void> {
           kind === "Managed" || kind === "User" || !inheritedReadDeny(policy),
         approveExternalImport: ({ path, parent }) =>
           approve(`Load instruction import ${path} from ${parent}?`),
+        ...autoMemoryIndexOption(memoryHost.autoMemory),
       }),
       model: currentModel,
       contextWindow: () => provider.contextWindowTokens(currentModel()),
@@ -1727,6 +1735,9 @@ async function main(): Promise<void> {
               path: plugin.root,
               source: plugin.source,
             })),
+            ...(memoryHost.autoMemory.enabled
+              ? { memoryPaths: { auto: memoryHost.autoMemory.directory } }
+              : {}),
           }),
         ]);
       }

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { autoMemoryPrompt, type AutoMemoryStore } from "./auto-memory.js";
 import { triBoolean } from "./env-settings.js";
 import { modelFacts } from "./model-facts.js";
 import {
@@ -81,6 +82,7 @@ export interface PromptContext {
   hasSkills: boolean;
   interactive: boolean;
   env: PromptEnv;
+  autoMemory?: AutoMemoryStore;
 }
 interface PromptSection {
   id: string;
@@ -175,7 +177,7 @@ export function totalTokensText(
   return `<total_tokens>${mode === "infinite" ? "Infinite" : mode === "fixed" ? 5_000_000 : Math.max(0, remaining)} tokens left</total_tokens>`;
 }
 
-/** Ordered like the original's shared then session sections; memory is not ported. */
+/** Ordered like the original's shared then session sections. */
 export const SYSTEM_PROMPT_SECTIONS: readonly PromptSection[] = [
   {
     id: "intro",
@@ -204,6 +206,10 @@ export const SYSTEM_PROMPT_SECTIONS: readonly PromptSection[] = [
   { id: "communication", render: () => TEXT_OUTPUT_SECTION },
   { id: "pronouns", render: () => PRONOUNS },
   { id: "session_guidance", render: sessionGuidance },
+  {
+    id: "memory",
+    render: ({ autoMemory, env }) => autoMemoryPrompt(autoMemory, env),
+  },
   { id: "env_info_simple", render: environment },
   { id: "context_management", render: () => CONTEXT_MANAGEMENT },
   {

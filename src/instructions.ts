@@ -17,10 +17,15 @@ import {
   readBoundedConfigurationText,
   type PathReadPolicy,
 } from "./configuration.js";
+import {
+  sanitizeAutoMemoryIndex,
+  truncateAutoMemoryIndex,
+} from "./auto-memory.js";
 
 export const INSTRUCTION_MAX_BYTES = 4 * 1024 * 1024;
 export const INSTRUCTION_IMPORT_DEPTH = 5;
-export type InstructionKind = "Managed" | "User" | "Project" | "Local";
+export type InstructionKind =
+  "Managed" | "User" | "Project" | "Local" | "AutoMem";
 export interface InstructionFile {
   path: string;
   canonicalPath: string;
@@ -76,6 +81,8 @@ export interface InstructionOptions {
   ) => boolean | Promise<boolean>;
   readPolicy?: InstructionReadPolicy;
   excludePatterns?: readonly string[];
+  /** Auto memory's MEMORY.md, loaded after every instruction file; inline content replaces the read. */
+  autoMemoryIndex?: { path: string; content?: string };
 }
 const TEXT_EXTENSIONS = new Set(
   ".md .txt .text .json .yaml .yml .toml .xml .csv .html .htm .css .scss .sass .less .js .ts .tsx .jsx .mjs .cjs .mts .cts .py .pyi .pyw .rb .erb .rake .go .rs .java .kt .kts .scala .c .cpp .cc .cxx .h .hpp .hxx .cs .swift .sh .bash .zsh .fish .ps1 .bat .cmd .env .ini .cfg .conf .config .properties .sql .graphql .gql .proto .vue .svelte .astro .ejs .hbs .pug .jade .php .pl .pm .lua .r .dart .ex .exs .erl .hrl .clj .cljs .cljc .edn .hs .lhs .elm .ml .mli .f .f90 .f95 .for .cmake .make .makefile .gradle .sbt .rst .adoc .asciidoc .org .tex .latex .lock .log .diff .patch".split(
@@ -826,7 +833,49 @@ export class InstructionCatalog {
             update,
           );
       }
+    if (this.options.autoMemoryIndex)
+      this.admit(
+        await this.autoMemory(this.options.autoMemoryIndex, seen),
+        update,
+      );
     return update;
+  }
+  /** Source dct(Gne(), "AutoMem"): no imports or excludes, truncated and sanitized. */
+  private async autoMemory(
+    index: { path: string; content?: string },
+    seen: Set<string>,
+  ): Promise<InstructionFile[]> {
+    let raw = index.content,
+      canonicalPath = index.path;
+    if (raw === undefined) {
+      const read = await readBoundedConfigurationText(
+        index.path,
+        INSTRUCTION_MAX_BYTES,
+      );
+      if (read.status !== "loaded" || seen.has(read.canonicalPath)) return [];
+      raw = read.text;
+      canonicalPath = read.canonicalPath;
+    }
+    seen.add(canonicalPath);
+    const content = sanitizeAutoMemoryIndex(
+      truncateAutoMemoryIndex(
+        index.content === undefined
+          ? parseInstructionText(raw, canonicalPath).content
+          : raw,
+      ),
+    );
+    if (!content) return [];
+    return [
+      {
+        path: index.path,
+        canonicalPath,
+        kind: "AutoMem",
+        content,
+        // Source DGr: inline index content never matches a file on disk.
+        contentDiffersFromDisk: index.content !== undefined || content !== raw,
+        ...(content !== raw ? { rawContent: raw } : {}),
+      },
+    ];
   }
   async loadForPath(path: string): Promise<InstructionUpdate> {
     const update = this.update(),
