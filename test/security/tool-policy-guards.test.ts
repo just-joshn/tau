@@ -61,11 +61,11 @@ test("INV-01 CLI lists split on whitespace outside calls and keep call content v
 test("INV-01 rejected CLI rules name the grammar each flag accepts", () => {
   assert.throws(
     () => parseToolPolicy({ tools: "mcp__srv__read" }),
-    /Use exact built-in names or Skill;/,
+    /Unsupported tool rule: mcp__srv__read\. Use exact tool names; /,
   );
   assert.throws(
-    () => parseToolPolicy({ allowedTools: ["Read(*.ts)"] }),
-    /Skill\[\(name\)\], or mcp__server\[__tool-pattern\]/,
+    () => parseToolPolicy({ allowedTools: ["mcp__*"] }),
+    /Use exact tool names, Read\(path\), Edit\(path\), Bash\(command\), Skill\[\(name\)\], or mcp__server\[__tool-pattern\];/,
   );
 });
 
