@@ -46,8 +46,19 @@ export type ScriptedResponse =
     }
   /** Accepts the request and never responds, for cancellation tests. */
   | { kind: "hang" }
-  /** Streams the first `events` SSE events of a turn, then destroys the socket. */
-  | { kind: "drop"; events: number; content?: ContentBlock[] };
+  /**
+   * Streams the first `events` SSE events of a turn, then destroys the socket
+   * once `cutAfter` resolves. Bun's fetch discards body bytes the reader has
+   * not pulled yet when the connection then fails, so a client only reliably
+   * sees the events if the cut waits for its proof of reading them, e.g. its
+   * stream-json output. Without `cutAfter` the cut follows the write.
+   */
+  | {
+      kind: "drop";
+      events: number;
+      content?: ContentBlock[];
+      cutAfter?: Promise<unknown>;
+    };
 
 export interface RecordedRequest {
   path: string;
@@ -144,7 +155,9 @@ function serve(response: ServerResponse, entry: ScriptedResponse): void {
       const content = entry.content ?? [{ type: "text", text: "partial" }];
       const events = turnEvents(content, "end_turn").slice(0, entry.events);
       response.writeHead(200, { "content-type": "text/event-stream" });
-      response.write(fixtureSse(events), () => response.destroy());
+      response.write(fixtureSse(events), () => {
+        void Promise.resolve(entry.cutAfter).then(() => response.destroy());
+      });
       return;
     }
   }
