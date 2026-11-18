@@ -1,0 +1,40 @@
+[
+  {
+    "kind": "result",
+    "subtype": "success",
+    "is_error": false,
+    "num_turns": 4,
+    "result": "file workflow done",
+    "session_id": "<session-0>",
+    "stop_reason": "end_turn",
+    "terminal_reason": "completed",
+    "permission_denials": [],
+    "total_cost_usd": 0.00030000000000000003,
+    "usage.input_tokens": 40,
+    "usage.output_tokens": 12,
+    "usage.cache_read_input_tokens": 0,
+    "usage.cache_creation_input_tokens": 0,
+    "modelUsage": {
+      "claude-sonnet-4-5-20250929": {
+        "inputTokens": 40,
+        "outputTokens": 12,
+        "cacheReadInputTokens": 0,
+        "cacheCreationInputTokens": 0,
+        "webSearchRequests": 0,
+        "costUSD": 0.00030000000000000003,
+        "contextWindow": 200000,
+        "maxOutputTokens": 32000,
+        "thinkingTokens": 0,
+        "cacheCreationEphemeral5mInputTokens": 0,
+        "cacheCreationEphemeral1hInputTokens": 0,
+        "canonicalModel": "claude-sonnet-4-5",
+        "provider": "firstParty",
+        "costBasis": "list"
+      }
+    },
+    "model_usage_since_last_result": "<absent>",
+    "result_index": 0,
+    "api_error_status": null,
+    "errors": "<absent>"
+  }
+]
