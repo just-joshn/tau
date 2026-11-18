@@ -119,7 +119,7 @@ export const INVARIANTS = [
     id: "INV-13",
     severity: "P1",
     statement: "Failed or partial tools do not become false success.",
-    tau: "Tool errors become is_error results. Provider failure, truncation or exhaustion ends non-zero or with an error result, never a success envelope.",
+    tau: "Tool errors become is_error results. Provider failure, truncation or exhaustion ends non-zero with an error result, or, when closed blocks were recovered (docs/stream-recovery-contract.md), exits 0 with the result flagged is_partial: true and an incomplete-response warning. It never ends as an unflagged success.",
     evidence: { kind: "tests" },
   },
   {

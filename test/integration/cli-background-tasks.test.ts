@@ -1,9 +1,8 @@
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { z } from "zod";
 import { runCli } from "../helpers/cli-harness.js";
-import { startMockProvider } from "../helpers/mock-provider.js";
+import { startMockProvider, turn } from "../helpers/mock-provider.js";
 import { startPty, type PtySession } from "../helpers/pty.js";
-import { startSseServer, turn } from "../helpers/sse-server.js";
 
 setDefaultTimeout(30_000);
 
@@ -54,11 +53,6 @@ function launchedId(body: unknown, id: string): string {
 const isWorker = (body: unknown) =>
   JSON.stringify(bodySchema.parse(body).system).includes("WORKER_SYSTEM");
 
-/** A worker request that is never answered; teardown closes its socket. */
-function stall(): Promise<never> {
-  return new Promise(() => {});
-}
-
 const launch = {
   type: "tool_use" as const,
   id: "launch",
@@ -79,8 +73,8 @@ async function submit(tau: PtySession, line: string): Promise<void> {
 describe("background agents in the REPL", () => {
   test("TaskStop under an ask rule asks at the terminal before stopping the agent", async () => {
     let parent = 0;
-    const provider = await startSseServer(async (body) => {
-      if (isWorker(body)) return stall();
+    const provider = await startMockProvider((body) => {
+      if (isWorker(body)) return { kind: "hang" };
       parent++;
       if (parent === 1) return turn(launch);
       if (parent === 2)
@@ -107,14 +101,16 @@ describe("background agents in the REPL", () => {
     await tau.expect("worker stopped");
     await submit(tau, "/exit");
     expect((await tau.exited).exitCode).toBe(0);
-    const stopped = provider.bodies.findLast((body) => !isWorker(body));
+    const stopped = provider.requests.findLast(
+      ({ body }) => !isWorker(body),
+    )?.body;
     expect(toolResult(stopped, "stop")?.is_error).toBeUndefined();
   });
 
   test("Ctrl-C while the turn waits for a background agent interrupts the wait", async () => {
     let parent = 0;
-    const provider = await startSseServer(async (body) => {
-      if (isWorker(body)) return stall();
+    const provider = await startMockProvider((body) => {
+      if (isWorker(body)) return { kind: "hang" };
       parent++;
       return parent === 1
         ? turn(launch)
@@ -175,8 +171,8 @@ describe("TaskStop", () => {
     let parent = 0,
       stopper = 0,
       workerId = "";
-    const provider = await startSseServer(async (body) => {
-      if (isWorker(body)) return stall();
+    const provider = await startMockProvider((body) => {
+      if (isWorker(body)) return { kind: "hang" };
       if (isStopper(body))
         return ++stopper === 1
           ? turn({
@@ -224,12 +220,15 @@ describe("TaskStop", () => {
     expect(run.exitCode).toBe(0);
     expect(run.stdout).toContain("parent done");
     const refused = toolResult(
-      provider.bodies.findLast(isStopper),
+      provider.requests.findLast(({ body }) => isStopper(body))?.body,
       "child-stop",
     );
     expect(refused?.is_error).toBe(true);
     expect(String(refused?.content)).toContain(`can stop task ${workerId}`);
-    const parentStop = toolResult(provider.bodies.at(-1), "parent-stop");
+    const parentStop = toolResult(
+      provider.requests.at(-1)?.body,
+      "parent-stop",
+    );
     expect(parentStop).toBeDefined();
     expect(parentStop?.is_error).toBeUndefined();
   });

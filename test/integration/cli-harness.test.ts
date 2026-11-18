@@ -50,7 +50,9 @@ test("the deadline kills the whole process group of a hung run", async () => {
   const run = await runCli({
     args: ["-p", "hello"],
     provider,
-    deadlineMs: 1500,
+    // Long enough for the child to reach the provider on a loaded runner
+    // under coverage, where its startup alone has taken over 1.5 s.
+    deadlineMs: 4000,
     onSpawn: (spawned) => {
       child = spawned;
     },
@@ -63,4 +65,4 @@ test("the deadline kills the whole process group of a hung run", async () => {
   assert.ok(pid !== undefined);
   if (process.platform !== "win32")
     assert.throws(() => process.kill(-pid, 0), { code: "ESRCH" });
-});
+}, 15_000);

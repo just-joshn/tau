@@ -46,8 +46,30 @@ export type ScriptedResponse =
     }
   /** Accepts the request and never responds, for cancellation tests. */
   | { kind: "hang" }
-  /** Streams the first `events` SSE events of a turn, then destroys the socket. */
-  | { kind: "drop"; events: number; content?: ContentBlock[] };
+  /**
+   * Streams the first `events` SSE events of a turn and ends the response
+   * normally, a stream cut short before message_stop that arrives whole.
+   */
+  | { kind: "truncate"; events: number; content?: ContentBlock[] }
+  /**
+   * Streams the first `events` SSE events of a turn, then destroys the socket
+   * once `cutAfter` resolves. Bun's fetch discards body bytes the reader has
+   * not pulled yet when the connection then fails, so a client only reliably
+   * sees the events if the cut waits for its proof of reading them, e.g. its
+   * stream-json output. Without `cutAfter` the cut follows the write.
+   */
+  | {
+      kind: "drop";
+      events: number;
+      content?: ContentBlock[];
+      cutAfter?: Promise<unknown>;
+    };
+
+/** Picks the response to request `index` (0-based) from its parsed body. */
+export type Responder = (
+  body: unknown,
+  index: number,
+) => ScriptedResponse | Promise<ScriptedResponse>;
 
 export interface RecordedRequest {
   path: string;
@@ -64,13 +86,14 @@ export interface MockProvider {
 }
 
 /**
- * Serves `script` on loopback, one entry per request. It is strict: a request
- * beyond the script gets HTTP 500 and counts as unexpected, because a fake
- * that answers anything makes a broken harness look correct. Closes itself
- * when the current test finishes.
+ * Serves `script` on loopback, one entry per request. A list is strict: a
+ * request beyond it gets HTTP 500 and counts as unexpected, because a fake
+ * that answers anything makes a broken harness look correct. A responder
+ * function sees each request body, for ids only known at run time. Closes
+ * itself when the current test finishes.
  */
 export async function startMockProvider(
-  script: readonly ScriptedResponse[],
+  script: readonly ScriptedResponse[] | Responder,
 ): Promise<MockProvider> {
   const requests: RecordedRequest[] = [];
   let unexpected = 0;
@@ -78,12 +101,15 @@ export async function startMockProvider(
     let raw = "";
     request.setEncoding("utf8");
     for await (const chunk of request) raw += String(chunk);
-    requests.push({
-      path: request.url ?? "",
-      headers: request.headers,
-      body: parseBody(raw),
-    });
-    const next = script[requests.length - 1];
+    const body = parseBody(raw);
+    const index =
+      requests.push({
+        path: request.url ?? "",
+        headers: request.headers,
+        body,
+      }) - 1;
+    const next =
+      typeof script === "function" ? await script(body, index) : script[index];
     if (next === undefined) {
       unexpected++;
       sendJson(response, 500, {
@@ -140,14 +166,30 @@ function serve(response: ServerResponse, entry: ScriptedResponse): void {
       return;
     case "hang":
       return;
+    case "truncate":
     case "drop": {
       const content = entry.content ?? [{ type: "text", text: "partial" }];
-      const events = turnEvents(content, "end_turn").slice(0, entry.events);
+      const events = fixtureSse(
+        turnEvents(content, "end_turn").slice(0, entry.events),
+      );
       response.writeHead(200, { "content-type": "text/event-stream" });
-      response.write(fixtureSse(events), () => response.destroy());
+      if (entry.kind === "truncate") response.end(events);
+      else
+        response.write(events, () => {
+          void Promise.resolve(entry.cutAfter).then(() => response.destroy());
+        });
       return;
     }
   }
+}
+
+/** A complete single-block turn: text ends it, a tool call asks for its result. */
+export function turn(block: ContentBlock): ScriptedResponse {
+  return {
+    kind: "turn",
+    content: [block],
+    stopReason: block.type === "tool_use" ? "tool_use" : "end_turn",
+  };
 }
 
 function sendJson(

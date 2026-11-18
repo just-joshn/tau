@@ -3,14 +3,8 @@ import { chmodSync, existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 import { runCli } from "../helpers/cli-harness.js";
-import { startMockProvider } from "../helpers/mock-provider.js";
+import { startMockProvider, turn } from "../helpers/mock-provider.js";
 import { startPty, type PtySession } from "../helpers/pty.js";
-import {
-  messageStart,
-  startSseServer,
-  textBlock,
-  turn,
-} from "../helpers/sse-server.js";
 
 setDefaultTimeout(30_000);
 
@@ -451,19 +445,13 @@ const tooLong = {
 
 describe("turn display", () => {
   test("a retried stream erases its abandoned text from the screen", async () => {
-    const provider = await startSseServer([
-      [messageStart(), textBlock(0, "abandoned draft")],
-      [
-        messageStart(),
-        textBlock(0, "final answer"),
-        { type: "content_block_stop", index: 0 },
-        {
-          type: "message_delta",
-          delta: { stop_reason: "end_turn" },
-          usage: { output_tokens: 2 },
-        },
-        { type: "message_stop" },
-      ],
+    const provider = await startMockProvider([
+      {
+        kind: "truncate",
+        events: 2,
+        content: [{ type: "text", text: "abandoned draft" }],
+      },
+      turn({ type: "text", text: "final answer" }),
     ]);
     const tau = startPty({ provider });
     await submit(tau, "question");
@@ -474,7 +462,7 @@ describe("turn display", () => {
     expect(tau.screen()).toContain("final answer");
     tau.write("/exit\r");
     expect((await tau.exited).exitCode).toBe(0);
-    expect(provider.requests()).toBe(2);
+    expect(provider.requests.length).toBe(2);
   });
 
   test("a context rejection compacts the conversation and reports the token change", async () => {
@@ -718,7 +706,7 @@ describe("subagent plan text", () => {
     const system = (body: unknown) =>
       JSON.stringify(z.looseObject({ system: z.unknown() }).parse(body).system);
     let child = 0;
-    const provider = await startSseServer((received) => {
+    const provider = await startMockProvider((received) => {
       if (!system(received).includes("PLANNER_SYSTEM"))
         return child === 0
           ? turn({

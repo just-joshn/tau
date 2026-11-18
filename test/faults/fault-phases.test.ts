@@ -96,22 +96,45 @@ test("INV-13 during streaming: a drop before any completed block ends as an erro
   }
 });
 
-test("INV-13 during streaming: a drop after a completed block is flagged partial, never a plain success", async () => {
-  const provider = await startMockProvider([{ kind: "drop", events: 3 }]);
-  const run = await runCli({
-    args: ["-p", "hi", ...JSON_ARGS, ...NO_RECOVERY],
-    provider,
+test("INV-13 during streaming: a drop after a completed block exits 0 flagged is_partial with a warning", async () => {
+  // Two text blocks; the cut follows the second block's text, which tau
+  // prints only after it has read the first block's stop.
+  let sawSecondBlock!: () => void;
+  const cutAfter = new Promise<void>((resolve) => {
+    sawSecondBlock = resolve;
   });
-  const result = envelope(run);
-  // docs/stream-recovery-contract.md keeps closed blocks after a transport
-  // failure; the envelope must still say the response is incomplete.
-  // Whether the socket reset loses the buffered events varies; both outcomes
-  // must avoid a plain success.
-  if (result.is_error) assert.equal(run.exitCode, 1);
-  else {
-    assert.equal(result.is_partial, true, run.stdout);
-    assert.match(run.stderr, /Response interrupted/);
-  }
+  const provider = await startMockProvider([
+    {
+      kind: "drop",
+      events: 4,
+      content: [
+        { type: "text", text: "kept" },
+        { type: "text", text: "discarded" },
+      ],
+      cutAfter,
+    },
+  ]);
+  let stdout = "";
+  const run = await runCli({
+    args: ["-p", "hi", "--output-format", "stream-json", ...NO_RECOVERY],
+    provider,
+    onSpawn: (child) => {
+      child.stdout?.on("data", (chunk: string) => {
+        stdout += chunk;
+        if (stdout.includes("discarded")) sawSecondBlock();
+      });
+    },
+  });
+  // docs/stream-recovery-contract.md: closed blocks survive a transport
+  // failure, the open block is discarded, and the run warns it is incomplete.
+  assert.equal(run.exitCode, 0, run.stderr);
+  const result = resultSchema.parse(
+    JSON.parse(run.stdout.trim().split("\n").at(-1) ?? ""),
+  );
+  assert.equal(result.is_error, false);
+  assert.equal(result.is_partial, true);
+  assert.equal(result.result, "kept");
+  assert.match(run.stderr, /Response interrupted/);
 });
 
 test("INV-13 during streaming: malformed event JSON ends as an error", async () => {

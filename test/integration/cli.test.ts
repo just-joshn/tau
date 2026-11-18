@@ -20,6 +20,7 @@ function cli(
   args: string[],
   env: NodeJS.ProcessEnv,
   input = "",
+  onOut?: (out: string) => void,
 ): Promise<{ code: number | null; out: string; err: string }> {
   return new Promise((done, reject) => {
     const process = spawn(
@@ -31,6 +32,7 @@ function cli(
       err = "";
     process.stdout.setEncoding("utf8").on("data", (chunk) => {
       out += chunk;
+      onOut?.(out);
     });
     process.stderr.setEncoding("utf8").on("data", (chunk) => {
       err += chunk;
@@ -1480,14 +1482,22 @@ test(
       delta: { stop_reason },
       usage: { output_tokens: 3 },
     });
-    const emit = (res: ServerResponse, events: unknown[], broken = false) => {
+    // A drop waits for the client to show the text it read, because Bun's
+    // fetch discards body bytes the reader has not pulled when it fails.
+    const emit = (
+      res: ServerResponse,
+      events: unknown[],
+      cutAfter?: Promise<unknown>,
+    ) => {
       res.writeHead(200, { "content-type": "text/event-stream" });
       const bytes = fixtureSse(events);
-      if (broken) {
-        res.write(bytes);
-        setTimeout(() => res.destroy(), 10);
-      } else res.end(bytes);
+      if (cutAfter === undefined) res.end(bytes);
+      else res.write(bytes, () => void cutAfter.then(() => res.destroy()));
     };
+    let sawObsolete!: () => void;
+    const obsoleteShown = new Promise<void>((resolve) => {
+      sawObsolete = resolve;
+    });
     const server = createServer(async (req, res) => {
       let data = "";
       for await (const chunk of req) data += chunk;
@@ -1505,7 +1515,9 @@ test(
                 end("end_turn"),
                 { type: "message_stop" },
               ],
-          plainAttempts === 1,
+          // Plain text output buffers the round, and its result is the
+          // same whether or not "obsolete" arrived.
+          plainAttempts === 1 ? Promise.resolve() : undefined,
         );
         return;
       }
@@ -1537,7 +1549,11 @@ test(
           { type: "message_stop" },
         ]);
       else if (requests === 2)
-        emit(res, [start, open(0, { type: "text", text: "obsolete" })], true);
+        emit(
+          res,
+          [start, open(0, { type: "text", text: "obsolete" })],
+          obsoleteShown,
+        );
       else
         emit(res, [
           start,
@@ -1590,6 +1606,10 @@ test(
         "4",
       ],
       env,
+      "",
+      (out) => {
+        if (out.includes("obsolete")) sawObsolete();
+      },
     );
     assert.equal(output.code, 0, output.err);
     const events = output.out
