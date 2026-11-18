@@ -19,6 +19,9 @@ test("HTML becomes turndown-style markdown without removed elements", async () =
   assert.equal(
     markdown,
     [
+      // The original's turndown keeps <title> text; only style/script/noscript/iframe are removed.
+      "T",
+      "",
       "Fixture Title",
       "=============",
       "",

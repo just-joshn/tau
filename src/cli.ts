@@ -1224,6 +1224,7 @@ async function main(): Promise<void> {
           maxTokens: defaultOutputTokens(model),
           thinking: { mode: "disabled", mechanical: true },
           disablePromptCaching: true,
+          temperature: 1,
           signal,
           onText: () => {},
         });

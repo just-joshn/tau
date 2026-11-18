@@ -32,10 +32,9 @@ def main():
         isolation.verify()
         state.prepare(isolation)
         arguments = ["--print", "TAU_DIFFERENTIAL_WEB", "--model", MODEL, "--output-format", "json",
-                     "--dangerously-skip-permissions"]
+                     "--dangerously-skip-permissions", "--no-session-persistence"]
         if args.executable == "original":
             command = [str(isolation.copy_target(PINNED_TARGET))]
-            arguments.append("--no-session-persistence")
             runtime = {"target_sha256": TARGET_SHA256}
         else:
             bun, entry, runtime, _probes = prepare_bun_adapter(isolation, directory, stem)

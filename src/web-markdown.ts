@@ -8,7 +8,7 @@ interface Frame {
   attributes: Map<string, string>;
   parts: string[];
 }
-const removed = new Set(["style", "script", "noscript", "iframe", "head"]);
+const removed = new Set(["style", "script", "noscript", "iframe"]);
 const blocks = new Set([
   "p",
   "div",

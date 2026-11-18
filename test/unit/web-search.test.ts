@@ -58,8 +58,15 @@ test("the side query carries the server tool, forced tool choice and query turn"
       max_tokens: 100,
       system: WEB_SEARCH_SYSTEM,
       messages: [
-        { role: "user", content: "Perform a web search for the query: news" },
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "Perform a web search for the query: news" },
+          ],
+        },
       ],
+      temperature: 1,
+      thinking: { type: "disabled" },
       tools: [
         {
           type: "web_search_20250305",

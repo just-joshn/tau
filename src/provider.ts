@@ -576,6 +576,9 @@ export class AnthropicProvider implements Provider {
           : (nativePrompt?.tools ?? request.tools),
         max_tokens: maxTokens,
         thinking,
+        ...(request.temperature === undefined
+          ? {}
+          : { temperature: request.temperature }),
         stream: streaming,
         ...(Object.keys(projectedEffort.outputConfig).length
           ? { output_config: projectedEffort.outputConfig }

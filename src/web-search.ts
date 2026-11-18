@@ -74,9 +74,16 @@ export function webSearchRequestBody(
     messages: [
       {
         role: "user",
-        content: "Perform a web search for the query: " + input.query,
+        content: [
+          {
+            type: "text",
+            text: "Perform a web search for the query: " + input.query,
+          },
+        ],
       },
     ],
+    temperature: 1,
+    thinking: { type: "disabled" },
     tools: [
       {
         type: "web_search_20250305",

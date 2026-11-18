@@ -72,14 +72,11 @@ class WebMock:
         if self.variant == "web":
             (isolation.root / "config/settings.json").write_text(json.dumps({"skipWebFetchPreflight": True}) + "\n")
 
-    def steps(self, port, tool_names):
+    def steps(self, port):
         page = f"http://127.0.0.1:{port}/fixture/page.html"
-        plan = [("WebFetch", {"url": page, "prompt": "What does the fixture say?"}),
+        return [("WebFetch", {"url": page, "prompt": "What does the fixture say?"}),
                 ("WebFetch", {"url": f"http://127.0.0.1:{port}/fixture/redirect", "prompt": "Follow it"}),
                 ("WebSearch", {"query": "tau web search"})]
-        if "WebFetch" not in tool_names and "ToolSearch" in tool_names:
-            plan.insert(0, ("ToolSearch", {"query": "select:WebFetch,WebSearch", "max_results": 5}))
-        return plan
 
     def respond(self, body, port):
         model = body.get("model", MODEL)
@@ -89,8 +86,16 @@ class WebMock:
         messages = body.get("messages") or []
         if messages and "Web page content:" in _text(messages[-1]):
             return events([{"type": "text", "text": APPLIED}], "end_turn", model), "fetch-apply"
-        done = sum(1 for message in messages for block in _blocks(message) if isinstance(block, dict) and block.get("type") == "tool_result")
-        plan = self.steps(port, [tool.get("name") for tool in tools])
+        blocks = [block for message in messages for block in _blocks(message) if isinstance(block, dict)]
+        names = {block.get("id"): block.get("name") for block in blocks if block.get("type") == "tool_use"}
+        results = [names.get(block.get("tool_use_id")) for block in blocks if block.get("type") == "tool_result"]
+        # A deferred catalog (WebFetch absent, ToolSearch present) loads both tools once before the plan starts.
+        tool_names = [tool.get("name") for tool in tools]
+        if "WebFetch" not in tool_names and "ToolSearch" in tool_names and "ToolSearch" not in results:
+            return events([{"type": "tool_use", "id": "web-step-search", "name": "ToolSearch",
+                            "input": {"query": "select:WebFetch,WebSearch", "max_results": 5}}], "tool_use", model), "main"
+        done = sum(1 for name in results if name != "ToolSearch")
+        plan = self.steps(port)
         if done < len(plan):
             name, value = plan[done]
             return events([{"type": "tool_use", "id": f"web-step-{done + 1}", "name": name, "input": value}], "tool_use", model), "main"

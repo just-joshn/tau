@@ -259,6 +259,8 @@ export interface CompletionRequest {
   onThinkingStrip?: (strip: ThinkingStrip) => void;
   attemptBudget?: ApiAttemptBudget;
   disablePromptCaching?: boolean;
+  /** Side queries (WebFetch prompt step) send an explicit sampling temperature; main turns omit it. */
+  temperature?: number;
 }
 export type ProviderStreamProgress =
   | { type: "response_start" }
