@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "caseId": "tools-allowlist-blocks-write",
+  "invariants": ["INV-01"],
+  "description": "--tools Read,Grep withholds Write even when --allowed-tools names it",
+  "provenance": "synthetic, hand-written adversarial case; expectations pinned after observing tau at e6e6c88 and checked against docs/permission-contract.md",
+  "args": [
+    "-p",
+    "Save a summary",
+    "--tools",
+    "Read,Grep",
+    "--allowed-tools",
+    "Write"
+  ],
+  "modelScript": [
+    {
+      "kind": "turn",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "toolu_write",
+          "name": "Write",
+          "input": { "file_path": "summary.txt", "content": "pwned" }
+        }
+      ],
+      "stopReason": "tool_use"
+    },
+    {
+      "kind": "turn",
+      "content": [{ "type": "text", "text": "Done." }],
+      "stopReason": "end_turn"
+    }
+  ],
+  "expected": {
+    "exitCode": 0,
+    "requestSequence": [
+      {
+        "path": "/v1/messages",
+        "tools": ["Grep", "Read"],
+        "messages": [{ "role": "user", "blocks": [{ "kind": "text" }] }]
+      },
+      {
+        "path": "/v1/messages",
+        "tools": ["Grep", "Read"],
+        "messages": [
+          { "role": "user", "blocks": [{ "kind": "text" }] },
+          {
+            "role": "assistant",
+            "blocks": [
+              { "kind": "tool_use", "name": "Write", "id": "toolu_write" }
+            ]
+          },
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "tool_result",
+                "toolUseId": "toolu_write",
+                "isError": true
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "toolResults": [
+      {
+        "toolUseId": "toolu_write",
+        "isError": true,
+        "contentIncludes": "Tool disabled or denied by policy: Write"
+      }
+    ],
+    "filesAbsent": ["summary.txt"]
+  }
+}

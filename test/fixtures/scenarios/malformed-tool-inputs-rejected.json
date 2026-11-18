@@ -1,0 +1,465 @@
+{
+  "schemaVersion": 1,
+  "caseId": "malformed-tool-inputs-rejected",
+  "invariants": ["INV-02"],
+  "description": "mistyped, missing and prototype-smuggled tool arguments fail validation with no side effect",
+  "provenance": "synthetic, hand-written adversarial case; expectations pinned after observing tau at e6e6c88 and checked against docs/permission-contract.md",
+  "workspace": { "files": { "keep.txt": "keep\n" } },
+  "args": ["-p", "Write the files", "--allowed-tools", "Write,Edit,Bash"],
+  "modelScript": [
+    {
+      "kind": "turn",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "toolu_number",
+          "name": "Write",
+          "input": { "file_path": 5, "content": "x" }
+        }
+      ],
+      "stopReason": "tool_use"
+    },
+    {
+      "kind": "turn",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "toolu_missing",
+          "name": "Write",
+          "input": { "content": "x" }
+        }
+      ],
+      "stopReason": "tool_use"
+    },
+    {
+      "kind": "turn",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "toolu_proto",
+          "name": "Write",
+          "input": { "content": "x", "__proto__": { "file_path": "proto.txt" } }
+        }
+      ],
+      "stopReason": "tool_use"
+    },
+    {
+      "kind": "turn",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "toolu_argv",
+          "name": "Bash",
+          "input": { "command": ["touch", "bash-ran.marker"] }
+        }
+      ],
+      "stopReason": "tool_use"
+    },
+    {
+      "kind": "turn",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "toolu_edit",
+          "name": "Edit",
+          "input": {
+            "file_path": "keep.txt",
+            "old_string": { "$ne": "" },
+            "new_string": "pwned"
+          }
+        }
+      ],
+      "stopReason": "tool_use"
+    },
+    {
+      "kind": "turn",
+      "content": [{ "type": "text", "text": "Done." }],
+      "stopReason": "end_turn"
+    }
+  ],
+  "expected": {
+    "exitCode": 0,
+    "requestSequence": [
+      {
+        "path": "/v1/messages",
+        "tools": [
+          "Agent",
+          "Bash",
+          "Edit",
+          "Glob",
+          "Grep",
+          "Read",
+          "TaskStop",
+          "Write"
+        ],
+        "messages": [
+          { "role": "user", "blocks": [{ "kind": "text" }, { "kind": "text" }] }
+        ]
+      },
+      {
+        "path": "/v1/messages",
+        "tools": [
+          "Agent",
+          "Bash",
+          "Edit",
+          "Glob",
+          "Grep",
+          "Read",
+          "TaskStop",
+          "Write"
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "blocks": [{ "kind": "text" }, { "kind": "text" }]
+          },
+          {
+            "role": "assistant",
+            "blocks": [
+              { "kind": "tool_use", "name": "Write", "id": "toolu_number" }
+            ]
+          },
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "tool_result",
+                "toolUseId": "toolu_number",
+                "isError": true
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "path": "/v1/messages",
+        "tools": [
+          "Agent",
+          "Bash",
+          "Edit",
+          "Glob",
+          "Grep",
+          "Read",
+          "TaskStop",
+          "Write"
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "blocks": [{ "kind": "text" }, { "kind": "text" }]
+          },
+          {
+            "role": "assistant",
+            "blocks": [
+              { "kind": "tool_use", "name": "Write", "id": "toolu_number" }
+            ]
+          },
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "tool_result",
+                "toolUseId": "toolu_number",
+                "isError": true
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "blocks": [
+              { "kind": "tool_use", "name": "Write", "id": "toolu_missing" }
+            ]
+          },
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "tool_result",
+                "toolUseId": "toolu_missing",
+                "isError": true
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "path": "/v1/messages",
+        "tools": [
+          "Agent",
+          "Bash",
+          "Edit",
+          "Glob",
+          "Grep",
+          "Read",
+          "TaskStop",
+          "Write"
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "blocks": [{ "kind": "text" }, { "kind": "text" }]
+          },
+          {
+            "role": "assistant",
+            "blocks": [
+              { "kind": "tool_use", "name": "Write", "id": "toolu_number" }
+            ]
+          },
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "tool_result",
+                "toolUseId": "toolu_number",
+                "isError": true
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "blocks": [
+              { "kind": "tool_use", "name": "Write", "id": "toolu_missing" }
+            ]
+          },
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "tool_result",
+                "toolUseId": "toolu_missing",
+                "isError": true
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "blocks": [
+              { "kind": "tool_use", "name": "Write", "id": "toolu_proto" }
+            ]
+          },
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "tool_result",
+                "toolUseId": "toolu_proto",
+                "isError": true
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "path": "/v1/messages",
+        "tools": [
+          "Agent",
+          "Bash",
+          "Edit",
+          "Glob",
+          "Grep",
+          "Read",
+          "TaskStop",
+          "Write"
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "blocks": [{ "kind": "text" }, { "kind": "text" }]
+          },
+          {
+            "role": "assistant",
+            "blocks": [
+              { "kind": "tool_use", "name": "Write", "id": "toolu_number" }
+            ]
+          },
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "tool_result",
+                "toolUseId": "toolu_number",
+                "isError": true
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "blocks": [
+              { "kind": "tool_use", "name": "Write", "id": "toolu_missing" }
+            ]
+          },
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "tool_result",
+                "toolUseId": "toolu_missing",
+                "isError": true
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "blocks": [
+              { "kind": "tool_use", "name": "Write", "id": "toolu_proto" }
+            ]
+          },
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "tool_result",
+                "toolUseId": "toolu_proto",
+                "isError": true
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "blocks": [
+              { "kind": "tool_use", "name": "Bash", "id": "toolu_argv" }
+            ]
+          },
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "tool_result",
+                "toolUseId": "toolu_argv",
+                "isError": true
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "path": "/v1/messages",
+        "tools": [
+          "Agent",
+          "Bash",
+          "Edit",
+          "Glob",
+          "Grep",
+          "Read",
+          "TaskStop",
+          "Write"
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "blocks": [{ "kind": "text" }, { "kind": "text" }]
+          },
+          {
+            "role": "assistant",
+            "blocks": [
+              { "kind": "tool_use", "name": "Write", "id": "toolu_number" }
+            ]
+          },
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "tool_result",
+                "toolUseId": "toolu_number",
+                "isError": true
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "blocks": [
+              { "kind": "tool_use", "name": "Write", "id": "toolu_missing" }
+            ]
+          },
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "tool_result",
+                "toolUseId": "toolu_missing",
+                "isError": true
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "blocks": [
+              { "kind": "tool_use", "name": "Write", "id": "toolu_proto" }
+            ]
+          },
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "tool_result",
+                "toolUseId": "toolu_proto",
+                "isError": true
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "blocks": [
+              { "kind": "tool_use", "name": "Bash", "id": "toolu_argv" }
+            ]
+          },
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "tool_result",
+                "toolUseId": "toolu_argv",
+                "isError": true
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "blocks": [
+              { "kind": "tool_use", "name": "Edit", "id": "toolu_edit" }
+            ]
+          },
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "tool_result",
+                "toolUseId": "toolu_edit",
+                "isError": true
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "toolResults": [
+      {
+        "toolUseId": "toolu_number",
+        "isError": true,
+        "contentIncludes": "invalid_type"
+      },
+      {
+        "toolUseId": "toolu_missing",
+        "isError": true,
+        "contentIncludes": "invalid_type"
+      },
+      {
+        "toolUseId": "toolu_proto",
+        "isError": true,
+        "contentIncludes": "invalid_type"
+      },
+      {
+        "toolUseId": "toolu_argv",
+        "isError": true,
+        "contentIncludes": "invalid_type"
+      },
+      {
+        "toolUseId": "toolu_edit",
+        "isError": true,
+        "contentIncludes": "invalid_type"
+      }
+    ],
+    "filesAbsent": ["5", "proto.txt", "bash-ran.marker"],
+    "fileContents": { "keep.txt": "keep\n" }
+  }
+}

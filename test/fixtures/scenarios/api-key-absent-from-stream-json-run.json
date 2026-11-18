@@ -1,0 +1,161 @@
+{
+  "schemaVersion": 1,
+  "caseId": "api-key-absent-from-stream-json-run",
+  "invariants": ["INV-04"],
+  "description": "a normal stream-json run with reads and writes keeps the API key out of every output and session file",
+  "provenance": "synthetic, hand-written adversarial case; expectations pinned after observing tau at e6e6c88 and checked against docs/permission-contract.md",
+  "workspace": { "files": { "notes.txt": "hello\n" } },
+  "args": [
+    "-p",
+    "Copy the notes",
+    "--allowed-tools",
+    "Write",
+    "--output-format",
+    "stream-json"
+  ],
+  "modelScript": [
+    {
+      "kind": "turn",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "toolu_read",
+          "name": "Read",
+          "input": { "file_path": "notes.txt" }
+        }
+      ],
+      "stopReason": "tool_use"
+    },
+    {
+      "kind": "turn",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "toolu_write",
+          "name": "Write",
+          "input": { "file_path": "copy.txt", "content": "hello\n" }
+        }
+      ],
+      "stopReason": "tool_use"
+    },
+    {
+      "kind": "turn",
+      "content": [{ "type": "text", "text": "Copied." }],
+      "stopReason": "end_turn"
+    }
+  ],
+  "expected": {
+    "exitCode": 0,
+    "requestSequence": [
+      {
+        "path": "/v1/messages",
+        "tools": [
+          "Agent",
+          "Bash",
+          "Edit",
+          "Glob",
+          "Grep",
+          "Read",
+          "TaskStop",
+          "Write"
+        ],
+        "messages": [
+          { "role": "user", "blocks": [{ "kind": "text" }, { "kind": "text" }] }
+        ]
+      },
+      {
+        "path": "/v1/messages",
+        "tools": [
+          "Agent",
+          "Bash",
+          "Edit",
+          "Glob",
+          "Grep",
+          "Read",
+          "TaskStop",
+          "Write"
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "blocks": [{ "kind": "text" }, { "kind": "text" }]
+          },
+          {
+            "role": "assistant",
+            "blocks": [
+              { "kind": "tool_use", "name": "Read", "id": "toolu_read" }
+            ]
+          },
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "tool_result",
+                "toolUseId": "toolu_read",
+                "isError": false
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "path": "/v1/messages",
+        "tools": [
+          "Agent",
+          "Bash",
+          "Edit",
+          "Glob",
+          "Grep",
+          "Read",
+          "TaskStop",
+          "Write"
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "blocks": [{ "kind": "text" }, { "kind": "text" }]
+          },
+          {
+            "role": "assistant",
+            "blocks": [
+              { "kind": "tool_use", "name": "Read", "id": "toolu_read" }
+            ]
+          },
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "tool_result",
+                "toolUseId": "toolu_read",
+                "isError": false
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "blocks": [
+              { "kind": "tool_use", "name": "Write", "id": "toolu_write" }
+            ]
+          },
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "tool_result",
+                "toolUseId": "toolu_write",
+                "isError": false
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "toolResults": [
+      { "toolUseId": "toolu_read", "isError": false },
+      { "toolUseId": "toolu_write", "isError": false }
+    ],
+    "fileContents": { "copy.txt": "hello\n" },
+    "absentFromOutputs": ["API_KEY"],
+    "result": { "isError": false, "numTurns": 3 }
+  }
+}
