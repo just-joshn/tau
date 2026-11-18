@@ -18,7 +18,9 @@
           "type": "tool_use",
           "id": "toolu_read",
           "name": "Read",
-          "input": { "file_path": "README.md" }
+          "input": {
+            "file_path": "README.md"
+          }
         }
       ],
       "stopReason": "tool_use"
@@ -30,14 +32,21 @@
           "type": "tool_use",
           "id": "toolu_bash",
           "name": "Bash",
-          "input": { "command": "touch bash-ran.marker" }
+          "input": {
+            "command": "touch bash-ran.marker"
+          }
         }
       ],
       "stopReason": "tool_use"
     },
     {
       "kind": "turn",
-      "content": [{ "type": "text", "text": "Done." }],
+      "content": [
+        {
+          "type": "text",
+          "text": "Done."
+        }
+      ],
       "stopReason": "end_turn"
     }
   ],
@@ -61,9 +70,27 @@
           {
             "role": "user",
             "blocks": [
-              { "kind": "text" },
-              { "kind": "text" },
-              { "kind": "text" }
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              }
             ]
           }
         ]
@@ -85,15 +112,37 @@
           {
             "role": "user",
             "blocks": [
-              { "kind": "text" },
-              { "kind": "text" },
-              { "kind": "text" }
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              }
             ]
           },
           {
             "role": "assistant",
             "blocks": [
-              { "kind": "tool_use", "name": "Read", "id": "toolu_read" }
+              {
+                "kind": "tool_use",
+                "name": "Read",
+                "id": "toolu_read"
+              }
             ]
           },
           {
@@ -125,15 +174,37 @@
           {
             "role": "user",
             "blocks": [
-              { "kind": "text" },
-              { "kind": "text" },
-              { "kind": "text" }
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              }
             ]
           },
           {
             "role": "assistant",
             "blocks": [
-              { "kind": "tool_use", "name": "Read", "id": "toolu_read" }
+              {
+                "kind": "tool_use",
+                "name": "Read",
+                "id": "toolu_read"
+              }
             ]
           },
           {
@@ -149,7 +220,11 @@
           {
             "role": "assistant",
             "blocks": [
-              { "kind": "tool_use", "name": "Bash", "id": "toolu_bash" }
+              {
+                "kind": "tool_use",
+                "name": "Bash",
+                "id": "toolu_bash"
+              }
             ]
           },
           {
@@ -166,7 +241,10 @@
       }
     ],
     "toolResults": [
-      { "toolUseId": "toolu_read", "isError": false },
+      {
+        "toolUseId": "toolu_read",
+        "isError": false
+      },
       {
         "toolUseId": "toolu_bash",
         "isError": true,

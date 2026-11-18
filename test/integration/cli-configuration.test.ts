@@ -39,7 +39,9 @@ function cli(
 
 const bodySchema = z.looseObject({
   model: z.string(),
-  system: z.string(),
+  system: z
+    .array(z.object({ text: z.string() }))
+    .transform((blocks) => blocks.map((block) => block.text).join("\n\n")),
   messages: z.array(z.looseObject({ content: z.unknown() })),
 });
 type Body = z.infer<typeof bodySchema>;

@@ -22,14 +22,22 @@
           "type": "tool_use",
           "id": "toolu_big",
           "name": "Write",
-          "input": { "file_path": "big.txt", "content": "${REPEAT:1100000:x}" }
+          "input": {
+            "file_path": "big.txt",
+            "content": "${REPEAT:1100000:x}"
+          }
         }
       ],
       "stopReason": "tool_use"
     },
     {
       "kind": "turn",
-      "content": [{ "type": "text", "text": "Done." }],
+      "content": [
+        {
+          "type": "text",
+          "text": "Done."
+        }
+      ],
       "stopReason": "end_turn"
     }
   ],
@@ -53,15 +61,35 @@
           {
             "role": "user",
             "blocks": [
-              { "kind": "text" },
-              { "kind": "text" },
-              { "kind": "text" }
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              }
             ]
           }
         ]
       }
     ],
     "filesAbsent": ["big.txt"],
-    "result": { "isError": true }
+    "result": {
+      "isError": true
+    }
   }
 }

@@ -69,6 +69,7 @@ import {
 import { clearedInputTokens } from "./context-usage.js";
 import { OutputLimitRepair } from "./output-limit.js";
 import { contextRejection } from "./context-error.js";
+import { systemPromptText } from "./system-prompt.js";
 import {
   queryEffortOutputConfig,
   resolveQueryEffort,
@@ -564,7 +565,11 @@ export class AnthropicProvider implements Provider {
     const serialize = () =>
       JSON.stringify({
         model: facts.wire,
-        system: nativePrompt?.system ?? request.system,
+        system:
+          nativePrompt?.system ??
+          (request.disablePromptCaching && typeof request.system !== "string"
+            ? request.system.map(withoutCacheControl)
+            : request.system),
         messages: request.disablePromptCaching
           ? wire.map((row) => ({
               ...row,
@@ -603,7 +608,7 @@ export class AnthropicProvider implements Provider {
                 requestedModel: request.model,
                 wireModel: facts.wire,
                 transport: streaming ? "stream" : "json",
-                currentSystem: request.system,
+                currentSystem: systemPromptText(request.system),
                 currentTools: request.tools,
                 disablePromptCaching: request.disablePromptCaching === true,
               },

@@ -18,14 +18,21 @@
           "type": "tool_use",
           "id": "toolu_bash",
           "name": "Bash",
-          "input": { "command": "touch bash-ran.marker" }
+          "input": {
+            "command": "touch bash-ran.marker"
+          }
         }
       ],
       "stopReason": "tool_use"
     },
     {
       "kind": "turn",
-      "content": [{ "type": "text", "text": "Done." }],
+      "content": [
+        {
+          "type": "text",
+          "text": "Done."
+        }
+      ],
       "stopReason": "end_turn"
     }
   ],
@@ -49,9 +56,27 @@
           {
             "role": "user",
             "blocks": [
-              { "kind": "text" },
-              { "kind": "text" },
-              { "kind": "text" }
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              }
             ]
           }
         ]
@@ -73,15 +98,37 @@
           {
             "role": "user",
             "blocks": [
-              { "kind": "text" },
-              { "kind": "text" },
-              { "kind": "text" }
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              }
             ]
           },
           {
             "role": "assistant",
             "blocks": [
-              { "kind": "tool_use", "name": "Bash", "id": "toolu_bash" }
+              {
+                "kind": "tool_use",
+                "name": "Bash",
+                "id": "toolu_bash"
+              }
             ]
           },
           {
@@ -97,7 +144,12 @@
         ]
       }
     ],
-    "toolResults": [{ "toolUseId": "toolu_bash", "isError": true }],
+    "toolResults": [
+      {
+        "toolUseId": "toolu_bash",
+        "isError": true
+      }
+    ],
     "filesAbsent": ["bash-ran.marker"]
   }
 }

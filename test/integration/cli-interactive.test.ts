@@ -112,7 +112,7 @@ describe("interactive REPL", () => {
     expect(body(provider.requests[0]).model).toBe("other-model");
   });
 
-  test("/permissions reports, rejects invalid modes and changes the mode the model is told", async () => {
+  test("/permissions reports, rejects invalid modes and changes the session mode", async () => {
     const provider = await startMockProvider([said("planned")]);
     const tau = startPty({ provider });
     await submit(tau, "/permissions");
@@ -123,10 +123,9 @@ describe("interactive REPL", () => {
     await tau.expect("Permissions: plan");
     await submit(tau, "think");
     await tau.expect("planned");
+    await submit(tau, "/status");
+    await tau.expect('"permissions": "plan"');
     await exit(tau);
-    expect(JSON.stringify(body(provider.requests[0]).system)).toContain(
-      "Permission mode: plan.",
-    );
   });
 
   test("/permissions bypassPermissions asks first and keeps the mode when declined", async () => {
@@ -330,7 +329,7 @@ describe("tool approval prompts", () => {
 });
 
 describe("/compact", () => {
-  test("the summary request says no tools are available when --tools is empty", async () => {
+  test("the summary request carries no tools when --tools is empty", async () => {
     const provider = await startMockProvider([
       said("answer"),
       said("<summary>Short.</summary>"),
@@ -341,9 +340,7 @@ describe("/compact", () => {
     await submit(tau, "/compact");
     await tau.expect("Conversation context compacted.");
     await exit(tau);
-    expect(JSON.stringify(body(provider.requests[1]).system)).toContain(
-      "Available tools for this session: none.",
-    );
+    expect(body(provider.requests[1]).tools ?? []).toEqual([]);
   });
 
   test("an empty conversation is preserved without a request", async () => {

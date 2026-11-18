@@ -4,7 +4,11 @@
   "invariants": ["INV-04"],
   "description": "a normal stream-json run with reads and writes keeps the API key out of every output and session file",
   "provenance": "synthetic, hand-written adversarial case; expectations pinned after observing tau at e6e6c88 and checked against docs/permission-contract.md",
-  "workspace": { "files": { "notes.txt": "hello\n" } },
+  "workspace": {
+    "files": {
+      "notes.txt": "hello\n"
+    }
+  },
   "args": [
     "-p",
     "Copy the notes",
@@ -22,7 +26,9 @@
           "type": "tool_use",
           "id": "toolu_read",
           "name": "Read",
-          "input": { "file_path": "notes.txt" }
+          "input": {
+            "file_path": "notes.txt"
+          }
         }
       ],
       "stopReason": "tool_use"
@@ -34,14 +40,22 @@
           "type": "tool_use",
           "id": "toolu_write",
           "name": "Write",
-          "input": { "file_path": "copy.txt", "content": "hello\n" }
+          "input": {
+            "file_path": "copy.txt",
+            "content": "hello\n"
+          }
         }
       ],
       "stopReason": "tool_use"
     },
     {
       "kind": "turn",
-      "content": [{ "type": "text", "text": "Copied." }],
+      "content": [
+        {
+          "type": "text",
+          "text": "Copied."
+        }
+      ],
       "stopReason": "end_turn"
     }
   ],
@@ -65,9 +79,27 @@
           {
             "role": "user",
             "blocks": [
-              { "kind": "text" },
-              { "kind": "text" },
-              { "kind": "text" }
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              }
             ]
           }
         ]
@@ -89,15 +121,37 @@
           {
             "role": "user",
             "blocks": [
-              { "kind": "text" },
-              { "kind": "text" },
-              { "kind": "text" }
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              }
             ]
           },
           {
             "role": "assistant",
             "blocks": [
-              { "kind": "tool_use", "name": "Read", "id": "toolu_read" }
+              {
+                "kind": "tool_use",
+                "name": "Read",
+                "id": "toolu_read"
+              }
             ]
           },
           {
@@ -129,15 +183,37 @@
           {
             "role": "user",
             "blocks": [
-              { "kind": "text" },
-              { "kind": "text" },
-              { "kind": "text" }
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              }
             ]
           },
           {
             "role": "assistant",
             "blocks": [
-              { "kind": "tool_use", "name": "Read", "id": "toolu_read" }
+              {
+                "kind": "tool_use",
+                "name": "Read",
+                "id": "toolu_read"
+              }
             ]
           },
           {
@@ -153,7 +229,11 @@
           {
             "role": "assistant",
             "blocks": [
-              { "kind": "tool_use", "name": "Write", "id": "toolu_write" }
+              {
+                "kind": "tool_use",
+                "name": "Write",
+                "id": "toolu_write"
+              }
             ]
           },
           {
@@ -170,11 +250,22 @@
       }
     ],
     "toolResults": [
-      { "toolUseId": "toolu_read", "isError": false },
-      { "toolUseId": "toolu_write", "isError": false }
+      {
+        "toolUseId": "toolu_read",
+        "isError": false
+      },
+      {
+        "toolUseId": "toolu_write",
+        "isError": false
+      }
     ],
-    "fileContents": { "copy.txt": "hello\n" },
+    "fileContents": {
+      "copy.txt": "hello\n"
+    },
     "absentFromOutputs": ["API_KEY"],
-    "result": { "isError": false, "numTurns": 3 }
+    "result": {
+      "isError": false,
+      "numTurns": 3
+    }
   }
 }

@@ -193,7 +193,7 @@ function shell(
 }> {
   signal.throwIfAborted();
   return new Promise((resolve, reject) => {
-    const child = spawn("/bin/sh", ["-c", command], {
+    const child = spawn(BASH_SHELL, ["-c", command], {
       cwd,
       detached: true,
       stdio: ["ignore", "pipe", "pipe"],
@@ -258,6 +258,8 @@ function shell(
   });
 }
 
+/** The shell the Bash tool runs commands with. */
+export const BASH_SHELL = "/bin/sh";
 export function toolDefinitions(names: readonly ToolName[]): ToolDefinition[] {
   return names.map((name) => ({
     name,

@@ -5,8 +5,13 @@
   "description": "Read and Write through in-workspace symlinks that point outside are denied",
   "provenance": "synthetic, hand-written adversarial case; expectations pinned after observing tau at e6e6c88 and checked against docs/permission-contract.md",
   "workspace": {
-    "files": { "../outside/secret.txt": "${SENTINEL:OUTSIDE_SECRET}\n" },
-    "symlinks": { "vendor": "../outside", "notes.txt": "../outside/secret.txt" }
+    "files": {
+      "../outside/secret.txt": "${SENTINEL:OUTSIDE_SECRET}\n"
+    },
+    "symlinks": {
+      "vendor": "../outside",
+      "notes.txt": "../outside/secret.txt"
+    }
   },
   "args": [
     "-p",
@@ -22,7 +27,9 @@
           "type": "tool_use",
           "id": "toolu_read_dir",
           "name": "Read",
-          "input": { "file_path": "vendor/secret.txt" }
+          "input": {
+            "file_path": "vendor/secret.txt"
+          }
         }
       ],
       "stopReason": "tool_use"
@@ -34,7 +41,9 @@
           "type": "tool_use",
           "id": "toolu_read_file",
           "name": "Read",
-          "input": { "file_path": "notes.txt" }
+          "input": {
+            "file_path": "notes.txt"
+          }
         }
       ],
       "stopReason": "tool_use"
@@ -46,7 +55,10 @@
           "type": "tool_use",
           "id": "toolu_write_dir",
           "name": "Write",
-          "input": { "file_path": "vendor/pwned.txt", "content": "pwned" }
+          "input": {
+            "file_path": "vendor/pwned.txt",
+            "content": "pwned"
+          }
         }
       ],
       "stopReason": "tool_use"
@@ -58,14 +70,22 @@
           "type": "tool_use",
           "id": "toolu_write_file",
           "name": "Write",
-          "input": { "file_path": "notes.txt", "content": "overwritten" }
+          "input": {
+            "file_path": "notes.txt",
+            "content": "overwritten"
+          }
         }
       ],
       "stopReason": "tool_use"
     },
     {
       "kind": "turn",
-      "content": [{ "type": "text", "text": "Done." }],
+      "content": [
+        {
+          "type": "text",
+          "text": "Done."
+        }
+      ],
       "stopReason": "end_turn"
     }
   ],
@@ -89,9 +109,27 @@
           {
             "role": "user",
             "blocks": [
-              { "kind": "text" },
-              { "kind": "text" },
-              { "kind": "text" }
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              }
             ]
           }
         ]
@@ -113,15 +151,37 @@
           {
             "role": "user",
             "blocks": [
-              { "kind": "text" },
-              { "kind": "text" },
-              { "kind": "text" }
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              }
             ]
           },
           {
             "role": "assistant",
             "blocks": [
-              { "kind": "tool_use", "name": "Read", "id": "toolu_read_dir" }
+              {
+                "kind": "tool_use",
+                "name": "Read",
+                "id": "toolu_read_dir"
+              }
             ]
           },
           {
@@ -153,15 +213,37 @@
           {
             "role": "user",
             "blocks": [
-              { "kind": "text" },
-              { "kind": "text" },
-              { "kind": "text" }
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              }
             ]
           },
           {
             "role": "assistant",
             "blocks": [
-              { "kind": "tool_use", "name": "Read", "id": "toolu_read_dir" }
+              {
+                "kind": "tool_use",
+                "name": "Read",
+                "id": "toolu_read_dir"
+              }
             ]
           },
           {
@@ -177,7 +259,11 @@
           {
             "role": "assistant",
             "blocks": [
-              { "kind": "tool_use", "name": "Read", "id": "toolu_read_file" }
+              {
+                "kind": "tool_use",
+                "name": "Read",
+                "id": "toolu_read_file"
+              }
             ]
           },
           {
@@ -209,15 +295,37 @@
           {
             "role": "user",
             "blocks": [
-              { "kind": "text" },
-              { "kind": "text" },
-              { "kind": "text" }
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              }
             ]
           },
           {
             "role": "assistant",
             "blocks": [
-              { "kind": "tool_use", "name": "Read", "id": "toolu_read_dir" }
+              {
+                "kind": "tool_use",
+                "name": "Read",
+                "id": "toolu_read_dir"
+              }
             ]
           },
           {
@@ -233,7 +341,11 @@
           {
             "role": "assistant",
             "blocks": [
-              { "kind": "tool_use", "name": "Read", "id": "toolu_read_file" }
+              {
+                "kind": "tool_use",
+                "name": "Read",
+                "id": "toolu_read_file"
+              }
             ]
           },
           {
@@ -249,7 +361,11 @@
           {
             "role": "assistant",
             "blocks": [
-              { "kind": "tool_use", "name": "Write", "id": "toolu_write_dir" }
+              {
+                "kind": "tool_use",
+                "name": "Write",
+                "id": "toolu_write_dir"
+              }
             ]
           },
           {
@@ -281,15 +397,37 @@
           {
             "role": "user",
             "blocks": [
-              { "kind": "text" },
-              { "kind": "text" },
-              { "kind": "text" }
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              }
             ]
           },
           {
             "role": "assistant",
             "blocks": [
-              { "kind": "tool_use", "name": "Read", "id": "toolu_read_dir" }
+              {
+                "kind": "tool_use",
+                "name": "Read",
+                "id": "toolu_read_dir"
+              }
             ]
           },
           {
@@ -305,7 +443,11 @@
           {
             "role": "assistant",
             "blocks": [
-              { "kind": "tool_use", "name": "Read", "id": "toolu_read_file" }
+              {
+                "kind": "tool_use",
+                "name": "Read",
+                "id": "toolu_read_file"
+              }
             ]
           },
           {
@@ -321,7 +463,11 @@
           {
             "role": "assistant",
             "blocks": [
-              { "kind": "tool_use", "name": "Write", "id": "toolu_write_dir" }
+              {
+                "kind": "tool_use",
+                "name": "Write",
+                "id": "toolu_write_dir"
+              }
             ]
           },
           {
@@ -337,7 +483,11 @@
           {
             "role": "assistant",
             "blocks": [
-              { "kind": "tool_use", "name": "Write", "id": "toolu_write_file" }
+              {
+                "kind": "tool_use",
+                "name": "Write",
+                "id": "toolu_write_file"
+              }
             ]
           },
           {
@@ -376,7 +526,9 @@
       }
     ],
     "filesAbsent": ["../outside/pwned.txt"],
-    "fileContents": { "../outside/secret.txt": "${SENTINEL:OUTSIDE_SECRET}\n" },
+    "fileContents": {
+      "../outside/secret.txt": "${SENTINEL:OUTSIDE_SECRET}\n"
+    },
     "absentFromOutputs": ["OUTSIDE_SECRET"]
   }
 }

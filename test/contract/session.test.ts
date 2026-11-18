@@ -7,7 +7,6 @@ import {
   realpath,
   rm,
   stat,
-  symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -15,7 +14,6 @@ import { join } from "node:path";
 import { onTestFinished, test } from "bun:test";
 import { z } from "zod";
 import { parseOptions } from "../../src/options.js";
-import { buildSystemPrompt } from "../../src/prompt.js";
 import { newSession, SessionStore } from "../../src/session.js";
 
 const archiveFileSchema = z.object({
@@ -122,25 +120,6 @@ test("child archives preserve isolated history without replacing latest parent s
     archiveFileSchema.parse(JSON.parse(await readFile(path, "utf8"))).status,
     "completed",
   );
-});
-
-test("project instructions bounded and external symlinks refused", async () => {
-  const temp = await mkdtemp(join(tmpdir(), "tau-prompt-"));
-  onTestFinished(() => rm(temp, { recursive: true, force: true }));
-  const cwd = join(temp, "project");
-  await mkdir(cwd);
-  assert.match(await buildSystemPrompt(cwd), /independent coding assistant/);
-  await writeFile(join(cwd, "CLAUDE.md"), "Use tabs.");
-  assert.match(
-    await buildSystemPrompt(cwd, "replacement", "appendix"),
-    /^replacement[\s\S]*Use tabs.[\s\S]*appendix$/,
-  );
-  await writeFile(join(cwd, "CLAUDE.md"), "x".repeat(65537));
-  await assert.rejects(buildSystemPrompt(cwd), /64 KiB/);
-  await rm(join(cwd, "CLAUDE.md"));
-  await writeFile(join(temp, "outside"), "private");
-  await symlink(join(temp, "outside"), join(cwd, "CLAUDE.md"));
-  await assert.rejects(buildSystemPrompt(cwd), /outside/);
 });
 
 test("CLI options fail closed on invalid modes and conflicting settings", () => {

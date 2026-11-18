@@ -40,7 +40,12 @@ const resultSchema = z.object({
 
 /** The prompt text as the provider received it: the first user text block. */
 function promptSent(body: unknown): string {
-  const first = requestSchema.parse(body).messages[0]?.content[0];
+  // Leading <system-reminder> blocks are first-turn context, not the prompt.
+  const first = requestSchema
+    .parse(body)
+    .messages[0]?.content.find(
+      (block) => !block.text.startsWith("<system-reminder>"),
+    );
   assert.ok(first !== undefined);
   return first.text;
 }

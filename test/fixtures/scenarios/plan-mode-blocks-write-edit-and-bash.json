@@ -4,7 +4,11 @@
   "invariants": ["INV-01"],
   "description": "plan mode refuses Write, Edit and Bash despite exact allow rules",
   "provenance": "synthetic, hand-written adversarial case; expectations pinned after observing tau at e6e6c88 and checked against docs/permission-contract.md",
-  "workspace": { "files": { "app.txt": "original\n" } },
+  "workspace": {
+    "files": {
+      "app.txt": "original\n"
+    }
+  },
   "args": [
     "-p",
     "Plan the refactor",
@@ -21,7 +25,10 @@
           "type": "tool_use",
           "id": "toolu_write",
           "name": "Write",
-          "input": { "file_path": "new.txt", "content": "x" }
+          "input": {
+            "file_path": "new.txt",
+            "content": "x"
+          }
         }
       ],
       "stopReason": "tool_use"
@@ -33,7 +40,9 @@
           "type": "tool_use",
           "id": "toolu_read",
           "name": "Read",
-          "input": { "file_path": "app.txt" }
+          "input": {
+            "file_path": "app.txt"
+          }
         }
       ],
       "stopReason": "tool_use"
@@ -61,14 +70,21 @@
           "type": "tool_use",
           "id": "toolu_bash",
           "name": "Bash",
-          "input": { "command": "touch bash-ran.marker" }
+          "input": {
+            "command": "touch bash-ran.marker"
+          }
         }
       ],
       "stopReason": "tool_use"
     },
     {
       "kind": "turn",
-      "content": [{ "type": "text", "text": "Done." }],
+      "content": [
+        {
+          "type": "text",
+          "text": "Done."
+        }
+      ],
       "stopReason": "end_turn"
     }
   ],
@@ -92,10 +108,30 @@
           {
             "role": "user",
             "blocks": [
-              { "kind": "text" },
-              { "kind": "text" },
-              { "kind": "text" },
-              { "kind": "text" }
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              }
             ]
           }
         ]
@@ -117,16 +153,40 @@
           {
             "role": "user",
             "blocks": [
-              { "kind": "text" },
-              { "kind": "text" },
-              { "kind": "text" },
-              { "kind": "text" }
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              }
             ]
           },
           {
             "role": "assistant",
             "blocks": [
-              { "kind": "tool_use", "name": "Write", "id": "toolu_write" }
+              {
+                "kind": "tool_use",
+                "name": "Write",
+                "id": "toolu_write"
+              }
             ]
           },
           {
@@ -158,16 +218,40 @@
           {
             "role": "user",
             "blocks": [
-              { "kind": "text" },
-              { "kind": "text" },
-              { "kind": "text" },
-              { "kind": "text" }
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              }
             ]
           },
           {
             "role": "assistant",
             "blocks": [
-              { "kind": "tool_use", "name": "Write", "id": "toolu_write" }
+              {
+                "kind": "tool_use",
+                "name": "Write",
+                "id": "toolu_write"
+              }
             ]
           },
           {
@@ -183,7 +267,11 @@
           {
             "role": "assistant",
             "blocks": [
-              { "kind": "tool_use", "name": "Read", "id": "toolu_read" }
+              {
+                "kind": "tool_use",
+                "name": "Read",
+                "id": "toolu_read"
+              }
             ]
           },
           {
@@ -215,16 +303,40 @@
           {
             "role": "user",
             "blocks": [
-              { "kind": "text" },
-              { "kind": "text" },
-              { "kind": "text" },
-              { "kind": "text" }
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              }
             ]
           },
           {
             "role": "assistant",
             "blocks": [
-              { "kind": "tool_use", "name": "Write", "id": "toolu_write" }
+              {
+                "kind": "tool_use",
+                "name": "Write",
+                "id": "toolu_write"
+              }
             ]
           },
           {
@@ -240,7 +352,11 @@
           {
             "role": "assistant",
             "blocks": [
-              { "kind": "tool_use", "name": "Read", "id": "toolu_read" }
+              {
+                "kind": "tool_use",
+                "name": "Read",
+                "id": "toolu_read"
+              }
             ]
           },
           {
@@ -256,7 +372,11 @@
           {
             "role": "assistant",
             "blocks": [
-              { "kind": "tool_use", "name": "Edit", "id": "toolu_edit" }
+              {
+                "kind": "tool_use",
+                "name": "Edit",
+                "id": "toolu_edit"
+              }
             ]
           },
           {
@@ -288,16 +408,40 @@
           {
             "role": "user",
             "blocks": [
-              { "kind": "text" },
-              { "kind": "text" },
-              { "kind": "text" },
-              { "kind": "text" }
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              }
             ]
           },
           {
             "role": "assistant",
             "blocks": [
-              { "kind": "tool_use", "name": "Write", "id": "toolu_write" }
+              {
+                "kind": "tool_use",
+                "name": "Write",
+                "id": "toolu_write"
+              }
             ]
           },
           {
@@ -313,7 +457,11 @@
           {
             "role": "assistant",
             "blocks": [
-              { "kind": "tool_use", "name": "Read", "id": "toolu_read" }
+              {
+                "kind": "tool_use",
+                "name": "Read",
+                "id": "toolu_read"
+              }
             ]
           },
           {
@@ -329,7 +477,11 @@
           {
             "role": "assistant",
             "blocks": [
-              { "kind": "tool_use", "name": "Edit", "id": "toolu_edit" }
+              {
+                "kind": "tool_use",
+                "name": "Edit",
+                "id": "toolu_edit"
+              }
             ]
           },
           {
@@ -345,7 +497,11 @@
           {
             "role": "assistant",
             "blocks": [
-              { "kind": "tool_use", "name": "Bash", "id": "toolu_bash" }
+              {
+                "kind": "tool_use",
+                "name": "Bash",
+                "id": "toolu_bash"
+              }
             ]
           },
           {
@@ -367,15 +523,23 @@
         "isError": true,
         "contentIncludes": "Plan mode is read only"
       },
-      { "toolUseId": "toolu_read", "isError": false },
+      {
+        "toolUseId": "toolu_read",
+        "isError": false
+      },
       {
         "toolUseId": "toolu_edit",
         "isError": true,
         "contentIncludes": "Plan mode is read only"
       },
-      { "toolUseId": "toolu_bash", "isError": true }
+      {
+        "toolUseId": "toolu_bash",
+        "isError": true
+      }
     ],
     "filesAbsent": ["new.txt", "bash-ran.marker"],
-    "fileContents": { "app.txt": "original\n" }
+    "fileContents": {
+      "app.txt": "original\n"
+    }
   }
 }

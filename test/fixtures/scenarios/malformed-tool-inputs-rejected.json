@@ -4,7 +4,11 @@
   "invariants": ["INV-02"],
   "description": "mistyped, missing and prototype-smuggled tool arguments fail validation with no side effect",
   "provenance": "synthetic, hand-written adversarial case; expectations pinned after observing tau at e6e6c88 and checked against docs/permission-contract.md",
-  "workspace": { "files": { "keep.txt": "keep\n" } },
+  "workspace": {
+    "files": {
+      "keep.txt": "keep\n"
+    }
+  },
   "args": ["-p", "Write the files", "--allowed-tools", "Write,Edit,Bash"],
   "modelScript": [
     {
@@ -14,7 +18,10 @@
           "type": "tool_use",
           "id": "toolu_number",
           "name": "Write",
-          "input": { "file_path": 5, "content": "x" }
+          "input": {
+            "file_path": 5,
+            "content": "x"
+          }
         }
       ],
       "stopReason": "tool_use"
@@ -26,7 +33,9 @@
           "type": "tool_use",
           "id": "toolu_missing",
           "name": "Write",
-          "input": { "content": "x" }
+          "input": {
+            "content": "x"
+          }
         }
       ],
       "stopReason": "tool_use"
@@ -38,7 +47,12 @@
           "type": "tool_use",
           "id": "toolu_proto",
           "name": "Write",
-          "input": { "content": "x", "__proto__": { "file_path": "proto.txt" } }
+          "input": {
+            "content": "x",
+            "__proto__": {
+              "file_path": "proto.txt"
+            }
+          }
         }
       ],
       "stopReason": "tool_use"
@@ -50,7 +64,9 @@
           "type": "tool_use",
           "id": "toolu_argv",
           "name": "Bash",
-          "input": { "command": ["touch", "bash-ran.marker"] }
+          "input": {
+            "command": ["touch", "bash-ran.marker"]
+          }
         }
       ],
       "stopReason": "tool_use"
@@ -64,7 +80,9 @@
           "name": "Edit",
           "input": {
             "file_path": "keep.txt",
-            "old_string": { "$ne": "" },
+            "old_string": {
+              "$ne": ""
+            },
             "new_string": "pwned"
           }
         }
@@ -73,7 +91,12 @@
     },
     {
       "kind": "turn",
-      "content": [{ "type": "text", "text": "Done." }],
+      "content": [
+        {
+          "type": "text",
+          "text": "Done."
+        }
+      ],
       "stopReason": "end_turn"
     }
   ],
@@ -97,9 +120,27 @@
           {
             "role": "user",
             "blocks": [
-              { "kind": "text" },
-              { "kind": "text" },
-              { "kind": "text" }
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              }
             ]
           }
         ]
@@ -121,15 +162,37 @@
           {
             "role": "user",
             "blocks": [
-              { "kind": "text" },
-              { "kind": "text" },
-              { "kind": "text" }
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              }
             ]
           },
           {
             "role": "assistant",
             "blocks": [
-              { "kind": "tool_use", "name": "Write", "id": "toolu_number" }
+              {
+                "kind": "tool_use",
+                "name": "Write",
+                "id": "toolu_number"
+              }
             ]
           },
           {
@@ -161,15 +224,37 @@
           {
             "role": "user",
             "blocks": [
-              { "kind": "text" },
-              { "kind": "text" },
-              { "kind": "text" }
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              }
             ]
           },
           {
             "role": "assistant",
             "blocks": [
-              { "kind": "tool_use", "name": "Write", "id": "toolu_number" }
+              {
+                "kind": "tool_use",
+                "name": "Write",
+                "id": "toolu_number"
+              }
             ]
           },
           {
@@ -185,7 +270,11 @@
           {
             "role": "assistant",
             "blocks": [
-              { "kind": "tool_use", "name": "Write", "id": "toolu_missing" }
+              {
+                "kind": "tool_use",
+                "name": "Write",
+                "id": "toolu_missing"
+              }
             ]
           },
           {
@@ -217,15 +306,37 @@
           {
             "role": "user",
             "blocks": [
-              { "kind": "text" },
-              { "kind": "text" },
-              { "kind": "text" }
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              }
             ]
           },
           {
             "role": "assistant",
             "blocks": [
-              { "kind": "tool_use", "name": "Write", "id": "toolu_number" }
+              {
+                "kind": "tool_use",
+                "name": "Write",
+                "id": "toolu_number"
+              }
             ]
           },
           {
@@ -241,7 +352,11 @@
           {
             "role": "assistant",
             "blocks": [
-              { "kind": "tool_use", "name": "Write", "id": "toolu_missing" }
+              {
+                "kind": "tool_use",
+                "name": "Write",
+                "id": "toolu_missing"
+              }
             ]
           },
           {
@@ -257,7 +372,11 @@
           {
             "role": "assistant",
             "blocks": [
-              { "kind": "tool_use", "name": "Write", "id": "toolu_proto" }
+              {
+                "kind": "tool_use",
+                "name": "Write",
+                "id": "toolu_proto"
+              }
             ]
           },
           {
@@ -289,15 +408,37 @@
           {
             "role": "user",
             "blocks": [
-              { "kind": "text" },
-              { "kind": "text" },
-              { "kind": "text" }
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              }
             ]
           },
           {
             "role": "assistant",
             "blocks": [
-              { "kind": "tool_use", "name": "Write", "id": "toolu_number" }
+              {
+                "kind": "tool_use",
+                "name": "Write",
+                "id": "toolu_number"
+              }
             ]
           },
           {
@@ -313,7 +454,11 @@
           {
             "role": "assistant",
             "blocks": [
-              { "kind": "tool_use", "name": "Write", "id": "toolu_missing" }
+              {
+                "kind": "tool_use",
+                "name": "Write",
+                "id": "toolu_missing"
+              }
             ]
           },
           {
@@ -329,7 +474,11 @@
           {
             "role": "assistant",
             "blocks": [
-              { "kind": "tool_use", "name": "Write", "id": "toolu_proto" }
+              {
+                "kind": "tool_use",
+                "name": "Write",
+                "id": "toolu_proto"
+              }
             ]
           },
           {
@@ -345,7 +494,11 @@
           {
             "role": "assistant",
             "blocks": [
-              { "kind": "tool_use", "name": "Bash", "id": "toolu_argv" }
+              {
+                "kind": "tool_use",
+                "name": "Bash",
+                "id": "toolu_argv"
+              }
             ]
           },
           {
@@ -377,15 +530,37 @@
           {
             "role": "user",
             "blocks": [
-              { "kind": "text" },
-              { "kind": "text" },
-              { "kind": "text" }
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              }
             ]
           },
           {
             "role": "assistant",
             "blocks": [
-              { "kind": "tool_use", "name": "Write", "id": "toolu_number" }
+              {
+                "kind": "tool_use",
+                "name": "Write",
+                "id": "toolu_number"
+              }
             ]
           },
           {
@@ -401,7 +576,11 @@
           {
             "role": "assistant",
             "blocks": [
-              { "kind": "tool_use", "name": "Write", "id": "toolu_missing" }
+              {
+                "kind": "tool_use",
+                "name": "Write",
+                "id": "toolu_missing"
+              }
             ]
           },
           {
@@ -417,7 +596,11 @@
           {
             "role": "assistant",
             "blocks": [
-              { "kind": "tool_use", "name": "Write", "id": "toolu_proto" }
+              {
+                "kind": "tool_use",
+                "name": "Write",
+                "id": "toolu_proto"
+              }
             ]
           },
           {
@@ -433,7 +616,11 @@
           {
             "role": "assistant",
             "blocks": [
-              { "kind": "tool_use", "name": "Bash", "id": "toolu_argv" }
+              {
+                "kind": "tool_use",
+                "name": "Bash",
+                "id": "toolu_argv"
+              }
             ]
           },
           {
@@ -449,7 +636,11 @@
           {
             "role": "assistant",
             "blocks": [
-              { "kind": "tool_use", "name": "Edit", "id": "toolu_edit" }
+              {
+                "kind": "tool_use",
+                "name": "Edit",
+                "id": "toolu_edit"
+              }
             ]
           },
           {
@@ -493,6 +684,8 @@
       }
     ],
     "filesAbsent": ["5", "proto.txt", "bash-ran.marker"],
-    "fileContents": { "keep.txt": "keep\n" }
+    "fileContents": {
+      "keep.txt": "keep\n"
+    }
   }
 }

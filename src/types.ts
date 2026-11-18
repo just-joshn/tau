@@ -151,6 +151,18 @@ export const catalogAttachmentSchema = z.discriminatedUnion("type", [
     removedNames: z.array(z.string()),
   }),
 ]);
+/** Model-visible order of a user round's leading reminders. */
+export const REMINDER_IDS = [
+  "environment",
+  "model",
+  "deferred_tools",
+  "agent_listing",
+  "skill_listing",
+  "total_tokens",
+  "date",
+  "git_attribution",
+] as const;
+export type ReminderId = (typeof REMINDER_IDS)[number];
 export const messageSchema = z.object({
   role: z.enum(["user", "assistant"]),
   content: z.array(blockSchema),
@@ -158,6 +170,8 @@ export const messageSchema = z.object({
   catalogAttachments: z.array(catalogAttachmentSchema).optional(),
   /** Retained lifecycle order differs from RPi's model-visible user-round placement. */
   contextPlacement: z.literal("subagent-start").optional(),
+  /** Ids of this row's leading reminder blocks; projection folds them ahead of the user round. */
+  reminders: z.array(z.enum(REMINDER_IDS)).optional(),
   partial: z.object({ cause: z.string() }).optional(),
   model: z.string().optional(),
   responseModel: z.string().optional(),
@@ -247,7 +261,7 @@ export interface Completion {
 }
 export interface CompletionRequest {
   model: string;
-  system: string;
+  system: import("./system-prompt.js").SystemPrompt;
   messages: Message[];
   tools: ToolDefinition[];
   maxTokens: number;

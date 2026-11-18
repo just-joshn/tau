@@ -13,14 +13,21 @@
           "type": "tool_use",
           "id": "toolu_read",
           "name": "Read",
-          "input": { "file_path": "missing.txt" }
+          "input": {
+            "file_path": "missing.txt"
+          }
         }
       ],
       "stopReason": "tool_use"
     },
     {
       "kind": "turn",
-      "content": [{ "type": "text", "text": "The file does not exist." }],
+      "content": [
+        {
+          "type": "text",
+          "text": "The file does not exist."
+        }
+      ],
       "stopReason": "end_turn"
     }
   ],
@@ -44,9 +51,27 @@
           {
             "role": "user",
             "blocks": [
-              { "kind": "text" },
-              { "kind": "text" },
-              { "kind": "text" }
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              }
             ]
           }
         ]
@@ -68,15 +93,37 @@
           {
             "role": "user",
             "blocks": [
-              { "kind": "text" },
-              { "kind": "text" },
-              { "kind": "text" }
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              }
             ]
           },
           {
             "role": "assistant",
             "blocks": [
-              { "kind": "tool_use", "name": "Read", "id": "toolu_read" }
+              {
+                "kind": "tool_use",
+                "name": "Read",
+                "id": "toolu_read"
+              }
             ]
           },
           {
@@ -99,6 +146,9 @@
         "contentIncludes": "ENOENT"
       }
     ],
-    "result": { "isError": false, "numTurns": 2 }
+    "result": {
+      "isError": false,
+      "numTurns": 2
+    }
   }
 }

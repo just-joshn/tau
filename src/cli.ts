@@ -13,13 +13,28 @@ import {
   permissionModeSchema,
   printProtocolFlagError,
 } from "./options.js";
-import { buildBaseSystemPrompt } from "./prompt.js";
+import {
+  billingHeader,
+  identityLine,
+  promptEntrypoint,
+  renderSystemPrompt,
+  systemPromptBlocks,
+} from "./system-prompt.js";
+import {
+  attributionTexts,
+  firstPromptText,
+  gitFacts,
+  localDate,
+  prependReminders,
+  turnStartReminders,
+} from "./context-reminders.js";
+import { release, type as osType } from "node:os";
 import { AnthropicProvider } from "./provider.js";
 import { newSession, SessionStore } from "./session.js";
 import { importNativeSessionFile } from "./native-session-import.js";
 import { createLaunchAgentMemoryHost } from "./agent-memory-launch.js";
 import { createLaunchScopedPermissionHost } from "./scoped-permission-launch.js";
-import { createTools } from "./tools.js";
+import { BASH_SHELL, createTools } from "./tools.js";
 import { ReadState } from "./read-state.js";
 import { defaultOutputTokens, resolveModelFacts } from "./reasoning.js";
 import { compactContext, freshCompactionState } from "./compaction.js";
@@ -259,15 +274,64 @@ async function main(): Promise<void> {
       ? ("plan" as const)
       : launch.mode;
   let readState = new ReadState();
-  const currentSystem = await buildBaseSystemPrompt(
-    cwd,
-    options.systemPrompt,
-    options.appendSystemPrompt,
-  );
+  let promptBody = "";
   const system = () =>
     options.systemPromptSnapshot === false
-      ? currentSystem
-      : (session.systemPrompt ??= currentSystem);
+      ? promptBody
+      : (session.systemPrompt ?? promptBody);
+  /** Renders the body for this query's tools, then the request's system blocks. */
+  const requestSystem = (
+    definitions: readonly { name: string }[],
+    model: string,
+  ) => {
+    const skills = skillHost?.runtime.catalog("model") ?? [];
+    promptBody = renderSystemPrompt(
+      {
+        model,
+        tools: new Set(definitions.map((tool) => tool.name)),
+        hasSkills: skills.length > 0,
+        interactive,
+        env: process.env,
+      },
+      {
+        replacement: options.systemPrompt,
+        append: options.appendSystemPrompt,
+      },
+    );
+    if (options.systemPromptSnapshot !== false)
+      session.systemPrompt ??= promptBody;
+    return systemPromptBlocks({
+      header: billingHeader(
+        firstPromptText(session.messages),
+        promptEntrypoint(process.env, interactive),
+        process.env,
+      ),
+      identity: identityLine({
+        interactive,
+        appendSystemPrompt: options.appendSystemPrompt !== undefined,
+      }),
+      body: system(),
+    });
+  };
+  const turnReminders = async () =>
+    turnStartReminders(
+      {
+        cwd,
+        git: await gitFacts(cwd),
+        platform: process.platform,
+        bashShell: BASH_SHELL,
+        osVersion: `${osType()} ${release()}`,
+        model: currentModel(),
+        date: localDate(new Date()),
+        usedTokens: session.usage.input_tokens + session.usage.output_tokens,
+        attribution: attributionTexts(
+          currentModel(),
+          launch.snapshot.effective,
+        ),
+        env: process.env,
+      },
+      session.messages,
+    );
   const terminal = interactive
     ? createInterface({ input: stdin, output: stdout })
     : undefined;
@@ -1543,6 +1607,7 @@ async function main(): Promise<void> {
           typeof input === "string" ? [{ type: "text", text: input }] : input,
       };
       await instructions.announce(userMessage, session.messages);
+      prependReminders(userMessage, await turnReminders());
       turnSignal.throwIfAborted();
       session.messages.push(userMessage);
       const command =
@@ -1563,8 +1628,6 @@ async function main(): Promise<void> {
       const queryModel = currentModel();
       queryModelForTools = queryModel;
       const tools = await createSessionTools();
-      const available =
-        tools.definitions.map((tool) => tool.name).join(", ") || "none";
       if (sdk) {
         const skills =
           skillHost?.runtime.catalog().map((skill) => skill.name) ?? [];
@@ -1610,7 +1673,7 @@ async function main(): Promise<void> {
           tools,
           messages: session.messages,
           model,
-          system: `${system()}\n\nAvailable tools for this session: ${available}. Permission mode: ${mode}.`,
+          system: requestSystem(tools.definitions, model),
           maxTokens: options.maxTokensExplicit
             ? options.maxTokens
             : defaultOutputTokens(model),
@@ -1690,8 +1753,6 @@ async function main(): Promise<void> {
     try {
       queryModelForTools = currentModel();
       const tools = await createSessionTools();
-      const available =
-        tools.definitions.map((tool) => tool.name).join(", ") || "none";
       const compacted = await compactContext({
         provider,
         state: (session.compaction ??= freshCompactionState()),
@@ -1701,7 +1762,7 @@ async function main(): Promise<void> {
           : {}),
         request: {
           model: session.model,
-          system: `${system()}\n\nAvailable tools for this session: ${available}. Permission mode: ${mode}.`,
+          system: requestSystem(tools.definitions, session.model),
           messages: session.messages,
           tools: tools.definitions,
           signal: active.signal,

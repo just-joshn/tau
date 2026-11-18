@@ -20,14 +20,22 @@
           "type": "tool_use",
           "id": "toolu_write",
           "name": "Write",
-          "input": { "file_path": "summary.txt", "content": "pwned" }
+          "input": {
+            "file_path": "summary.txt",
+            "content": "pwned"
+          }
         }
       ],
       "stopReason": "tool_use"
     },
     {
       "kind": "turn",
-      "content": [{ "type": "text", "text": "Done." }],
+      "content": [
+        {
+          "type": "text",
+          "text": "Done."
+        }
+      ],
       "stopReason": "end_turn"
     }
   ],
@@ -37,17 +45,61 @@
       {
         "path": "/v1/messages?beta=true",
         "tools": ["Grep", "Read"],
-        "messages": [{ "role": "user", "blocks": [{ "kind": "text" }] }]
+        "messages": [
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              }
+            ]
+          }
+        ]
       },
       {
         "path": "/v1/messages?beta=true",
         "tools": ["Grep", "Read"],
         "messages": [
-          { "role": "user", "blocks": [{ "kind": "text" }] },
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              }
+            ]
+          },
           {
             "role": "assistant",
             "blocks": [
-              { "kind": "tool_use", "name": "Write", "id": "toolu_write" }
+              {
+                "kind": "tool_use",
+                "name": "Write",
+                "id": "toolu_write"
+              }
             ]
           },
           {

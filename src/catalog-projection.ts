@@ -217,6 +217,8 @@ function formatSkills(
     )
     .join("\n");
 }
+const AMBIENT_CONTEXT =
+  "This is ambient context — do not narrate it to the user unless they ask or it is directly relevant to their request.";
 function wrap(text: string): string {
   return `<system-reminder>\n${text}\n</system-reminder>`;
 }
@@ -262,11 +264,12 @@ export function buildCatalogAttachments(
       const parts: string[] = [];
       if (added.length)
         parts.push(
-          `${attachment.isInitial ? "Agent types available through Agent" : "Agent types added"}:\n${attachment.addedLines.join("\n")}`,
+          `${attachment.isInitial ? "Available agent types for the Agent tool:" : "New agent types are now available for the Agent tool:"}\n${attachment.addedLines.join("\n")}`,
         );
       if (removed.length)
         parts.push(
-          `Agent types removed; do not select these names:\n${removed.map((name) => `- ${name}`).join("\n")}`,
+          `The following agent types are no longer available:\n${removed.map((name) => `- ${name}`).join("\n")}`,
+          AMBIENT_CONTEXT,
         );
       if (
         added.length &&
@@ -274,7 +277,7 @@ export function buildCatalogAttachments(
         attachment.showConcurrencyNote
       )
         parts.push(
-          "Independent agent calls may be grouped into one assistant turn.",
+          "When you launch multiple agents for independent work, send them in a single message with multiple tool uses so they run concurrently.",
         );
       blocks.push({
         kind: "agent",
@@ -336,16 +339,17 @@ export function buildCatalogAttachments(
           : {}),
       };
       attachments.push(attachment);
-      const guide = isInitial
-        ? "Skills available through Skill"
-        : attachment.addsToEarlier
-          ? "Additional skills available through Skill; earlier listings still apply"
-          : "Skills available through Skill";
+      const [also, adds] = attachment.addsToEarlier
+        ? [
+            "also ",
+            ". This list adds to the skills listed earlier in this conversation and is not the full list",
+          ]
+        : ["", ""];
       blocks.push({
         kind: "skill",
         type: "text",
         text: wrap(
-          `${guide}:\n${content}${shortened ? "\nName-only entries remain callable." : ""}`,
+          `The following skills are ${also}available for use with the Skill tool${adds}:\n\n${content}${shortened ? "\n\nThis list is shortened to save room: some skills are listed by name alone. A skill listed by name alone works like any other." : ""}`,
         ),
       });
     }

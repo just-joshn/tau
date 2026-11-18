@@ -26,14 +26,21 @@
           "type": "tool_use",
           "id": "toolu_env",
           "name": "Bash",
-          "input": { "command": "env" }
+          "input": {
+            "command": "env"
+          }
         }
       ],
       "stopReason": "tool_use"
     },
     {
       "kind": "turn",
-      "content": [{ "type": "text", "text": "Done." }],
+      "content": [
+        {
+          "type": "text",
+          "text": "Done."
+        }
+      ],
       "stopReason": "end_turn"
     }
   ],
@@ -57,9 +64,27 @@
           {
             "role": "user",
             "blocks": [
-              { "kind": "text" },
-              { "kind": "text" },
-              { "kind": "text" }
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              }
             ]
           }
         ]
@@ -81,15 +106,37 @@
           {
             "role": "user",
             "blocks": [
-              { "kind": "text" },
-              { "kind": "text" },
-              { "kind": "text" }
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              }
             ]
           },
           {
             "role": "assistant",
             "blocks": [
-              { "kind": "tool_use", "name": "Bash", "id": "toolu_env" }
+              {
+                "kind": "tool_use",
+                "name": "Bash",
+                "id": "toolu_env"
+              }
             ]
           },
           {
@@ -105,8 +152,16 @@
         ]
       }
     ],
-    "toolResults": [{ "toolUseId": "toolu_env", "isError": false }],
+    "toolResults": [
+      {
+        "toolUseId": "toolu_env",
+        "isError": false
+      }
+    ],
     "absentFromOutputs": ["API_KEY"],
-    "result": { "isError": false, "numTurns": 2 }
+    "result": {
+      "isError": false,
+      "numTurns": 2
+    }
   }
 }

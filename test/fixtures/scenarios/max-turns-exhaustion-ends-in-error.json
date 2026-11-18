@@ -4,7 +4,11 @@
   "invariants": ["INV-10", "INV-13"],
   "description": "running out of --max-turns mid tool loop ends in an error envelope and no further request",
   "provenance": "synthetic, hand-written adversarial case; expectations pinned after observing tau at e6e6c88 and checked against docs/permission-contract.md",
-  "workspace": { "files": { "notes.txt": "hello\n" } },
+  "workspace": {
+    "files": {
+      "notes.txt": "hello\n"
+    }
+  },
   "args": [
     "-p",
     "Read the notes",
@@ -21,14 +25,21 @@
           "type": "tool_use",
           "id": "toolu_read",
           "name": "Read",
-          "input": { "file_path": "notes.txt" }
+          "input": {
+            "file_path": "notes.txt"
+          }
         }
       ],
       "stopReason": "tool_use"
     },
     {
       "kind": "turn",
-      "content": [{ "type": "text", "text": "Done." }],
+      "content": [
+        {
+          "type": "text",
+          "text": "Done."
+        }
+      ],
       "stopReason": "end_turn"
     }
   ],
@@ -52,14 +63,35 @@
           {
             "role": "user",
             "blocks": [
-              { "kind": "text" },
-              { "kind": "text" },
-              { "kind": "text" }
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              }
             ]
           }
         ]
       }
     ],
-    "result": { "isError": true, "numTurns": 2 }
+    "result": {
+      "isError": true,
+      "numTurns": 2
+    }
   }
 }

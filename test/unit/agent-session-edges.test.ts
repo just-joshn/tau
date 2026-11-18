@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { systemPromptText } from "../../src/system-prompt.js";
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -168,7 +169,9 @@ test("a child agent launches a grandchild under the child's live permission mode
   const systems: string[] = [];
   const provider: Provider = {
     async complete(request) {
-      const who = request.system.includes("LEAF_PROMPT") ? "leaf" : "planner";
+      const who = systemPromptText(request.system).includes("LEAF_PROMPT")
+        ? "leaf"
+        : "planner";
       systems.push(who);
       if (who === "leaf") {
         if (transcript(request).includes("NOTES_CONTENT"))
