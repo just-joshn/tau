@@ -631,6 +631,26 @@ export function projectNativeHistory(
   document: NativeSessionDocument,
   options: NativeHistoryOptions,
 ): NativeHistoryProjection {
+  return projectNativeHistoryCore(document, options, "completed");
+}
+
+/**
+ * Ordinary request boundary, after actual tool work has settled. Kke accepts a
+ * live user/result tail; this entrypoint does not change completed resume policy.
+ * Interrupted replies and incomplete tool batches require their own adapters.
+ */
+export function projectNativeHistoryForModelRequest(
+  document: NativeSessionDocument,
+  options: NativeHistoryOptions,
+): NativeHistoryProjection {
+  return projectNativeHistoryCore(document, options, "model-request");
+}
+
+function projectNativeHistoryCore(
+  document: NativeSessionDocument,
+  options: NativeHistoryOptions,
+  phase: "completed" | "model-request",
+): NativeHistoryProjection {
   for (const line of document.lines) {
     const row = line.value;
     if (
@@ -757,12 +777,49 @@ export function projectNativeHistory(
   const last = recovered.nodes.findLast(
     (node) => node.type === "assistant" || node.type === "user",
   );
-  if (
-    !last ||
-    last.type !== "assistant" ||
-    message(last)?.stop_reason !== "end_turn"
-  )
-    fail("unsupported-incomplete-turn", last);
+  if (phase === "completed") {
+    if (
+      !last ||
+      last.type !== "assistant" ||
+      message(last)?.stop_reason !== "end_turn"
+    )
+      fail("unsupported-incomplete-turn", last);
+  } else {
+    if (!last || last.type !== "user")
+      fail("unsupported-model-request-tail", last);
+    for (const node of recovered.nodes) {
+      if (node.row.resumedFromIncompleteThinking === true)
+        fail("unsupported-incomplete-thinking-request", node);
+      const stopReason = message(node)?.stop_reason;
+      if (
+        node.type === "assistant" &&
+        !["end_turn", "tool_use", "stop_sequence", "refusal"].includes(
+          typeof stopReason === "string" ? stopReason : "",
+        )
+      )
+        fail("unsupported-interrupted-model-request", node);
+    }
+    const pending = new Set<string>();
+    for (const [i, item] of messages.entries()) {
+      const hasResults = item.content.some(
+        (block) => block.type === "tool_result",
+      );
+      const meta = sources[i]?.every(
+        (uuid) =>
+          recovered.nodes.find((node) => node.uuid === uuid)?.row.isMeta ===
+          true,
+      );
+      if (item.role === "user" && !hasResults && !meta && pending.size)
+        throw new NativeHistoryProjectionError(
+          "human-crosses-pending-response",
+          [...pending][0],
+        );
+      for (const block of item.content) {
+        if (block.type === "tool_use") pending.add(block.id);
+        if (block.type === "tool_result") pending.delete(block.tool_use_id);
+      }
+    }
+  }
   return Object.freeze({
     ...recovered,
     messages,

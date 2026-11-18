@@ -6,6 +6,11 @@ import type { ThinkingStrip } from "./thinking-history.js";
 import type { ContextWindow } from "./context-window.js";
 import type { ReadToolContext } from "./context-room.js";
 import type { QueryEffort } from "./query-model-effort.js";
+import {
+  nativeResponseRecordingSchema,
+  type NativeResponseRecording,
+  type NativeResponseRecordingHost,
+} from "./native-response-recording.js";
 
 export const textBlockSchema = z.object({
   type: z.literal("text"),
@@ -141,10 +146,14 @@ export const messageSchema = z.object({
   content: z.array(blockSchema),
   instructionFiles: z.array(instructionRecordSchema).optional(),
   catalogAttachments: z.array(catalogAttachmentSchema).optional(),
+  /** Retained lifecycle order differs from RPi's model-visible user-round placement. */
+  contextPlacement: z.literal("subagent-start").optional(),
   partial: z.object({ cause: z.string() }).optional(),
   model: z.string().optional(),
   responseModel: z.string().optional(),
   responseId: z.string().optional(),
+  /** Physical API block provenance; never part of the model-facing message envelope. */
+  nativeResponse: nativeResponseRecordingSchema.optional(),
   requestedModel: z.string().optional(),
   resumable: z.boolean().optional(),
   resumedFromIncompleteThinking: z.boolean().optional(),
@@ -220,6 +229,7 @@ export interface Completion {
   model?: string;
   responseModel?: string;
   responseId?: string;
+  nativeResponse?: NativeResponseRecording;
   resumable?: boolean;
   contextClearedInputTokens?: number;
 }
@@ -238,6 +248,8 @@ export interface CompletionRequest {
   onText: (text: string) => void;
   /** Attempt-local stream observations, before later usage reconciliation mutates retained rows. */
   onStreamProgress?: (event: ProviderStreamProgress) => void;
+  /** Owns stable identities at actual API row creation, separately from progress sampling. */
+  nativeRecording?: NativeResponseRecordingHost;
   /** Replace provisional text for this model round, preserving previous completed rounds. */
   onTextReset?: (text: string) => void;
   onThinkingStrip?: (strip: ThinkingStrip) => void;

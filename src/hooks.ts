@@ -178,6 +178,20 @@ export interface HookBatchResult {
   watchPaths: string[];
   reloadSkills: boolean;
 }
+export type HookDispatchCandidate = Readonly<RegisteredHook>;
+export interface PreparedHookDispatch {
+  readonly candidates: readonly HookDispatchCandidate[];
+  runSelected(ids: ReadonlySet<string>): Promise<HookBatchResult>;
+  /** Retire the snapshot, not its borrowed registry or already-started processes. */
+  close(): Promise<void>;
+}
+function freezeDispatch<T>(value: T): T {
+  if (value !== null && typeof value === "object") {
+    for (const child of Object.values(value)) freezeDispatch(child);
+    Object.freeze(value);
+  }
+  return value;
+}
 export interface HookRunOptions {
   /** Caller-supplied roots/environment; no personal configuration or process env is read. */
   cwd: string;
@@ -196,11 +210,18 @@ export interface HookRunOptions {
     context: { input: HookInput; origin: HookOrigin },
   ) => unknown;
   forceSyncExecution?: boolean;
+  /** Observe each actual command settlement, before phase reduction; batch result order remains unchanged. */
+  onResult?: (
+    result: HookResult,
+    context: { background: boolean; hook: Readonly<CommandHook> },
+  ) => void | Promise<void>;
   onBackgroundResult?: (result: HookResult) => void | Promise<void>;
 }
 export interface HookRegistryOptions {
   disabled?: boolean;
   managedOnly?: boolean;
+  /** Direct registry extension; native settings dispatch has no once-removal callback. */
+  consumeOnce?: boolean;
   matchesCondition?: (condition: string, input: HookInput) => boolean;
 }
 
@@ -339,10 +360,7 @@ export class HookRegistry {
     this.stopping.abort(new Error("Hook registry closed"));
     await Promise.allSettled([...this.running].map((task) => task.completion));
   }
-  async run(
-    input: HookInput,
-    options: HookRunOptions,
-  ): Promise<HookBatchResult> {
+  private validateDispatch(input: HookInput, options: HookRunOptions): void {
     if (!HOOK_EVENTS.includes(input.hook_event_name))
       throw new Error("Unsupported hook event");
     for (const field of ["session_id", "transcript_path", "cwd"] as const)
@@ -442,6 +460,70 @@ export class HookRegistry {
         options.maxOutputBytes <= 0)
     )
       throw new Error("Hook output bound must be a positive safe integer");
+  }
+  private eligible(entry: RegisteredHook, input: HookInput): boolean {
+    return (
+      entry.event === input.hook_event_name &&
+      !this.used.has(entry.id) &&
+      !(
+        this.options.managedOnly &&
+        entry.origin.source !== "policySettings" &&
+        entry.origin.managed !== true
+      ) &&
+      matches(entry.matcher, input) &&
+      (!entry.hook.if ||
+        this.options.matchesCondition?.(entry.hook.if, input) === true)
+    );
+  }
+  async prepareDispatch(
+    input: HookInput,
+    options: HookRunOptions,
+  ): Promise<PreparedHookDispatch> {
+    this.validateDispatch(input, options);
+    const capturedInput = structuredClone(input);
+    const capturedOptions = { ...options, env: { ...options.env } };
+    const candidates = Object.freeze(
+      (this.options.disabled ||
+      options.signal.aborted ||
+      this.stopping.signal.aborted
+        ? []
+        : this.hooks.filter((entry) => this.eligible(entry, capturedInput))
+      ).map((entry) => freezeDispatch(structuredClone(entry))),
+    );
+    const valid = new Set(candidates.map((entry) => entry.id)),
+      consumed = new Set<string>();
+    let retired = false;
+    return {
+      candidates,
+      runSelected: async (ids) => {
+        if (retired) throw new Error("Hook dispatch snapshot is retired");
+        for (const id of ids)
+          if (!valid.has(id) || consumed.has(id))
+            throw new Error("Unknown or consumed hook dispatch candidate");
+        for (const id of ids) consumed.add(id);
+        return this.runSnapshot(
+          capturedInput,
+          capturedOptions,
+          candidates.filter((entry) => ids.has(entry.id)),
+        );
+      },
+      close: async () => {
+        retired = true;
+      },
+    };
+  }
+  async run(
+    input: HookInput,
+    options: HookRunOptions,
+  ): Promise<HookBatchResult> {
+    return this.runSnapshot(input, options);
+  }
+  private async runSnapshot(
+    input: HookInput,
+    options: HookRunOptions,
+    snapshot?: readonly RegisteredHook[],
+  ): Promise<HookBatchResult> {
+    this.validateDispatch(input, options);
     const batch = emptyBatch();
     if (this.options.disabled) return batch;
     if (options.signal.aborted || this.stopping.signal.aborted) {
@@ -450,21 +532,8 @@ export class HookRegistry {
     }
     const serialized = JSON.stringify(input) + "\n";
     const selected = new Map<string, RegisteredHook>();
-    for (const entry of this.hooks) {
-      if (
-        entry.event !== input.hook_event_name ||
-        this.used.has(entry.id) ||
-        (this.options.managedOnly &&
-          entry.origin.source !== "policySettings" &&
-          entry.origin.managed !== true) ||
-        !matches(entry.matcher, input)
-      )
-        continue;
-      if (
-        entry.hook.if &&
-        !this.options.matchesCondition?.(entry.hook.if, input)
-      )
-        continue;
+    for (const entry of snapshot ?? this.hooks) {
+      if (!this.eligible(entry, input)) continue;
       const key = JSON.stringify([
         entry.origin.source,
         entry.hook.shell ?? "bash",
@@ -476,7 +545,7 @@ export class HookRegistry {
     }
     const sync: Promise<HookResult>[] = [];
     for (const entry of selected.values()) {
-      if (entry.hook.once)
+      if (entry.hook.once && this.options.consumeOnce !== false)
         for (const candidate of this.hooks) {
           if (
             candidate.event === entry.event &&
@@ -501,13 +570,21 @@ export class HookRegistry {
         this.stopping.signal,
         controller.signal,
       ]);
-      const promise = this.execute(
+      const executed = this.execute(
         entry,
         input,
         serialized,
         { ...options, signal },
         background,
       );
+      const promise = options.onResult
+        ? executed.then(async (result) => {
+            // Calling the observer starts synchronously at settlement. Creation
+            // identities must be assigned before its first asynchronous await.
+            await options.onResult?.(result, { background, hook: entry.hook });
+            return result;
+          })
+        : executed;
       if (!background) {
         sync.push(promise);
         continue;
@@ -519,17 +596,35 @@ export class HookRegistry {
       };
       this.running.add(task);
       batch.background.push(task);
-      void promise
+      // Keep the original background result callback even if an observer fails.
+      // task.completion still exposes that observer failure to its actual owner.
+      void executed
         .then(async (result) => {
           try {
-            await options.onBackgroundResult?.(result);
+            try {
+              await promise;
+            } finally {
+              await options.onBackgroundResult?.(result);
+            }
           } finally {
             this.running.delete(task);
           }
         })
         .catch(() => this.running.delete(task));
     }
-    batch.results = await Promise.all(sync);
+    if (options.onResult) {
+      // Drain sibling commands before reporting observer errors; never re-run a
+      // command or abandon its owned cleanup because a capture sink failed.
+      const settled = await Promise.allSettled(sync);
+      const errors = settled.flatMap((item): unknown[] =>
+        item.status === "rejected" ? [item.reason] : [],
+      );
+      if (errors.length)
+        throw new AggregateError(errors, "Hook result observation failed");
+      batch.results = settled.flatMap((item) =>
+        item.status === "fulfilled" ? [item.value] : [],
+      );
+    } else batch.results = await Promise.all(sync);
     // Keep raw per-hook outcomes for consumers that implement the full host arbitration pipeline.
     const rank: Record<HookPermission, number> = {
       allow: 1,

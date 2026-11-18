@@ -1,4 +1,8 @@
 import { z } from "zod";
+import {
+  NativeResponseRecordingError,
+  recordNativeJsonResponse,
+} from "./native-response-recording.js";
 import { setTimeout as wait } from "node:timers/promises";
 import {
   assistantBlockSchema,
@@ -878,10 +882,25 @@ export class AnthropicProvider implements Provider {
         continue;
       }
       const { response, deadline, startedAt } = accepted;
+      const nativeRequestId = response.headers.get("request-id");
       streaming = accepted.streaming;
       const stream = new MessageStream(
         request.onText,
         request.onStreamProgress,
+        request.nativeRecording === undefined
+          ? undefined
+          : {
+              host: request.nativeRecording,
+              requestedModel: request.model,
+              ...(nativeRequestId === null
+                ? {}
+                : { requestId: nativeRequestId }),
+              normalizeContent: (content) =>
+                normalizeCommittedToolBlocks(
+                  z.array(assistantBlockSchema).parse(content),
+                  request,
+                ),
+            },
       );
       try {
         const completion = streaming
@@ -900,6 +919,8 @@ export class AnthropicProvider implements Provider {
         abortIfNeeded(request.signal);
         const failure = deadline.failure ?? error;
         deadline.close();
+        if (error instanceof NativeResponseRecordingError) throw error;
+        if (failure instanceof NativeResponseRecordingError) throw failure;
         if (streaming && failure instanceof StreamOutputLimit) {
           reset(stream, stream.retainedText);
           return {
@@ -1077,7 +1098,7 @@ export class AnthropicProvider implements Provider {
             const parsed = streamEventSchema.safeParse(body);
             if (!parsed.success) throw protocolError();
             deadline.eventReceived(parsed.data.type === "ping");
-            stream.accept(parsed.data);
+            stream.accept(parsed.data, body);
             if (parsed.data.type === "message_start") noteBegun();
           } else {
             // The caller switches on the body type and still records progress
@@ -1232,10 +1253,26 @@ export class AnthropicProvider implements Provider {
         ...(message.id === undefined ? {} : { responseId: message.id }),
         usage: structuredClone(usage),
       });
+      const nativeRequestId = response.headers.get("request-id");
       return {
         content: message.content,
         stop_reason: message.stop_reason,
         usage,
+        ...(request.nativeRecording === undefined
+          ? {}
+          : {
+              nativeResponse: recordNativeJsonResponse(
+                {
+                  host: request.nativeRecording,
+                  requestedModel: request.model,
+                  ...(nativeRequestId === null
+                    ? {}
+                    : { requestId: nativeRequestId }),
+                },
+                data,
+                message.content,
+              ),
+            }),
         ...(message.id === undefined ? {} : { responseId: message.id }),
         ...(message.model === undefined
           ? {}

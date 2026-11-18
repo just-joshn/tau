@@ -6,11 +6,17 @@ import type { InstructionCatalog, InstructionFile } from "./instructions.js";
 import { modelBytesPerToken } from "./reasoning.js";
 import type { ReadState } from "./read-state.js";
 import type { InstructionRecord, Message, ToolExecutor } from "./types.js";
+import {
+  captureNativeInstructions,
+  nativeInstructionFileFacts,
+  type NativeInstructionCaptureHost,
+} from "./native-instruction-capture.js";
 
 interface ProjectedInstruction {
   file: InstructionFile;
   body: string;
   record: InstructionRecord;
+  clipped: boolean;
 }
 const hash = (text: string) => createHash("sha256").update(text).digest("hex");
 
@@ -39,6 +45,7 @@ export function projectNestedInstruction(
   return {
     file,
     body,
+    clipped,
     record: {
       path: file.canonicalPath,
       kind: file.kind,
@@ -90,6 +97,7 @@ export class InstructionContext {
       /** Built-in/policy omitClaudeMd drops initial userContext, while nested discovery remains active. */
       omitInitial?: boolean;
       onDiagnostic?(message: string): void;
+      nativeCapture?: NativeInstructionCaptureHost;
     },
   ) {}
 
@@ -120,6 +128,7 @@ export class InstructionContext {
     return {
       file,
       body,
+      clipped: false,
       record: {
         path: file.canonicalPath,
         kind: file.kind,
@@ -148,6 +157,21 @@ export class InstructionContext {
     const removed = [...previous.values()]
       .filter((file) => !current.has(file.path))
       .map((file) => ({ ...file, removed: true }));
+    if (this.options.nativeCapture)
+      await captureNativeInstructions(
+        this.options.nativeCapture,
+        {
+          phase: "eager",
+          files: files.map((file) =>
+            nativeInstructionFileFacts(file.file, {
+              body: file.body,
+              clipped: file.clipped,
+              partial: file.record.partial,
+            }),
+          ),
+        },
+        { kind: "eager", message },
+      );
     if (!changed.length && !removed.length) return;
     const notice = [
       changed.length
@@ -220,6 +244,7 @@ export class InstructionContext {
               ? {
                   file,
                   body: fullBody,
+                  clipped: false,
                   record: { ...prior, partial: file.contentDiffersFromDisk },
                 }
               : this.projection(file);
@@ -246,6 +271,28 @@ export class InstructionContext {
             );
         }
         if (!additions.length) return result;
+        if (this.options.nativeCapture) {
+          await captureNativeInstructions(
+            this.options.nativeCapture,
+            {
+              phase: "nested",
+              files: additions.map((file) =>
+                nativeInstructionFileFacts(file.file, {
+                  body: file.body,
+                  clipped: file.clipped,
+                  partial: file.record.partial,
+                }),
+              ),
+            },
+            {
+              kind: "nested",
+              call,
+              result,
+              effectivePath: resolve(this.options.cwd, input.file_path),
+            },
+          );
+          signal.throwIfAborted();
+        }
         return {
           ...result,
           content: `${result.content}\n\nNested instruction files:\n\n${render(additions)}`,

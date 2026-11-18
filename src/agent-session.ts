@@ -52,6 +52,12 @@ import type { createChildCapabilityTools } from "./child-capability-tools.js";
 import type { createChildPlanHost } from "./child-plan-host.js";
 import { selectableToolNameSchema } from "./tool-policy.js";
 import { wrapCatalogTools } from "./catalog-session.js";
+import type { createLaunchAgentMemoryHost } from "./agent-memory-launch.js";
+import type { ScopedPermissionAccess } from "./scoped-permission-launch.js";
+import {
+  validateAgentDefinitionHooks,
+  type createAgentDefinitionHookScope,
+} from "./agent-definition-hooks.js";
 
 /** Local agent host with live parent policy and an optional detached task lifetime owner. */
 export async function createSessionAgentHost(options: {
@@ -87,6 +93,14 @@ export async function createSessionAgentHost(options: {
   /** One process/session host may retain agents across clear/resume. */
   concurrencySlots?: Set<string>;
   builtinAgents?: readonly LocalAgentDefinition[];
+  memory?: ReturnType<typeof createLaunchAgentMemoryHost>;
+  definitionHooks?(
+    plan: Readonly<SubagentPlan>,
+  ): ReturnType<typeof createAgentDefinitionHookScope>;
+  scopedPermissions?(
+    policy: () => ToolPolicy,
+    mode: () => PermissionMode,
+  ): ScopedPermissionAccess;
   childCapabilities?(
     plan: Readonly<SubagentPlan>,
     context: {
@@ -119,6 +133,7 @@ export async function createSessionAgentHost(options: {
   const env = options.env ?? process.env;
   const diagnostic = (message: string) => options.onDiagnostic?.(message);
   const registry = await createLocalAgentRegistry({
+    ...options.memory?.registryOptions(),
     definitions: [
       ...(options.builtinAgents ?? []),
       ...(options.pluginAgents ?? []),
@@ -152,12 +167,10 @@ export async function createSessionAgentHost(options: {
       location.source !== "projectSettings" ||
       options.launch.workspace.currentWorkspaceTrusted ||
       "Workspace agent source is not trusted",
-    // Agent-scoped hooks require their own registry/lifecycle integration. Withhold
-    // guarded declarations rather than loading an agent without its guards.
-    validateHooks: () => {
-      throw new Error(
-        "Agent-scoped hook declarations are not yet supported by this host",
-      );
+    validateHooks: (hooks) => {
+      if (!options.definitionHooks)
+        throw new Error("Agent-scoped hooks require their execution host");
+      return validateAgentDefinitionHooks(hooks);
     },
     readPolicy: () => !inheritedReadDeny(options.policy()),
     eligible: (definition) =>
@@ -283,6 +296,7 @@ export async function createSessionAgentHost(options: {
         if (start?.length)
           request.messages.push({
             role: "user",
+            contextPlacement: "subagent-start",
             content: start.map((text) => ({ type: "text", text })),
           });
         await request.prepareAfterStart?.();
@@ -596,6 +610,12 @@ export async function createSessionAgentHost(options: {
         };
         const policy = (): ToolPolicy =>
           capabilities.get(plan.agentId)?.policy() ?? basePolicy();
+        const scopedPermissions = options.scopedPermissions?.(policy, () =>
+          liveMode(plan),
+        );
+        // ca/getSystemPrompt resolves memory before SubagentStart, independently
+        // of later passive skill preloads and the child's primary model.
+        const memory = await options.memory?.prepare(plan.definition, signal);
         const policyKey = () => JSON.stringify([policy(), liveMode(plan)]);
         const childHooks: ToolHookRuntime = {
           before: async (...args) => {
@@ -704,18 +724,31 @@ export async function createSessionAgentHost(options: {
           ]);
           if (cached && key === cachedKey) return cached;
           const mode = liveMode(plan),
-            current = policy();
+            current = policy(),
+            planPath = childPlan?.location();
+          const memoryAccess = options.memory?.fileAccess(policy, () =>
+            liveMode(plan),
+          );
           const builtins = createTools({
             cwd: options.cwd,
             mode,
             policy: current,
             readState,
+            ...scopedPermissions,
             hooks: childHooks,
             restorationExcludedPaths: [
               ...instructions.excludedPaths,
-              ...(childPlan?.location() ? [childPlan.location() ?? ""] : []),
+              ...(planPath ? [planPath] : []),
             ],
             ...(childPlan ? childPlan.fileAccess : {}),
+            ...(memoryAccess
+              ? {
+                  memoryFileAllowance: memoryAccess.memoryFileAllowance,
+                  extraPathAdmission: async (request) =>
+                    (await childPlan?.fileAccess.extraPathAdmission(request)) ??
+                    (await memoryAccess.extraPathAdmission(request)),
+                }
+              : {}),
             sensitiveWritePaths: options.launch.snapshot.documents.flatMap(
               (document) =>
                 document.path === undefined ? [] : [document.path],
@@ -815,11 +848,22 @@ export async function createSessionAgentHost(options: {
             }
           },
         };
+        const hasDefinitionHooks =
+          plan.definition.hooks !== undefined &&
+          Object.keys(validateAgentDefinitionHooks(plan.definition.hooks))
+            .length > 0;
+        const definitionHooks = hasDefinitionHooks
+          ? options.definitionHooks?.(plan)
+          : undefined;
         return {
-          system: `${options.system()}\n\n${plan.definition.prompt}`,
+          system: `${options.system()}\n\n${plan.definition.prompt}${memory?.systemPrompt ? `\n\n${memory.systemPrompt}` : ""}`,
           contextMessages: contexts,
           enforcesParentPolicy: true as const,
           handledFeatures: [
+            ...(memory?.handledFeatures ?? []),
+            ...(options.definitionHooks && plan.definition.hooks !== undefined
+              ? ["hooks" as const]
+              : []),
             ...(childCapabilities && plan.definition.skills.length
               ? ["skills" as const]
               : []),
@@ -828,17 +872,18 @@ export async function createSessionAgentHost(options: {
               ? ["omitClaudeMd" as const]
               : []),
           ],
-          ...(childCapabilities
-            ? {
-                afterStart: async (signal: AbortSignal) =>
-                  (
-                    await childCapabilities.renderPreloads(
-                      plan.definition.skills,
-                      signal,
-                    )
-                  ).messages,
-              }
-            : {}),
+          afterStart: async (signal: AbortSignal) => {
+            await definitionHooks?.afterStart(signal);
+            signal.throwIfAborted();
+            return childCapabilities
+              ? (
+                  await childCapabilities.renderPreloads(
+                    plan.definition.skills,
+                    signal,
+                  )
+                ).messages
+              : [];
+          },
           tools: {
             ...withCapabilities,
             get definitions() {
@@ -890,6 +935,7 @@ export async function createSessionAgentHost(options: {
                 await options.lifecycle?.teardown(plan);
             } finally {
               childCapabilities?.flushContext(history.messages);
+              definitionHooks?.cleanup();
               options.lifecycle?.cleanup(plan);
               startedChildren.delete(plan.agentId);
               childHistories.delete(plan.agentId);

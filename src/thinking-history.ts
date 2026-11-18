@@ -82,7 +82,28 @@ export function projectMessages(
   messages: Message[],
   preserveTrailingThinking = false,
 ): WireMessage[] {
-  const rows = messages.slice(activeContextStart(messages)).map((message) => ({
+  const lifecycleOrdered: Message[] = [],
+    pending: Message[] = [];
+  const flushRound = () => {
+    // Source RPi queues attachments across ordinary user rows, then emits them
+    // before that user round. Assistant/tool-result rows delimit the round.
+    lifecycleOrdered.push(
+      ...pending.filter((row) => row.contextPlacement === "subagent-start"),
+      ...pending.filter((row) => row.contextPlacement !== "subagent-start"),
+    );
+    pending.length = 0;
+  };
+  for (const message of messages.slice(activeContextStart(messages))) {
+    if (
+      message.role === "assistant" ||
+      message.content.some((block) => block.type === "tool_result")
+    ) {
+      flushRound();
+      lifecycleOrdered.push(message);
+    } else pending.push(message);
+  }
+  flushRound();
+  const rows = lifecycleOrdered.map((message) => ({
     ...message,
     content:
       message.thinkingStripFrom === undefined

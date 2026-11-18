@@ -40,6 +40,12 @@ import { activeContextStart } from "./context-usage.js";
 import type { AgentStopHookResult } from "./tool-hook-runtime.js";
 import { toolCallForExecution } from "./tool-call-normalization.js";
 import type { QueryEffort } from "./query-model-effort.js";
+import { TextReadCaptureError } from "./tools.js";
+import {
+  NativeSessionJournalError,
+  type NativeSessionJournal,
+  type NativeJournalRequestOptions,
+} from "./native-session-journal.js";
 
 // Independent continuation instruction; the original bundled prompt is not incorporated.
 const continueResponse = (): Message => ({
@@ -77,6 +83,15 @@ export async function runAgent(options: {
   signal: AbortSignal;
   onEvent: (event: AgentEvent) => void;
   onStreamProgress?: CompletionRequest["onStreamProgress"];
+  nativeRecording?: CompletionRequest["nativeRecording"];
+  nativeJournal?: {
+    journal: NativeSessionJournal;
+    requestProfile(): NativeJournalRequestOptions;
+    /** The actual owning tool adapter must be admitted before any tool side effect. */
+    admitToolCall(
+      call: import("./types.js").ToolUse,
+    ): boolean | Promise<boolean>;
+  };
   stopHook?: (context: {
     messages: Message[];
     signal: AbortSignal;
@@ -87,6 +102,16 @@ export async function runAgent(options: {
     throw new Error("maxTurns must be a positive integer");
   if (!Number.isSafeInteger(options.maxTokens) || options.maxTokens < 1)
     throw new Error("maxTokens must be a positive integer");
+  if (
+    options.nativeJournal &&
+    (options.autoCompact !== false ||
+      options.thinkingResumption === true ||
+      options.stopHook !== undefined ||
+      options.nativeRecording !== undefined)
+  )
+    throw new NativeSessionJournalError(
+      "Native journal requires its explicit noncompacting ordinary query and owning recorder",
+    );
   const usage: Usage = { input_tokens: 0, output_tokens: 0 };
   const attemptBudget =
     options.maxApiAttempts === undefined
@@ -242,11 +267,23 @@ export async function runAgent(options: {
       throw new Error("Context is full and automatic compaction is disabled");
     let completion: Awaited<ReturnType<Provider["complete"]>>;
     const queryEffort = options.queryEffort?.();
+    const nativeProfile = options.nativeJournal?.requestProfile();
+    if (nativeProfile && nativeProfile.requestedModel !== options.model)
+      throw new NativeSessionJournalError(
+        "Native journal projection does not own the current query model",
+      );
+    const nativeRequest =
+      nativeProfile === undefined
+        ? undefined
+        : await options.nativeJournal?.journal.projectRequest({
+            ...nativeProfile,
+            signal: options.signal,
+          });
     try {
       completion = await options.provider.complete({
         model: options.model,
         system: options.system,
-        messages: options.messages,
+        messages: nativeRequest?.projection.messages ?? options.messages,
         tools: options.tools.definitions,
         maxTokens: options.maxTokens,
         ...(options.useModelTokenDefaults
@@ -256,6 +293,11 @@ export async function runAgent(options: {
         ...(resumeIncompleteThinking ? { resumeIncompleteThinking: true } : {}),
         signal: options.signal,
         onText: (text) => options.onEvent({ type: "text", text }),
+        ...(options.nativeJournal
+          ? { nativeRecording: options.nativeJournal.journal.responseHost }
+          : options.nativeRecording === undefined
+            ? {}
+            : { nativeRecording: options.nativeRecording }),
         ...(options.onStreamProgress === undefined
           ? {}
           : { onStreamProgress: options.onStreamProgress }),
@@ -319,6 +361,10 @@ export async function runAgent(options: {
       turns--;
       continue;
     }
+    await options.nativeJournal?.journal.recordResponse(
+      completion.nativeResponse,
+      options.signal,
+    );
     usage.input_tokens += completion.usage.input_tokens;
     lastTransitionReactive = false;
     usage.output_tokens += completion.usage.output_tokens;
@@ -336,6 +382,9 @@ export async function runAgent(options: {
       ...(completion.responseId === undefined
         ? {}
         : { responseId: completion.responseId }),
+      ...(completion.nativeResponse === undefined
+        ? {}
+        : { nativeResponse: completion.nativeResponse }),
       requestedModel: completion.model ?? options.model,
       ...(completion.resumable === undefined
         ? {}
@@ -351,6 +400,12 @@ export async function runAgent(options: {
     const calls = completion.content.filter(
       (block) => block.type === "tool_use",
     );
+    if (options.nativeJournal)
+      for (const call of calls)
+        if (!(await options.nativeJournal.admitToolCall(call)))
+          throw new NativeSessionJournalError(
+            `Tool ${call.name} requires its actual native result producer`,
+          );
     const readModel = completion.model ?? options.model,
       readHistory = options.messages.slice();
     const readWindow =
@@ -450,7 +505,12 @@ export async function runAgent(options: {
               toolCallForExecution(call),
               options.signal,
             );
-          } catch {
+          } catch (error) {
+            if (
+              error instanceof TextReadCaptureError ||
+              error instanceof NativeSessionJournalError
+            )
+              throw error;
             abortIfNeeded(options.signal);
             result = {
               type: "tool_result",
@@ -461,6 +521,7 @@ export async function runAgent(options: {
           }
           if (result.tool_use_id !== call.id)
             throw new Error("Tool executor returned a mismatched tool result");
+          options.nativeJournal?.journal.assertToolResultCommitted(call.id);
           results[index] = result;
           options.onEvent({ type: "tool_result", result });
           abortIfNeeded(options.signal);

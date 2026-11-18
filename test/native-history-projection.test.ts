@@ -11,6 +11,7 @@ import {
 import {
   NativeHistoryProjectionError,
   projectNativeHistory,
+  projectNativeHistoryForModelRequest,
   reconstructNativeHistory,
   type NativeHistoryOptions,
 } from "../src/native-history-projection.js";
@@ -71,6 +72,78 @@ const document = (rows: readonly NativeJson[]) =>
   decodeNativeSession(encodeNativeSessionRows(rows), {
     parser: "source-line-fallback",
   });
+
+test("model-request projection admits live user and fully settled result tails while completed resume keeps its boundary", () => {
+  const first = document([row("human", null, "user", "LIVE HUMAN")]);
+  assert.deepEqual(
+    projectNativeHistoryForModelRequest(first, options("human")).messages,
+    [{ role: "user", content: [text("LIVE HUMAN")] }],
+  );
+  expectCode(
+    () => projectNativeHistory(first, options("human")),
+    "unsupported-incomplete-turn",
+  );
+  const settled = document([
+    row("human", null, "user", "LIVE HUMAN"),
+    row("call", "human", "assistant", [call("owned")], {
+      nativeMessage: { stop_reason: "tool_use" },
+    }),
+    row("result", "call", "user", [result("owned")]),
+  ]);
+  const live = projectNativeHistoryForModelRequest(settled, options("result"));
+  assert.deepEqual(
+    live.messages.map((message) => message.role),
+    ["user", "assistant", "user"],
+  );
+  assert.deepEqual(live.messages.at(-1)?.content, [result("owned")]);
+  expectCode(
+    () => projectNativeHistory(settled, options("result")),
+    "unsupported-incomplete-turn",
+  );
+});
+
+test("request projection rejects outstanding tools and interrupted thinking without adding a synthetic reply", () => {
+  const pending = document([
+    row("human", null, "user", "LIVE HUMAN"),
+    row("call", "human", "assistant", [call("pending")], {
+      nativeMessage: { stop_reason: "tool_use" },
+    }),
+    row("new", "call", "user", "CANNOT_HIDE_PENDING_CALL"),
+  ]);
+  expectCode(
+    () => projectNativeHistoryForModelRequest(pending, options("new")),
+    "unresolved-tool-use",
+  );
+  const crossed = document([
+    row("human", null, "user", "LIVE HUMAN"),
+    row("call", "human", "assistant", [call("pending")], { nativeMessage: { stop_reason: "tool_use" } }),
+    row("new", "call", "user", "CANNOT_CROSS_PENDING_CALL"),
+    row("result", "new", "user", [result("pending")]),
+  ]);
+  expectCode(() => projectNativeHistoryForModelRequest(crossed, options("result")), "human-crosses-pending-response");
+  const interrupted = document([
+    row("human", null, "user", "LIVE HUMAN"),
+    row("partial", "human", "assistant", [text("PARTIAL")], {
+      nativeMessage: { stop_reason: "max_tokens" },
+    }),
+    row("new", "partial", "user", "CONTINUE"),
+  ]);
+  expectCode(
+    () => projectNativeHistoryForModelRequest(interrupted, options("new")),
+    "unsupported-interrupted-model-request",
+  );
+  const thinking = document([
+    row("human", null, "user", "LIVE HUMAN"),
+    row("answer", "human", "assistant", [text("ACTUAL_RESUMED")], {
+      resumedFromIncompleteThinking: true,
+    }),
+    row("new", "answer", "user", "CONTINUE"),
+  ]);
+  expectCode(
+    () => projectNativeHistoryForModelRequest(thinking, options("new")),
+    "unsupported-incomplete-thinking-request",
+  );
+});
 function expectCode(fn: () => unknown, code: string): void {
   assert.throws(
     fn,

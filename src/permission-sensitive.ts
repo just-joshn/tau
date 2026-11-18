@@ -69,6 +69,7 @@ export function sensitiveWriteReason(
   file: string,
   cwd: string,
   settingsPaths: readonly string[] = [],
+  options: { admittedAgentMemory?: boolean } = {},
 ): string | undefined {
   const absolute = path.resolve(cwd, file),
     root = path.resolve(cwd);
@@ -97,6 +98,9 @@ export function sensitiveWriteReason(
     const component = fold(name);
     if (!sensitiveDirectories.has(component)) continue;
     if (component === ".claude") {
+      // vct's admitted memory branch precedes this broad uJ directory hold.
+      // Exact settings targets and every other sensitive category still apply.
+      if (options.admittedAgentMemory) continue;
       if (nestedWorktree)
         return "This path changes a sensitive configuration directory";
       if (fold(components[index + 1] ?? "") === "worktrees") {

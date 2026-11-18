@@ -7,9 +7,14 @@ import { z } from "zod";
 import { messageSchema } from "./types.js";
 import type { BackgroundTaskSnapshot } from "./background-agent-runtime.js";
 
+// Native Iis accepts the hexadecimal UUID shape without RFC version/variant
+// restrictions. Keep the same safe filename grammar when adopting its identity.
+export const sessionIdSchema = z
+  .string()
+  .regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
 export const sessionSchema = z.object({
   version: z.literal(1),
-  id: z.uuid(),
+  id: sessionIdSchema,
   cwd: z.string(),
   model: z.string().min(1),
   updatedAt: z.iso.datetime(),
@@ -41,7 +46,7 @@ export const sessionSchema = z.object({
 export type Session = z.infer<typeof sessionSchema>;
 export const subagentArchiveSchema = z.object({
   version: z.literal(1),
-  parentSessionId: z.uuid(),
+  parentSessionId: sessionIdSchema,
   agentId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/),
   agentType: z.string(),
   cwd: z.string(),
@@ -83,14 +88,14 @@ export class SessionStore {
   }
 
   pathFor(id: string): string {
-    return join(this.directory, `${z.uuid().parse(id)}.json`);
+    return join(this.directory, `${sessionIdSchema.parse(id)}.json`);
   }
 
   /** Own JSON child archives are nested beneath the parent, outside latest-session selection. */
   subagentPathFor(parentSessionId: string, agentId: string): string {
     return join(
       this.directory,
-      z.uuid().parse(parentSessionId),
+      sessionIdSchema.parse(parentSessionId),
       "subagents",
       `${subagentArchiveSchema.shape.agentId.parse(agentId)}.json`,
     );
@@ -107,7 +112,7 @@ export class SessionStore {
   async saveBackgroundTask(
     snapshot: Readonly<BackgroundTaskSnapshot>,
   ): Promise<void> {
-    const parent = z.uuid().parse(snapshot.sessionId),
+    const parent = sessionIdSchema.parse(snapshot.sessionId),
       agent = subagentArchiveSchema.shape.agentId.parse(snapshot.agentId);
     const base = this.subagentPathFor(parent, agent).replace(/\.json$/, "");
     const values = [
@@ -207,7 +212,7 @@ export class SessionStore {
   }
 
   async load(id: string): Promise<Session> {
-    const safeId = z.uuid().parse(id);
+    const safeId = sessionIdSchema.parse(id);
     const file = await open(
       this.pathFor(safeId),
       constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,

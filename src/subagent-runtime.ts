@@ -798,6 +798,7 @@ export class SubagentRuntime implements ToolExecutor {
       if (startContext?.length)
         messages.push({
           role: "user",
+          contextPlacement: "subagent-start",
           content: startContext.map((value) => ({ type: "text", text: value })),
         });
       const afterStart = await built.afterStart?.(controller.signal);

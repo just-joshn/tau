@@ -9,6 +9,9 @@ import { help, parseOptions, permissionModeSchema } from "./options.js";
 import { buildBaseSystemPrompt } from "./prompt.js";
 import { AnthropicProvider } from "./provider.js";
 import { newSession, SessionStore } from "./session.js";
+import { importNativeSessionFile } from "./native-session-import.js";
+import { createLaunchAgentMemoryHost } from "./agent-memory-launch.js";
+import { createLaunchScopedPermissionHost } from "./scoped-permission-launch.js";
 import { createTools } from "./tools.js";
 import { ReadState } from "./read-state.js";
 import { defaultOutputTokens, resolveModelFacts } from "./reasoning.js";
@@ -26,6 +29,13 @@ import {
 import { createInstructionCatalog } from "./instructions.js";
 import { InstructionContext } from "./instruction-context.js";
 import { createHookRegistry, type HookSource } from "./hooks.js";
+import { createAgentDefinitionHookScope } from "./agent-definition-hooks.js";
+import { createAgentHookOriginResolver } from "./agent-hook-origin.js";
+import { resolveWorkspaceProjectIdentity } from "./workspace-configuration.js";
+import {
+  createReducedScopedHookRegistry,
+  ordinaryDirectAgentDefinitionHookProvenance,
+} from "./scoped-hook-dispatch.js";
 import { createSessionHookHost } from "./session-hooks.js";
 import {
   createSessionSkillHost,
@@ -35,7 +45,6 @@ import {
   SessionSkillHookRegistry,
   createSkillHookExecutionRegistry,
 } from "./skill-hook-registry.js";
-import { composeHookRegistries } from "./composite-hooks.js";
 import { createSessionTaskHost } from "./task-session.js";
 import { createSessionAgentHost } from "./agent-session.js";
 import { wrapCatalogTools } from "./catalog-session.js";
@@ -177,7 +186,16 @@ async function main(): Promise<void> {
   });
   const store = await SessionStore.create(cwd);
   let session = options.resume
-    ? await store.load(options.resume)
+    ? options.resume.trim().toLowerCase().endsWith(".jsonl")
+      ? (
+          await importNativeSessionFile({
+            path: options.resume,
+            cwd,
+            model: launch.model,
+            signal: new AbortController().signal,
+          })
+        ).session
+      : await store.load(options.resume)
     : options.continue
       ? await store.latest()
       : newSession(cwd, launch.model);
@@ -230,6 +248,10 @@ async function main(): Promise<void> {
   };
   const createHookHost = () => {
     const hookSessionId = session.id;
+    const personalConfigRestricted =
+      triBoolean(process.env.CLAUDE_CODE_RESTRICT_PERSONAL_CONFIG) === true;
+    const hookProvenance = () =>
+      ordinaryDirectAgentDefinitionHookProvenance({ personalConfigRestricted });
     const sources: HookSource[] = launch.snapshot.documents.flatMap(
       (document) => {
         if (
@@ -265,24 +287,167 @@ async function main(): Promise<void> {
         "hooks",
       ),
     };
-    const base = createHookRegistry(
-        [...sources, ...plugins.hookSources],
-        settings,
-      ),
+    const base = createHookRegistry([...sources, ...plugins.hookSources], {
+        ...settings,
+        consumeOnce: false,
+      }),
       skillHooks = new SessionSkillHookRegistry(settings);
-    const registry = composeHookRegistries(
-      base,
-      createSkillHookExecutionRegistry(skillHooks, () => hookSessionId),
+    // Sessions without hooks retain their existing restricted permission mode.
+    // Executing actual restricted hooks requires the native arbitration adapter.
+    if (
+      personalConfigRestricted &&
+      !settings.disabled &&
+      base
+        .list()
+        .some(
+          (entry) =>
+            !settings.managedOnly ||
+            entry.origin.managed === true ||
+            entry.origin.source === "policySettings",
+        )
+    )
+      hookProvenance();
+    const rootSkills = createSkillHookExecutionRegistry(
+      skillHooks,
+      () => hookSessionId,
     );
+    const settingsBackend = {
+      id: "settings",
+      registry: base,
+      nativeOrigin: (entry: import("./hooks.js").HookDispatchCandidate) => ({
+        namespace: "hook" as const,
+        ...(entry.origin.pluginRoot === undefined
+          ? {}
+          : { pluginRoot: entry.origin.pluginRoot }),
+      }),
+    };
+    const skillOrigin = (
+      entry: import("./hooks.js").HookDispatchCandidate,
+    ) => ({
+      namespace: "hook" as const,
+      ...(entry.origin.pluginRoot === undefined
+        ? {}
+        : { skillRoot: entry.origin.pluginRoot }),
+    });
+    const registry = createReducedScopedHookRegistry({
+      ownerSessionId: hookSessionId,
+      defaultShell: "bash",
+      personalConfigRestricted: false,
+      backends: () => [
+        settingsBackend,
+        { id: "root-skill", registry: rootSkills, nativeOrigin: skillOrigin },
+      ],
+    });
+    const definitionScopes = new Map<
+      string,
+      ReturnType<typeof createAgentDefinitionHookScope>
+    >();
+    const childSkills = new Map<
+      string,
+      ReturnType<typeof createSkillHookExecutionRegistry>
+    >();
+    const childDispatchers = new Map<
+      string,
+      ReturnType<typeof createReducedScopedHookRegistry>
+    >();
+    const originResolver = createAgentHookOriginResolver({
+      context: () => ({
+        persistedTrustEnabled: !options.ignorePersistedTrust,
+        ...(launch.trustedProjectKeys === undefined
+          ? {}
+          : { trustedProjectKeys: launch.trustedProjectKeys }),
+        workspaceRoots: [cwd],
+      }),
+      resolveProjectIdentity: (folder, signal) => {
+        signal.throwIfAborted();
+        const identity = resolveWorkspaceProjectIdentity(folder);
+        signal.throwIfAborted();
+        return identity;
+      },
+      // This ordinary local host has no workspace restriction state or added
+      // restricted roots (native Qpr=null and its separate root map is empty).
+      restrictedProjectKey: () => false,
+    });
+    const definitionTrusted = (
+      definition: Readonly<
+        import("./agent-definitions.js").LocalAgentDefinition
+      >,
+      signal: AbortSignal,
+    ) => originResolver.trusted(definition, signal);
+    const definitionScope = (
+      plan: Readonly<import("./subagent-runtime.js").SubagentPlan>,
+      owningPolicy: () => import("./tool-policy.js").ToolPolicy,
+    ) => {
+      const existing = definitionScopes.get(plan.agentId);
+      if (existing) return existing;
+      const scope = createAgentDefinitionHookScope({
+        agentId: plan.agentId,
+        ownerSessionId: hookSessionId,
+        definition: plan.definition,
+        policy: () => settings,
+        admitDefinition: (_definition, signal) => {
+          signal.throwIfAborted();
+          return !inheritedReadDeny(owningPolicy());
+        },
+        admitOrigin: (definition, signal) => {
+          signal.throwIfAborted();
+          // Managed-only command policy excludes session frontmatter, including
+          // policy-source definitions; no restricted execution facts are needed.
+          return !settings.managedOnly && definitionTrusted(definition, signal);
+        },
+        provenance: () => {
+          const provenance = hookProvenance();
+          return {
+            personal: provenance.personal,
+            checkout: provenance.checkout,
+          };
+        },
+        admitExecution: ({ definition, signal }) => {
+          signal.throwIfAborted();
+          return definitionTrusted(definition, signal);
+        },
+        defaultShell: "bash",
+      });
+      definitionScopes.set(plan.agentId, scope);
+      return scope;
+    };
     const childRegistry = (
       plan: Readonly<import("./subagent-runtime.js").SubagentPlan>,
-    ) =>
-      composeHookRegistries(
-        base,
-        createSkillHookExecutionRegistry(skillHooks, () => plan.agentId, {
+    ) => {
+      const cached = childDispatchers.get(plan.agentId);
+      if (cached) return cached;
+      const skills = createSkillHookExecutionRegistry(
+        skillHooks,
+        () => plan.agentId,
+        {
           ownerSessionId: () => hookSessionId,
-        }),
+        },
       );
+      childSkills.set(plan.agentId, skills);
+      const dispatcher = createReducedScopedHookRegistry({
+        ownerSessionId: hookSessionId,
+        defaultShell: "bash",
+        personalConfigRestricted: false,
+        backends: () => {
+          const scope = definitionScopes.get(plan.agentId);
+          return [
+            settingsBackend,
+            { id: "child-skill", registry: skills, nativeOrigin: skillOrigin },
+            ...(scope
+              ? [
+                  {
+                    id: "definition",
+                    registry: scope.registry,
+                    nativeOrigin: () => ({ namespace: "hook" as const }),
+                  },
+                ]
+              : []),
+          ];
+        },
+      });
+      childDispatchers.set(plan.agentId, dispatcher);
+      return dispatcher;
+    };
     const childContext = (
       plan: Readonly<import("./subagent-runtime.js").SubagentPlan>,
     ) => {
@@ -354,6 +519,19 @@ async function main(): Promise<void> {
     });
     return {
       ...host,
+      async close() {
+        await host.close();
+        await Promise.allSettled(
+          [...childDispatchers.values()].map((value) => value.close()),
+        );
+        await Promise.allSettled([
+          base.close(),
+          rootSkills.close(),
+          ...[...childSkills.values()].map((value) => value.close()),
+          ...[...definitionScopes.values()].map((value) => value.close()),
+        ]);
+      },
+      definitionScope,
       agentLifecycle,
       get hasToolHooks() {
         return host.hasToolHooks;
@@ -397,7 +575,14 @@ async function main(): Promise<void> {
       registerSkillHooks: (
         request: import("./skill-hook-registry.js").SkillHookRequest,
       ) => {
-        const result = skillHooks.register(request);
+        if (settings.disabled || settings.managedOnly)
+          return skillHooks.register(request);
+        const provenance = hookProvenance();
+        const result = skillHooks.register({
+          ...request,
+          personal: provenance.personal,
+          checkout: provenance.checkout,
+        });
         if (result.registered) revision++;
         return result;
       },
@@ -609,6 +794,27 @@ async function main(): Promise<void> {
   const explorePlanEnabled = createExplorePlanAvailability(
     () => process.env.CLAUDE_CODE_DISABLE_EXPLORE_PLAN_AGENTS,
   );
+  const memoryHost = createLaunchAgentMemoryHost({
+    cwd,
+    launch,
+    model: currentModel,
+  });
+  const permissionOwners = new Map<
+    string,
+    ReturnType<typeof createLaunchScopedPermissionHost>
+  >();
+  const scopedPermissions = (
+    owner: string,
+    policy: () => import("./tool-policy.js").ToolPolicy,
+    mode: () => import("./types.js").PermissionMode,
+  ) => {
+    let host = permissionOwners.get(owner);
+    if (!host) {
+      host = createLaunchScopedPermissionHost({ cwd, launch });
+      permissionOwners.set(owner, host);
+    }
+    return host.scope({ policy, mode });
+  };
   const createAgents = async () => {
     const owningHooks = activeHooks(),
       ownerSessionId = session.id,
@@ -648,6 +854,11 @@ async function main(): Promise<void> {
       sessionId: () => ownerSessionId,
       model: currentModel,
       builtinAgents: builtin.definitions,
+      memory: memoryHost,
+      scopedPermissions: (policy, mode) =>
+        scopedPermissions(ownerSessionId, policy, mode),
+      definitionHooks: (plan) =>
+        owningHooks.definitionScope(plan, () => owningSkills.policy()),
       concurrencySlots: agentConcurrencySlots,
       background: {
         outputFile: (plan) =>
@@ -982,19 +1193,31 @@ async function main(): Promise<void> {
       const key = JSON.stringify([currentPolicy, activeHooks().revision, mode]);
       if (cached && cachedPolicy === key) return cached;
       const planPath = planHost?.location();
+      const memoryAccess = memoryHost.fileAccess(
+        () => currentPolicy,
+        () => mode,
+      );
       const builtins = createTools({
         cwd,
         mode,
         policy: currentPolicy,
         readState,
+        ...scopedPermissions(
+          session.id,
+          () => skillHost?.policy() ?? policy,
+          () => mode,
+        ),
         restorationExcludedPaths: [
           ...instructions.excludedPaths,
           ...(planPath ? [planPath] : []),
         ],
         ...(planHost ? planHost.access : {}),
+        memoryFileAllowance: memoryAccess.memoryFileAllowance,
         extraPathAdmission: async (request) => {
           const planned = await planHost?.access.extraPathAdmission(request);
           if (planned !== undefined) return planned;
+          const memory = await memoryAccess.extraPathAdmission(request);
+          if (memory !== undefined) return memory;
           if (request.operation !== "Read") return undefined;
           const path = resolve(request.requestedPath);
           return agentHosts.some((host) =>

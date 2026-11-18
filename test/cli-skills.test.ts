@@ -362,7 +362,7 @@ test(
 );
 
 test(
-  "skill hooks register in the active session and successful once removal preserves settings once state",
+  "native settings once metadata repeats while session Skill hooks remove only after success",
   async () => {
     const f = await fixture("placeholder"),
       script = join(f.root, "hook.cjs"),
@@ -411,10 +411,12 @@ test(
       rows.map((row) => [row.event, row.tool]),
       [
         ["PreToolUse", "Skill"],
+        ["PreToolUse", "Write"],
         ["PostToolUse", "Write"],
+        ["PreToolUse", "Write"],
       ],
     );
-    assert.equal(rows[1]?.root, join(f.config, "skills", "owned"));
+    assert.equal(rows[2]?.root, join(f.config, "skills", "owned"));
     const blocks = blocksOf(f.body(2));
     const completed = blocks.find(
       (block) => block.type === "tool_result" && block.tool_use_id === "call-2",
