@@ -11,7 +11,8 @@
     "--allowed-tools",
     "Write",
     "--output-format",
-    "stream-json"
+    "stream-json",
+    "--verbose"
   ],
   "modelScript": [
     {

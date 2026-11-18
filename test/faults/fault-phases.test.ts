@@ -33,9 +33,10 @@ import { fixtureSse } from "../helpers/sse-fixture.js";
 
 const resultSchema = z.object({
   type: z.literal("result"),
+  subtype: z.string(),
   is_error: z.boolean(),
-  is_partial: z.boolean().optional(),
-  result: z.string(),
+  result: z.string().optional(),
+  api_error_status: z.number().nullable().optional(),
 });
 
 function envelope(run: CliRun) {
@@ -77,7 +78,9 @@ test("INV-13 before dispatch: a refused connection ends as an error without outp
     provider: { url: `http://127.0.0.1:${address.port}` },
   });
   assertFailed(run);
-  assert.equal(envelope(run).result, "");
+  // A failed model request ends as the original's API-error reply.
+  assert.equal(envelope(run).subtype, "success");
+  assert.equal(envelope(run).api_error_status, null);
 });
 
 test("INV-13 during streaming: a drop before any completed block ends as an error", async () => {
@@ -96,7 +99,7 @@ test("INV-13 during streaming: a drop before any completed block ends as an erro
   }
 });
 
-test("INV-13 during streaming: a drop after a completed block exits 0 flagged is_partial with a warning", async () => {
+test("INV-13 during streaming: a drop after a completed block exits 0 with the kept text and a warning", async () => {
   // Two text blocks; the cut follows the second block's text, which tau
   // prints only after it has read the first block's stop.
   let sawSecondBlock!: () => void;
@@ -116,7 +119,15 @@ test("INV-13 during streaming: a drop after a completed block exits 0 flagged is
   ]);
   let stdout = "";
   const run = await runCli({
-    args: ["-p", "hi", "--output-format", "stream-json", ...NO_RECOVERY],
+    args: [
+      "-p",
+      "hi",
+      "--output-format",
+      "stream-json",
+      "--verbose",
+      "--include-partial-messages",
+      ...NO_RECOVERY,
+    ],
     provider,
     onSpawn: (child) => {
       child.stdout?.on("data", (chunk: string) => {
@@ -132,7 +143,6 @@ test("INV-13 during streaming: a drop after a completed block exits 0 flagged is
     JSON.parse(run.stdout.trim().split("\n").at(-1) ?? ""),
   );
   assert.equal(result.is_error, false);
-  assert.equal(result.is_partial, true);
   assert.equal(result.result, "kept");
   assert.match(run.stderr, /Response interrupted/);
 });

@@ -17,7 +17,6 @@ const result = z.looseObject({
   session_id: z.string(),
   result: z.string(),
   is_error: z.boolean(),
-  is_partial: z.boolean().optional(),
 });
 
 const sent = (request: { body: unknown } | undefined) =>
@@ -199,7 +198,7 @@ describe("results", () => {
     });
   });
 
-  test("a stream cut off after a complete block keeps the text and marks the result partial", async () => {
+  test("a stream cut off after a complete block keeps the text and warns it is incomplete", async () => {
     const provider = await startMockProvider([
       {
         kind: "truncate",
@@ -218,7 +217,6 @@ describe("results", () => {
     expect(result.parse(JSON.parse(run.stdout))).toMatchObject({
       result: "kept text",
       is_error: false,
-      is_partial: true,
     });
     expect(provider.requests.length).toBe(1);
   });

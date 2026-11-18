@@ -15,7 +15,8 @@
     "--allowed-tools",
     "Bash",
     "--output-format",
-    "stream-json"
+    "stream-json",
+    "--verbose"
   ],
   "modelScript": [
     {

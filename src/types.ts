@@ -105,6 +105,7 @@ export const assistantBlockSchema = z.discriminatedUnion("type", [
   thinkingBlockSchema,
   redactedThinkingSchema,
 ]);
+export type AssistantBlock = z.infer<typeof assistantBlockSchema>;
 export const blockSchema = z.discriminatedUnion("type", [
   textBlockSchema,
   toolUseSchema,
@@ -266,6 +267,12 @@ export interface CompletionRequest {
   /** Replace provisional text for this model round, preserving previous completed rounds. */
   onTextReset?: (text: string) => void;
   onThinkingStrip?: (strip: ThinkingStrip) => void;
+  /** Every accepted SSE event, parsed and raw; content_block_stop carries its committed block. */
+  onStreamEvent?: (
+    event: import("./message-stream.js").StreamEvent,
+    raw: unknown,
+    block: AssistantBlock | undefined,
+  ) => void;
   attemptBudget?: ApiAttemptBudget;
   disablePromptCaching?: boolean;
   /** Side queries (WebFetch prompt step) send an explicit sampling temperature; main turns omit it. */
@@ -331,6 +338,20 @@ export type AgentEvent =
       freshRequests?: number;
       summaryModel?: string;
     }
-  | { type: "assistant"; message: Message }
+  /** A Messages API request is about to be sent; emitted only when runAgent asks for it. */
+  | { type: "model_request" }
+  /**
+   * One accepted SSE event, as parsed and as received. A content_block_stop
+   * carries the block it committed. Emitted only when runAgent asks for it.
+   */
+  | {
+      type: "stream_event";
+      event: import("./message-stream.js").StreamEvent;
+      raw: unknown;
+      block?: AssistantBlock;
+    }
+  | { type: "assistant"; message: Message; stopReason: string }
+  /** The model request failed for good; emitted only when runAgent asks for it. */
+  | { type: "api_error"; status: number | null }
   | { type: "tool_start"; tool: ToolUse }
   | { type: "tool_result"; result: ToolResult };

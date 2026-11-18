@@ -140,7 +140,8 @@ export const streamEventSchema = z.discriminatedUnion("type", [
   }),
   z.object({ type: z.literal("message_stop") }),
 ]);
-type Event = z.infer<typeof streamEventSchema>;
+export type StreamEvent = z.infer<typeof streamEventSchema>;
+type Event = StreamEvent;
 type OpenBlock = z.infer<typeof assistantBlockSchema> & { json?: string };
 
 export class StreamFailure extends Error {

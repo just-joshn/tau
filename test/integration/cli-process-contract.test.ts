@@ -32,9 +32,10 @@ const requestSchema = z.object({
 const resultSchema = z.object({
   type: z.literal("result"),
   session_id: z.uuid(),
-  result: z.string(),
+  subtype: z.string(),
+  result: z.string().optional(),
   is_error: z.boolean(),
-  error: z.string().optional(),
+  api_error_status: z.number().nullable().optional(),
 });
 
 /** The prompt text as the provider received it: the first user text block. */
@@ -253,8 +254,11 @@ test("a runtime provider failure with retries disabled exits 1 after one request
   assert.equal(json.exitCode, 1);
   assert.equal(json.stderr, "");
   const result = resultSchema.parse(JSON.parse(json.stdout));
+  // The original reports a failed model request as an API-error reply.
   assert.equal(result.is_error, true);
-  assert.equal(result.error, "Messages API HTTP error 500");
+  assert.equal(result.subtype, "success");
+  assert.equal(result.api_error_status, 500);
+  assert.equal(result.result, "Messages API HTTP error 500");
   assert.equal(jsonProvider.requests.length, 1);
 });
 
@@ -427,7 +431,13 @@ test("non-TTY stdout and stderr carry no escape or bell bytes from model text or
   for (const format of ["text", "json", "stream-json"]) {
     const provider = await startMockProvider(script());
     const run = await runCli({
-      args: ["-p", "show", "--output-format", format],
+      args: [
+        "-p",
+        "show",
+        "--output-format",
+        format,
+        ...(format === "stream-json" ? ["--verbose"] : []),
+      ],
       provider,
       files: { "evil.txt": `${hostile}\n` },
     });
@@ -479,7 +489,14 @@ test("stream-json is newline-terminated JSONL that parses under any read fragmen
   const live = jsonLineParser();
   let liveChunks = 0;
   const run = await runCli({
-    args: ["-p", "stream", "--output-format", "stream-json"],
+    args: [
+      "-p",
+      "stream",
+      "--output-format",
+      "stream-json",
+      "--verbose",
+      "--include-partial-messages",
+    ],
     provider,
     onSpawn: (child: ChildProcess) => {
       child.stdout?.on("data", (chunk: string) => {
@@ -500,12 +517,19 @@ test("stream-json is newline-terminated JSONL that parses under any read fragmen
     assert.equal(fragmented.rest(), "");
     assert.deepEqual(fragmented.records, live.records);
   }
-  const streamed = z
-    .array(z.object({ type: z.string(), text: z.string().optional() }))
-    .parse(live.records);
+  const textDelta = z.object({
+    type: z.literal("stream_event"),
+    event: z.object({
+      type: z.literal("content_block_delta"),
+      delta: z.object({ type: z.literal("text_delta"), text: z.string() }),
+    }),
+  });
   assert.equal(
-    streamed
-      .flatMap((event) => (event.type === "text" ? [event.text] : []))
+    live.records
+      .flatMap((record) => {
+        const parsed = textDelta.safeParse(record);
+        return parsed.success ? [parsed.data.event.delta.text] : [];
+      })
       .join(""),
     text,
   );

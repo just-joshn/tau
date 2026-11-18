@@ -1,6 +1,14 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { mkdir, open, readdir, rename, rm, realpath } from "node:fs/promises";
+import {
+  lstat,
+  mkdir,
+  open,
+  readdir,
+  rename,
+  rm,
+  realpath,
+} from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { z } from "zod";
@@ -57,10 +65,14 @@ export const subagentArchiveSchema = z.object({
 });
 export type SubagentArchive = z.infer<typeof subagentArchiveSchema>;
 
-export function newSession(cwd: string, model: string): Session {
+export function newSession(
+  cwd: string,
+  model: string,
+  id: string = randomUUID(),
+): Session {
   return {
     version: 1,
-    id: randomUUID(),
+    id,
     cwd,
     model,
     updatedAt: new Date().toISOString(),
@@ -217,6 +229,17 @@ export class SessionStore {
       await rename(temporary, destination);
     } finally {
       await rm(temporary, { force: true });
+    }
+  }
+
+  async has(id: string): Promise<boolean> {
+    try {
+      await lstat(this.pathFor(id));
+      return true;
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT")
+        return false;
+      throw error;
     }
   }
 

@@ -1153,6 +1153,17 @@ export class AnthropicProvider implements Provider {
             deadline.eventReceived(parsed.data.type === "ping");
             stream.accept(parsed.data, body);
             if (parsed.data.type === "message_start") noteBegun();
+            if (request.onStreamEvent) {
+              const closed =
+                parsed.data.type === "content_block_stop"
+                  ? stream.content.at(-1)
+                  : undefined;
+              request.onStreamEvent(
+                parsed.data,
+                body,
+                closed && normalizeCommittedToolBlocks([closed], request).at(0),
+              );
+            }
           } else {
             // The caller switches on the body type and still records progress
             // for a value it does not handle. Do not hide malformed known types.

@@ -3,6 +3,7 @@ import http.server
 import json
 import threading
 from scenarios_catalog import CATALOG_SCENARIO, catalog_turn
+import scenarios_sdk_io
 
 MODEL = "claude-sonnet-4-5-20250929"
 SCENARIOS = ["text", "files", "failures"]
@@ -27,7 +28,7 @@ def events(content, stop_reason="end_turn", model=MODEL):
 
 class MockState:
     def __init__(self, scenario="text", sse_framing="named"):
-        if scenario not in [*SCENARIOS, "mcp", "settings", "eager-instructions", RECOVERY_SCENARIO, CATALOG_SCENARIO] or sse_framing not in ["named", "data-only"]:
+        if scenario not in [*SCENARIOS, "mcp", "settings", "eager-instructions", RECOVERY_SCENARIO, CATALOG_SCENARIO, *scenarios_sdk_io.SCENARIOS] or sse_framing not in ["named", "data-only"]:
             raise ValueError("Unknown mock scenario or SSE framing")
         self.scenario = scenario
         self.sse_framing = sse_framing
@@ -113,7 +114,7 @@ class MockState:
                     if generation <= len(steps):
                         name, value = steps[generation-1]; content = [{"type": "tool_use", "id": "fixture-"+str(generation), "name": name, "input": value}]; stop = "tool_use"
                     else: content = [{"type": "text", "text": "file workflow done"}]; stop = "end_turn"
-                else: raise ValueError("unknown scenario")
+                else: content, stop = scenarios_sdk_io.respond(state.scenario, generation)
                 if body.get("stream"):
                     self.send_response(200); self.send_header("content-type", "text/event-stream"); self.end_headers()
                     self.wfile.write("".join(("event: "+event["type"]+"\n" if state.sse_framing == "named" else "")+

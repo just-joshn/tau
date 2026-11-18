@@ -11,12 +11,16 @@ import { fixtureSse } from "../helpers/sse-fixture.js";
 
 const row = z.object({
   type: z.unknown().optional(),
-  text: z.unknown().optional(),
+  message: z
+    .object({
+      content: z.array(z.looseObject({ text: z.string().optional() })),
+    })
+    .optional(),
   result: z.unknown().optional(),
 });
 
 test(
-  "print outputs select the final text block while stream events retain earlier accepted text",
+  "print outputs select the final text block while stream-json assistant messages retain earlier text",
   async () => {
     const root = await realpath(
       await mkdtemp(join(tmpdir(), "tau-print-result-")),
@@ -96,6 +100,7 @@ test(
             root,
             "--output-format",
             format,
+            ...(format === "stream-json" ? ["--verbose"] : []),
           ],
           {
             env: {
@@ -127,8 +132,10 @@ test(
         assert.equal(rows.at(-1)?.result, "final answer");
         if (format === "stream-json")
           assert.deepEqual(
-            rows.filter((r) => r.type === "text").map((r) => r.text),
-            ["before tool", "earlier text block", "final answer"],
+            rows
+              .filter((r) => r.type === "assistant")
+              .flatMap((r) => r.message?.content.map((block) => block.text)),
+            ["before tool", undefined, "earlier text block", "final answer"],
           );
       }
     }

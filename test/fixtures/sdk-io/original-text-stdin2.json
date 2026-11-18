@@ -1,0 +1,198 @@
+[
+  {
+    "kind": "system/init",
+    "cwd": "<cwd>",
+    "session_id": "<session-0>",
+    "model": "claude-sonnet-4-5-20250929",
+    "permissionMode": "bypassPermissions",
+    "apiKeySource": "ANTHROPIC_API_KEY",
+    "output_style": "default",
+    "mcp_servers": [],
+    "agents": [
+      "claude",
+      "Explore",
+      "general-purpose",
+      "Plan",
+      "statusline-setup"
+    ]
+  },
+  {
+    "kind": "assistant",
+    "message": {
+      "id": "msg_disposable_mock",
+      "type": "message",
+      "role": "assistant",
+      "model": "claude-sonnet-4-5-20250929",
+      "content": [
+        {
+          "type": "text",
+          "text": "mock done"
+        }
+      ],
+      "stop_reason": null,
+      "stop_sequence": null,
+      "usage": {
+        "input_tokens": 10,
+        "output_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0
+      },
+      "context_management": null
+    },
+    "parent_tool_use_id": null,
+    "session_id": "<session-0>"
+  },
+  {
+    "kind": "result",
+    "subtype": "success",
+    "is_error": false,
+    "num_turns": 1,
+    "result": "mock done",
+    "session_id": "<session-0>",
+    "stop_reason": "end_turn",
+    "terminal_reason": "completed",
+    "permission_denials": [],
+    "total_cost_usd": 7.500000000000001e-05,
+    "usage.input_tokens": 10,
+    "usage.output_tokens": 3,
+    "usage.cache_read_input_tokens": 0,
+    "usage.cache_creation_input_tokens": 0,
+    "modelUsage": {
+      "claude-sonnet-4-5-20250929": {
+        "inputTokens": 10,
+        "outputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheCreationInputTokens": 0,
+        "webSearchRequests": 0,
+        "costUSD": 7.500000000000001e-05,
+        "contextWindow": 200000,
+        "maxOutputTokens": 32000,
+        "thinkingTokens": 0,
+        "cacheCreationEphemeral5mInputTokens": 0,
+        "cacheCreationEphemeral1hInputTokens": 0,
+        "canonicalModel": "claude-sonnet-4-5",
+        "provider": "firstParty",
+        "costBasis": "list"
+      }
+    },
+    "model_usage_since_last_result": {
+      "claude-sonnet-4-5-20250929": {
+        "inputTokens": 10,
+        "outputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheCreationInputTokens": 0,
+        "webSearchRequests": 0,
+        "costUSD": 7.500000000000001e-05,
+        "contextWindow": 200000,
+        "maxOutputTokens": 32000,
+        "thinkingTokens": 0,
+        "cacheCreationEphemeral5mInputTokens": 0,
+        "cacheCreationEphemeral1hInputTokens": 0,
+        "canonicalModel": "claude-sonnet-4-5",
+        "provider": "firstParty",
+        "costBasis": "list"
+      }
+    },
+    "result_index": 0,
+    "api_error_status": null,
+    "errors": "<absent>"
+  },
+  {
+    "kind": "system/init",
+    "cwd": "<cwd>",
+    "session_id": "<session-0>",
+    "model": "claude-sonnet-4-5-20250929",
+    "permissionMode": "bypassPermissions",
+    "apiKeySource": "ANTHROPIC_API_KEY",
+    "output_style": "default",
+    "mcp_servers": [],
+    "agents": [
+      "claude",
+      "Explore",
+      "general-purpose",
+      "Plan",
+      "statusline-setup"
+    ]
+  },
+  {
+    "kind": "assistant",
+    "message": {
+      "id": "msg_disposable_mock",
+      "type": "message",
+      "role": "assistant",
+      "model": "claude-sonnet-4-5-20250929",
+      "content": [
+        {
+          "type": "text",
+          "text": "mock done"
+        }
+      ],
+      "stop_reason": null,
+      "stop_sequence": null,
+      "usage": {
+        "input_tokens": 10,
+        "output_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0
+      },
+      "context_management": null
+    },
+    "parent_tool_use_id": null,
+    "session_id": "<session-0>"
+  },
+  {
+    "kind": "result",
+    "subtype": "success",
+    "is_error": false,
+    "num_turns": 1,
+    "result": "mock done",
+    "session_id": "<session-0>",
+    "stop_reason": "end_turn",
+    "terminal_reason": "completed",
+    "permission_denials": [],
+    "total_cost_usd": 0.00015000000000000001,
+    "usage.input_tokens": 10,
+    "usage.output_tokens": 3,
+    "usage.cache_read_input_tokens": 0,
+    "usage.cache_creation_input_tokens": 0,
+    "modelUsage": {
+      "claude-sonnet-4-5-20250929": {
+        "inputTokens": 20,
+        "outputTokens": 6,
+        "cacheReadInputTokens": 0,
+        "cacheCreationInputTokens": 0,
+        "webSearchRequests": 0,
+        "costUSD": 0.00015000000000000001,
+        "contextWindow": 200000,
+        "maxOutputTokens": 32000,
+        "thinkingTokens": 0,
+        "cacheCreationEphemeral5mInputTokens": 0,
+        "cacheCreationEphemeral1hInputTokens": 0,
+        "canonicalModel": "claude-sonnet-4-5",
+        "provider": "firstParty",
+        "costBasis": "list"
+      }
+    },
+    "model_usage_since_last_result": {
+      "claude-sonnet-4-5-20250929": {
+        "inputTokens": 10,
+        "outputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheCreationInputTokens": 0,
+        "webSearchRequests": 0,
+        "costUSD": 7.500000000000001e-05,
+        "contextWindow": 200000,
+        "maxOutputTokens": 32000,
+        "thinkingTokens": 0,
+        "cacheCreationEphemeral5mInputTokens": 0,
+        "cacheCreationEphemeral1hInputTokens": 0,
+        "canonicalModel": "claude-sonnet-4-5",
+        "provider": "firstParty",
+        "costBasis": "list"
+      }
+    },
+    "result_index": 1,
+    "api_error_status": null,
+    "errors": "<absent>"
+  }
+]
