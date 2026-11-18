@@ -11,6 +11,7 @@ import {
   matchingToolRule,
   ToolInputRejected,
   ToolPermissionDenied,
+  permissionDeniedMarkers,
   type ToolPolicy,
 } from "./tool-policy.js";
 import type {
@@ -244,6 +245,7 @@ export function createWebTools(options: WebToolsOptions) {
         if (!approved)
           throw new ToolPermissionDenied(
             `Claude requested permissions to use ${name}, but you haven't granted it yet.`,
+            "pre-ask",
           );
       }
       started = true;
@@ -271,9 +273,7 @@ export function createWebTools(options: WebToolsOptions) {
           tool_use_id: original.id,
           is_error: true,
           content: error instanceof Error ? error.message : `${name} failed`,
-          ...(error instanceof ToolPermissionDenied
-            ? { permissionDenied: true }
-            : {}),
+          ...permissionDeniedMarkers(error),
           ...(error instanceof ToolInputRejected
             ? { inputRejected: true }
             : {}),

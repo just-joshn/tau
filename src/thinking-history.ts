@@ -175,6 +175,7 @@ export function projectMessages(
           apiContent,
           mcpResult: _raw,
           permissionDenied: _permission,
+          permissionDecideLocation: _location,
           inputRejected: _input,
           instructionFiles: _instructions,
           hookStop: _hookStop,

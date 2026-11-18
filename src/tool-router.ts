@@ -2,6 +2,7 @@ import {
   matchingToolRule,
   ToolInputRejected,
   ToolPermissionDenied,
+  permissionDeniedMarkers,
   toolPolicySchema,
   type ToolPolicy,
 } from "./tool-policy.js";
@@ -183,11 +184,13 @@ export function routeExternalTools(
               error instanceof Error
                 ? error.message
                 : "Permission approval did not complete",
+              "pre-ask",
             );
           }
           if (signal.aborted)
             throw new ToolPermissionDenied("Permission approval aborted");
-          if (!approved) throw new ToolPermissionDenied("Permission denied");
+          if (!approved)
+            throw new ToolPermissionDenied("Permission denied", "pre-ask");
         }
         inCall = true;
         const result = await external.callTool(
@@ -272,9 +275,7 @@ export function routeExternalTools(
               ...(pre?.updatedInput === undefined
                 ? {}
                 : { effectiveToolInput: effectiveCall.input }),
-              ...(error instanceof ToolPermissionDenied
-                ? { permissionDenied: true }
-                : {}),
+              ...permissionDeniedMarkers(error),
               ...(error instanceof ToolInputRejected
                 ? { inputRejected: true }
                 : {}),

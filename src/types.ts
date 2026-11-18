@@ -87,6 +87,8 @@ export const toolResultSchema = z.object({
   /** Raw MCP result, including structuredContent and _meta; local persistence only. */
   mcpResult: z.unknown().optional(),
   permissionDenied: z.boolean().optional(),
+  /** Recovered `decideLocation:"pre-ask"`: denied where an approval prompt would have been asked. */
+  permissionDecideLocation: z.literal("pre-ask").optional(),
   inputRejected: z.boolean().optional(),
   hookStop: z.object({ reason: z.string() }).optional(),
   /** Effective hook input and raw execution data; original assistant input stays unchanged. */

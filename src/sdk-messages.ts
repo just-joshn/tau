@@ -19,6 +19,7 @@ import type {
 export type SdkMessage =
   | SdkSystemInit
   | SdkSystemStatus
+  | SdkPermissionDenied
   | SdkCompactBoundary
   | SdkAssistantMessage
   | SdkUserMessage
@@ -61,6 +62,22 @@ export interface SdkSystemStatus extends Envelope {
   type: "system";
   subtype: "status";
   status: "requesting";
+}
+
+/**
+ * Emitted before the tool result when a call is denied where an approval would
+ * have been asked (recovered canUseTool wrapper, chunk-q67vgc7s.js: deny &&
+ * ski (decideLocation "pre-ask") && !sPe (invalid input)). Decision-reason
+ * fields stay absent because tau carries no recovered decisionReason.
+ */
+export interface SdkPermissionDenied {
+  type: "system";
+  subtype: "permission_denied";
+  tool_name: string;
+  tool_use_id: string;
+  message: string;
+  uuid: string;
+  session_id: string;
 }
 
 /** Marks completed context compaction (SDK schema r6, chunk-bprgtdg6.js). */
@@ -494,7 +511,22 @@ export class SdkQuery {
             tool_use_id: call.id,
             tool_input: call.input,
           });
+        const denied: SdkMessage[] =
+          result.permissionDecideLocation === "pre-ask" && call
+            ? [
+                {
+                  type: "system",
+                  subtype: "permission_denied",
+                  tool_name: sdkToolName(call.name),
+                  tool_use_id: call.id,
+                  message: unwrapToolError(result.content),
+                  uuid: this.#options.uuid(),
+                  session_id: this.#session,
+                },
+              ]
+            : [];
         return [
+          ...denied,
           {
             type: "user",
             message: {

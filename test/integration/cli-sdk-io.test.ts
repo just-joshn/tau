@@ -374,3 +374,54 @@ test("a print-mode permission denial is listed in permission_denials", async () 
     ],
   );
 });
+
+test("stream-json announces an unaskable denial before its tool result, but not a rule denial", async () => {
+  const run = async (extra: string[]) => {
+    const provider = await startMockProvider([
+      turn({
+        type: "tool_use",
+        id: "toolu_bash",
+        name: "Bash",
+        input: { command: "echo hi" },
+      }),
+      turn({ type: "text", text: "denied" }),
+    ]);
+    const cli = await runCli({
+      provider,
+      args: [
+        "-p",
+        "hi",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        ...extra,
+      ],
+    });
+    assert.equal(cli.exitCode, 0, cli.stderr);
+    return cli.stdout
+      .trim()
+      .split("\n")
+      .map((line) =>
+        z
+          .object({
+            type: z.string(),
+            subtype: z.string().optional(),
+            tool_name: z.string().optional(),
+            tool_use_id: z.string().optional(),
+          })
+          .loose()
+          .parse(JSON.parse(line)),
+      );
+  };
+  const asked = await run([]);
+  const index = asked.findIndex((m) => m.subtype === "permission_denied");
+  assert.ok(index > 0);
+  assert.equal(asked[index]?.tool_name, "Bash");
+  assert.equal(asked[index]?.tool_use_id, "toolu_bash");
+  assert.equal(asked[index + 1]?.type, "user");
+  const ruled = await run(["--disallowedTools", "Bash(echo hi)"]);
+  assert.equal(
+    ruled.some((m) => m.subtype === "permission_denied"),
+    false,
+  );
+});

@@ -579,10 +579,27 @@ export function combineToolPolicy(
 
 /** Local dispatch classification; API serializers must omit the marker fields. */
 export class ToolPermissionDenied extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    readonly decideLocation?: "pre-ask",
+  ) {
     super(message);
     this.name = "ToolPermissionDenied";
   }
+}
+
+/** Result marker fields for a permission denial, local only. */
+export function permissionDeniedMarkers(error: unknown): {
+  permissionDenied?: true;
+  permissionDecideLocation?: "pre-ask";
+} {
+  if (!(error instanceof ToolPermissionDenied)) return {};
+  return error.decideLocation === undefined
+    ? { permissionDenied: true }
+    : {
+        permissionDenied: true,
+        permissionDecideLocation: error.decideLocation,
+      };
 }
 export class ToolInputRejected extends Error {
   constructor(message: string) {

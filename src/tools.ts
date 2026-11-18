@@ -57,6 +57,7 @@ import {
   matchingToolRule,
   ToolInputRejected,
   ToolPermissionDenied,
+  permissionDeniedMarkers,
   toolNameSchema,
   toolPolicySchema,
   type ToolName,
@@ -794,11 +795,13 @@ export function createTools(options: {
         error instanceof Error
           ? error.message
           : "Permission approval did not complete",
+        "pre-ask",
       );
     }
     if (signal.aborted)
       throw new ToolPermissionDenied("Permission approval aborted");
-    if (!approved) throw new ToolPermissionDenied("Permission denied");
+    if (!approved)
+      throw new ToolPermissionDenied("Permission denied", "pre-ask");
     const accepted: PortToolPermissionTrace = {
       ...approvalTrace,
       approval: { approved: true, description: approvalDescription },
@@ -1631,9 +1634,7 @@ export function createTools(options: {
               ...(pre?.updatedInput === undefined
                 ? {}
                 : { effectiveToolInput: effectiveCall.input }),
-              ...(error instanceof ToolPermissionDenied
-                ? { permissionDenied: true }
-                : {}),
+              ...permissionDeniedMarkers(error),
               ...(error instanceof ToolInputRejected ||
               error instanceof z.ZodError
                 ? { inputRejected: true }
