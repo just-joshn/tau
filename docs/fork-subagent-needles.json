@@ -1,0 +1,21 @@
+{
+  "directive-opening": "You are a worker fork. The transcript above is the parent's history",
+  "fork-started": "Fork started \\u2014 that fork is you.",
+  "parent-call": "This is the parent's call, not yours. It may not have run yet, and its result goes to the parent.",
+  "other-call": "This call started a fork, and that fork is you. The call's other work and its result belong to the parent.",
+  "missing-tool-use": "No tool_use blocks found in assistant message for fork directive",
+  "when-to-use": "Selected explicitly via subagent_type: \"fork\" when the fork gate is on; never the default.",
+  "definition": "var Tq={agentType:gT",
+  "directive-fn": "function GSt(e,n){return`<${THt}>",
+  "messages-fn": "function SNs(",
+  "analytics": "tengu_fork_subagent_enabled",
+  "kill-switch-name": "tengu_federated_ullman",
+  "you-are-the-fork": "If you ARE the fork",
+  "background-clause": "runs in the background, and keeps its tool output out of your context",
+  "recursive-message": "Fork is not available inside a forked worker. Complete your task directly using your tools.",
+  "remote-message": "Fork cannot use isolation: \"remote\"",
+  "recursive-code": "subagent_recursive_fork",
+  "remote-code": "subagent_fork_remote_isolation",
+  "guard-fn": "function qr({isolation:n,querySource:e,messages:r",
+  "effort-ignored": "Ignored for subagent_type: \"fork\": a fork runs at your own effort."
+}

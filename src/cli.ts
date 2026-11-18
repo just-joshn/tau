@@ -1601,6 +1601,7 @@ async function main(): Promise<void> {
       ? agentHost.wrap(
           base,
           () => completeTools?.definitions ?? base().definitions,
+          () => session.messages,
         )
       : undefined;
     const withAgents = () => agentTools ?? base();

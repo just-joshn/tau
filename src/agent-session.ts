@@ -39,6 +39,7 @@ import type {
   ToolExecutor,
 } from "./types.js";
 import { triBoolean } from "./env-settings.js";
+import { FORK_SUBAGENT_TYPE, hasForkDirective } from "./fork-subagent.js";
 import type { createSubagentLifecycle } from "./subagent-lifecycle.js";
 import { pluginCustomizationOnly } from "./plugin-policy.js";
 import {
@@ -398,6 +399,7 @@ export async function createSessionAgentHost(options: {
     base: () => ToolExecutor,
     inherited?: Readonly<SubagentPlan>,
     scope?: () => readonly ToolDefinition[],
+    parentMessages?: () => readonly Message[],
   ): ReturnType<typeof createSubagentRuntime> => {
     const parentMode = () => (inherited ? liveMode(inherited) : options.mode());
     const hooks: ToolHookRuntime = inherited
@@ -414,6 +416,7 @@ export async function createSessionAgentHost(options: {
     const lifecycle = options.lifecycle;
     const runtimeOptions: SubagentRuntimeOptions = {
       registry,
+      env,
       hooks,
       enabled: () =>
         available() &&
@@ -435,9 +438,13 @@ export async function createSessionAgentHost(options: {
           ...runtime.definitions,
         ],
         allowedModes: allowedModes(parentMode()),
-        foregroundAllowed: !["1", "true"].includes(
-          env.CLAUDE_CODE_FORK_SUBAGENT ?? "",
-        ),
+        foregroundAllowed: true,
+        conversationMessages: parentMessages?.() ?? [],
+        isFork:
+          inherited !== undefined &&
+          (inherited.definition.agentType === FORK_SUBAGENT_TYPE ||
+            inherited.parent.isFork === true ||
+            hasForkDirective(parentMessages?.())),
         ...(inherited?.compaction.declaredCeiling
           ? { inheritedAutoCompactWindow: inherited.compaction.declaredCeiling }
           : {}),
@@ -802,6 +809,7 @@ export async function createSessionAgentHost(options: {
               ...tools().definitions,
               ...nested.definitions,
             ],
+          () => childHistories.get(plan.agentId)?.messages ?? contexts,
         );
         const wrapped: ToolExecutor = {
           get definitions() {
@@ -865,9 +873,12 @@ export async function createSessionAgentHost(options: {
         const definitionHooks = hasDefinitionHooks
           ? options.definitionHooks?.(plan)
           : undefined;
+        const forkPlan = plan.definition.agentType === FORK_SUBAGENT_TYPE;
         return {
-          system: `${options.system()}\n\n${plan.definition.prompt}${memory?.systemPrompt ? `\n\n${memory.systemPrompt}` : ""}`,
-          contextMessages: contexts,
+          system: forkPlan
+            ? options.system()
+            : `${options.system()}\n\n${plan.definition.prompt}${memory?.systemPrompt ? `\n\n${memory.systemPrompt}` : ""}`,
+          contextMessages: forkPlan ? [] : contexts,
           enforcesParentPolicy: true as const,
           handledFeatures: [
             ...(memory?.handledFeatures ?? []),
@@ -1105,8 +1116,9 @@ export async function createSessionAgentHost(options: {
     wrap(
       base: () => ToolExecutor,
       scope?: () => readonly ToolDefinition[],
+      parentMessages?: () => readonly Message[],
     ): ToolExecutor {
-      const runtime = makeRuntime(base, undefined, scope);
+      const runtime = makeRuntime(base, undefined, scope, parentMessages);
       return {
         get definitions() {
           return [...base().definitions, ...runtime.definitions];

@@ -13,6 +13,16 @@ import {
   type ToolHookRuntime,
 } from "./tool-hook-runtime.js";
 import { toolCallForExecution } from "./tool-call-normalization.js";
+import { FORK_AGENT_DEFINITION } from "./builtin-agent-definitions.js";
+import type { ForkSubagentEnv } from "./fork-subagent.js";
+import {
+  FORK_RECURSIVE_MESSAGE,
+  FORK_REMOTE_ISOLATION_MESSAGE,
+  FORK_SUBAGENT_TYPE,
+  buildForkMessages,
+  hasForkDirective,
+  isForkSubagentEnabled,
+} from "./fork-subagent.js";
 import {
   messageSchema,
   usageSchema,
@@ -109,6 +119,11 @@ export interface SubagentParentContext {
   foregroundAllowed: boolean;
   inheritedAutoCompactWindow?: unknown;
   sharedSessionCostCapUsd?: number;
+  /** Parent transcript cloned into a fork. Absent means a fresh child. */
+  conversationMessages?: readonly Message[];
+  isFork?: boolean;
+  forkSubagentDisabled?: boolean;
+  coordinator?: boolean;
 }
 export interface SubagentPlan {
   agentId: string;
@@ -241,6 +256,8 @@ export interface SubagentRuntimeOptions {
     ): void | Promise<void>;
   };
   hooks?: ToolHookRuntime;
+  /** Fork gate input. Absent is an empty env, which is the ordinary default gate. */
+  env?: ForkSubagentEnv;
   enabled?(): boolean;
   createAgentId?(): string;
   now?(): number;
@@ -317,6 +334,16 @@ function parentSnapshot(
       ...(parent.sharedSessionCostCapUsd === undefined
         ? {}
         : { sharedSessionCostCapUsd: parent.sharedSessionCostCapUsd }),
+      ...(parent.conversationMessages === undefined
+        ? {}
+        : { conversationMessages: parent.conversationMessages }),
+      ...(parent.isFork === undefined ? {} : { isFork: parent.isFork }),
+      ...(parent.forkSubagentDisabled === undefined
+        ? {}
+        : { forkSubagentDisabled: parent.forkSubagentDisabled }),
+      ...(parent.coordinator === undefined
+        ? {}
+        : { coordinator: parent.coordinator }),
     }),
   );
 }
@@ -491,8 +518,26 @@ export class SubagentRuntime implements ToolExecutor {
       },
     ];
   }
+  private forkEnabled(parent: SubagentParentContext): boolean {
+    return isForkSubagentEnabled(this.options.env ?? {}, {
+      ...(parent.forkSubagentDisabled === undefined
+        ? {}
+        : { forkSubagentDisabled: parent.forkSubagentDisabled }),
+      ...(parent.coordinator === undefined
+        ? {}
+        : { coordinator: parent.coordinator }),
+    });
+  }
   private validate(input: unknown): ForegroundAgentInput {
-    const parsed = foregroundAgentInputSchema.parse(input);
+    const raw = record(input) ? { ...input } : input;
+    if (
+      record(raw) &&
+      (raw.effort === "lower" || raw.effort === "higher") &&
+      typeof raw.subagent_type === "string" &&
+      canonicalSubagentType(raw.subagent_type) === FORK_SUBAGENT_TYPE
+    )
+      delete raw.effort;
+    const parsed = foregroundAgentInputSchema.parse(raw);
     if (record(input))
       for (const key of ["resume", "cwd", "name", "team_name"])
         if (input[key] !== undefined)
@@ -501,7 +546,11 @@ export class SubagentRuntime implements ToolExecutor {
       throw new Error(
         "Foreground Agent runtime requires explicit run_in_background:false; asynchronous launch is unsupported",
       );
-    if (parsed.isolation !== undefined)
+    const forkRemote =
+      parsed.isolation === "remote" &&
+      parsed.subagent_type !== undefined &&
+      canonicalSubagentType(parsed.subagent_type) === FORK_SUBAGENT_TYPE;
+    if (parsed.isolation !== undefined && !forkRemote)
       throw new Error(
         `Foreground Agent runtime does not support isolation:${parsed.isolation}`,
       );
@@ -512,6 +561,28 @@ export class SubagentRuntime implements ToolExecutor {
     parent: SubagentParentContext,
   ): Promise<Readonly<LocalAgentDefinition>> {
     const requested = input.subagent_type ?? "general-purpose";
+    if (
+      input.subagent_type !== undefined &&
+      canonicalSubagentType(input.subagent_type) === FORK_SUBAGENT_TYPE &&
+      this.forkEnabled(parent)
+    ) {
+      if (
+        parent.allowedAgentTypes &&
+        !parent.allowedAgentTypes.includes(FORK_SUBAGENT_TYPE) &&
+        !parent.allowedAgentTypes.includes(input.subagent_type)
+      )
+        throw new Error(
+          `Agent type '${input.subagent_type}' not found. Available agents: ${parent.allowedAgentTypes.join(", ") || "none"}`,
+        );
+      if (input.isolation === "remote")
+        throw new Error(FORK_REMOTE_ISOLATION_MESSAGE);
+      if (
+        parent.isFork === true ||
+        hasForkDirective(parent.conversationMessages)
+      )
+        throw new Error(FORK_RECURSIVE_MESSAGE);
+      return FORK_AGENT_DEFINITION;
+    }
     if (
       input.subagent_type !== undefined &&
       parent.allowedAgentTypes &&
@@ -655,21 +726,27 @@ export class SubagentRuntime implements ToolExecutor {
     if (launchMode !== "foreground" && launchMode !== "background")
       throw new Error("Host resolved an unsupported Agent launch mode");
     const isAsync = launchMode === "background";
-    const model = await this.options.resolveModel({
-      input,
-      definition,
-      parent,
-      signal,
-    });
+    const fork =
+      canonicalSubagentType(definition.agentType) === FORK_SUBAGENT_TYPE;
+    const model = fork
+      ? parent.parentModel
+      : await this.options.resolveModel({
+          input,
+          definition,
+          parent,
+          signal,
+        });
     signal.throwIfAborted();
     if (!model.trim()) throw new Error("Host resolved an empty subagent model");
-    const permissionMode = await this.options.resolvePermissionMode({
-      definition,
-      parent,
-      model,
-      signal,
-      isAsync,
-    });
+    const permissionMode = fork
+      ? parent.parentMode
+      : await this.options.resolvePermissionMode({
+          definition,
+          parent,
+          model,
+          signal,
+          isAsync,
+        });
     signal.throwIfAborted();
     if (!parent.allowedModes.includes(permissionMode))
       throw new Error(
@@ -681,7 +758,7 @@ export class SubagentRuntime implements ToolExecutor {
         currentDepth + 1,
         isAsync,
       ),
-      effort = input.effort ?? definition.effort;
+      effort = fork ? undefined : (input.effort ?? definition.effort);
     const plan = frozen(
       structuredClone({
         agentId: this.options.createAgentId?.() ?? `agent-${randomUUID()}`,
@@ -739,6 +816,12 @@ export class SubagentRuntime implements ToolExecutor {
     const started = this.options.now?.() ?? Date.now(),
       plan = await this.preparePlan(input, parent, signal, toolUseId);
     if (plan.isAsync) {
+      if (
+        canonicalSubagentType(plan.definition.agentType) === FORK_SUBAGENT_TYPE
+      )
+        throw new Error(
+          "Ordinary background scheduler does not support fork, isolation, named/team, spawn-mode or observer execution",
+        );
       const background = this.options.background;
       if (!background)
         throw new Error("Background Agent launch is unavailable");
@@ -778,17 +861,30 @@ export class SubagentRuntime implements ToolExecutor {
         throw new Error(
           `Agent materialization does not handle declared features: ${missing.join(", ")}`,
         );
-      const contexts = (built.contextMessages ?? []).map((message) =>
-        messageSchema.parse(structuredClone(message)),
-      );
-      if (contexts.some((message) => message.role !== "user"))
+      const fork =
+        canonicalSubagentType(definition.agentType) === FORK_SUBAGENT_TYPE;
+      const contexts = fork
+        ? []
+        : (built.contextMessages ?? []).map((message) =>
+            messageSchema.parse(structuredClone(message)),
+          );
+      if (!fork && contexts.some((message) => message.role !== "user"))
         throw new Error(
           "Fresh subagents cannot inherit assistant conversation context",
         );
-      const messages: Message[] = [
-        ...contexts,
-        { role: "user", content: [{ type: "text", text: input.prompt }] },
-      ];
+      const messages: Message[] = fork
+        ? buildForkMessages(
+            parent.conversationMessages ?? [],
+            input.prompt,
+            toolUseId,
+          ).map((message) => messageSchema.parse(message))
+        : [
+            ...contexts,
+            {
+              role: "user",
+              content: [{ type: "text", text: input.prompt }],
+            },
+          ];
       const startContext = await this.options.lifecycle?.start?.(
         plan,
         controller.signal,

@@ -288,14 +288,13 @@ test("ordinary unsupported async/fork/isolation/resume/team paths fail before ru
     { background: true as const },
     { isolation: "worktree" as const },
     { isolation: "remote" as const },
-    { agentType: "fork" },
   ]) {
-    const fixture = await setup({}, [definition(patch)]),
-      requested = patch.agentType ?? "owned-reader";
+    const agent = definition(patch),
+      fixture = await setup({}, [agent]);
     assert.equal(
       (
         await fixture.runtime.execute(
-          call(input({ subagent_type: requested })),
+          call(input({ subagent_type: agent.agentType })),
           signal(),
         )
       ).is_error,
@@ -308,6 +307,152 @@ test("ordinary unsupported async/fork/isolation/resume/team paths fail before ru
     (await forced.runtime.execute(call(), signal())).content,
     /host launch policy/,
   );
+});
+
+test("an enabled fork inherits the parent transcript, ignores the call's model and effort, and rejects remote or recursive forks", async () => {
+  const conversation: Message[] = [
+    {
+      role: "user",
+      content: [{ type: "text", text: "PARENT_PRIVATE_CONTEXT" }],
+    },
+    {
+      role: "assistant",
+      content: [
+        {
+          type: "tool_use",
+          id: "owned-parent-call",
+          name: "Agent",
+          input: { subagent_type: "fork" },
+        },
+      ],
+    },
+  ];
+  const seen: SubagentChildRequest[] = [];
+  const f = await setup(
+    {
+      resolveModel: ({ input, parent }) =>
+        input.model ? `from-input-${input.model}` : parent.parentModel,
+      resolvePermissionMode: () => "plan",
+      runChild: async (request) => {
+        seen.push(request);
+        return {
+          messages: [
+            ...request.messages,
+            {
+              role: "assistant",
+              content: [
+                {
+                  type: "tool_use",
+                  id: "child-read",
+                  name: "Read",
+                  input: {},
+                },
+              ],
+              usage: { input_tokens: 4, output_tokens: 1 },
+            },
+            {
+              role: "user",
+              content: [
+                {
+                  type: "tool_result",
+                  tool_use_id: "child-read",
+                  content: "CHILD_TOOL_SECRET",
+                },
+              ],
+            },
+            assistant("OWNED_FORK_FINAL"),
+          ],
+        };
+      },
+    },
+    [definition({ agentType: "fork", model: "haiku" })],
+    { conversationMessages: conversation },
+  );
+  const result = await f.runtime.execute(
+    call(
+      input({
+        subagent_type: "Fork",
+        model: "opus",
+        effort: "high",
+      }),
+    ),
+    signal(),
+  );
+  assert.equal(result.is_error, undefined);
+  assert.equal(seen.length, 1);
+  const child = first(seen);
+  assert.equal(child.plan.model, f.parent.parentModel);
+  assert.equal(child.plan.permissionMode, "default");
+  assert.equal(child.plan.effort, undefined);
+  assert.equal(child.plan.definition.agentType, "fork");
+  assert.equal(child.plan.definition.model, "inherit");
+  assert.match(JSON.stringify(child.messages), /PARENT_PRIVATE_CONTEXT/);
+  assert.match(JSON.stringify(child.messages), /fork-boilerplate/);
+  assert.match(JSON.stringify(child.messages), /Fork started/);
+  assert.match(
+    JSON.stringify(child.messages),
+    /Your directive: OWNED_AGENT_CHILD_REQUEST/,
+  );
+  assert.match(result.content, /OWNED_FORK_FINAL/);
+  assert.equal(result.content.includes("CHILD_TOOL_SECRET"), false);
+  assert.equal(
+    JSON.stringify(conversation).includes("CHILD_TOOL_SECRET"),
+    false,
+  );
+  assert.equal(conversation.length, 2);
+
+  const remote = await f.runtime.execute(
+    call(input({ subagent_type: "fork", isolation: "remote" })),
+    signal(),
+  );
+  assert.equal(remote.is_error, true);
+  assert.match(remote.content, /Fork cannot use isolation: "remote"/);
+
+  const recursive = await setup({}, [definition()], {
+    isFork: true,
+    conversationMessages: conversation,
+  });
+  assert.equal(
+    (
+      await recursive.runtime.execute(
+        call(input({ subagent_type: "fork" })),
+        signal(),
+      )
+    ).content,
+    "Fork is not available inside a forked worker. Complete your task directly using your tools.",
+  );
+  const marked = await setup({}, [definition()], {
+    conversationMessages: [
+      {
+        role: "user",
+        content: [{ type: "text", text: "<fork-boilerplate>\nalready inside" }],
+      },
+    ],
+  });
+  assert.match(
+    (
+      await marked.runtime.execute(
+        call(input({ subagent_type: "fork" })),
+        signal(),
+      )
+    ).content,
+    /not available inside a forked worker/,
+  );
+
+  const disabled = await setup(
+    { env: { CLAUDE_CODE_FORK_SUBAGENT: "false" } },
+    [definition({ agentType: "fork" })],
+  );
+  assert.match(
+    (
+      await disabled.runtime.execute(
+        call(input({ subagent_type: "fork" })),
+        signal(),
+      )
+    ).content,
+    /does not support inherited-context forks/,
+  );
+  assert.equal(disabled.children.length, 0);
 });
 
 test("exact names win and normalized fallback refuses ambiguous or unavailable candidates", async () => {

@@ -8,6 +8,7 @@ import {
   PLAN_PROMPT_SHELL_SEARCH,
   STATUSLINE_SETUP_PROMPT,
 } from "./builtin-agent-prompts.js";
+import { FORK_SUBAGENT_TYPE } from "./fork-subagent.js";
 
 export const DEFAULT_BUILTIN_SUBAGENT_TYPE = "general-purpose";
 export const BUILTIN_AGENT_TYPES = [
@@ -20,6 +21,20 @@ export const BUILTIN_AGENT_TYPES = [
   "claude-code-guide",
 ] as const;
 export type BuiltinAgentType = (typeof BUILTIN_AGENT_TYPES)[number];
+/** `Tq`. Kept out of `BUILTIN_AGENT_TYPES` so the ordinary catalog stays unchanged. */
+export const FORK_AGENT_DEFINITION: Readonly<LocalAgentDefinition> =
+  Object.freeze({
+    agentType: FORK_SUBAGENT_TYPE,
+    whenToUse:
+      'Fork \u2014 inherits full conversation context. Selected explicitly via subagent_type: "fork" when the fork gate is on; never the default.',
+    prompt: "",
+    source: "built-in",
+    baseDir: "built-in",
+    skills: Object.freeze([]),
+    tools: Object.freeze(["*"]),
+    maxTurns: 200,
+    model: "inherit",
+  });
 export type BuiltinAgentProfile = "default" | "none" | "coordinator";
 export const EXPLORATION_DISALLOWED_TOOLS: readonly string[] = Object.freeze([
   "Agent",

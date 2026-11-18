@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto";
 import { autoMemoryPrompt, type AutoMemoryStore } from "./auto-memory.js";
 import { triBoolean } from "./env-settings.js";
+import {
+  isForkBackgroundDefault,
+  resolveForkSubagentGate,
+} from "./fork-subagent.js";
 import { modelFacts } from "./model-facts.js";
 import {
   ACT_DONT_REDERIVE,
@@ -83,7 +87,14 @@ export interface PromptContext {
   interactive: boolean;
   env: PromptEnv;
   autoMemory?: AutoMemoryStore;
+  /** Absent uses the ordinary embedded-search default. */
+  hasEmbeddedSearch?: boolean;
+  /** A forked worker or any other subagent omits parent-only agent guidance. */
+  isFork?: boolean;
+  isSubagent?: boolean;
 }
+export type AgentGuidanceMode =
+  "none" | "fork" | "fork-background" | "with-nudge" | "plain";
 interface PromptSection {
   id: string;
   render(context: PromptContext): string | null;
@@ -100,11 +111,63 @@ const section = (heading: string, items: readonly Bullet[]): string =>
   [heading, ...bullets(items)].join("\n");
 const disabled = (value: string | undefined) => triBoolean(value) === false;
 
-function usingTools({ tools }: PromptContext): string {
-  const shell = tools.has("Bash") ? "Bash" : "PowerShell",
-    tasks = ["TaskCreate", "TodoWrite"].find((name) => tools.has(name));
+function embeddedSearch(context: PromptContext): boolean {
+  if (context.hasEmbeddedSearch !== undefined) return context.hasEmbeddedSearch;
+  return (
+    context.env.CLAUDE_CODE_ENTRYPOINT !== "local-agent" &&
+    triBoolean(context.env.CLAUDE_CODE_EMBEDDED_SEARCH) !== false
+  );
+}
+
+/** Disabled fork gate uses the shipped nudge. `plain` is the shorter source string. */
+export function agentGuidanceMode(context: PromptContext): AgentGuidanceMode {
+  if (
+    !context.tools.has("Agent") ||
+    context.isFork === true ||
+    context.isSubagent === true
+  )
+    return "none";
+  const gate = resolveForkSubagentGate(context.env);
+  if (gate === "disabled") return "with-nudge";
+  return isForkBackgroundDefault(context.env, {
+    interactive: context.interactive,
+  })
+    ? "fork-background"
+    : "fork";
+}
+
+function agentGuidanceText(mode: AgentGuidanceMode): string | null {
+  switch (mode) {
+    case "none":
+      return null;
+    case "fork":
+    case "fork-background": {
+      const kept =
+        mode === "fork-background"
+          ? ", runs in the background, and keeps its tool output out of your context \u2014 so you can keep chatting with the user while it works"
+          : " and keeps its tool output out of your context";
+      return `Calling Agent with subagent_type: "fork" creates a fork \u2014 it inherits your full conversation context${kept}. Reach for it when research or multi-step implementation work would otherwise fill your context with raw output you won't need again. Other subagent_type values start fresh agents with no context. **If you ARE the fork** \u2014 execute directly; do not re-delegate.`;
+    }
+    case "with-nudge":
+      return "Use the Agent tool with specialized agents when the task at hand matches the agent's description. Subagents are valuable for parallelizing independent queries or for protecting the main context window from excessive results, but they should not be used excessively when not needed. Importantly, avoid duplicating work that subagents are already doing - if you delegate research to a subagent, do not also perform the same searches yourself.";
+    case "plain":
+      return "Use the Agent tool with specialized agents when the task at hand matches the agent's description. Importantly, avoid duplicating work that subagents are already doing - if you delegate research to a subagent, do not also perform the same searches yourself.";
+    default: {
+      const exhaustive: never = mode;
+      return exhaustive;
+    }
+  }
+}
+
+function usingTools(context: PromptContext): string {
+  const { tools } = context,
+    shell = tools.has("Bash") ? "Bash" : "PowerShell",
+    tasks = ["TaskCreate", "TodoWrite"].find((name) => tools.has(name)),
+    dedicated = ["Read", "Edit", "Write"];
+  if (!(embeddedSearch(context) && tools.has("Bash")))
+    dedicated.push("Glob", "Grep");
   return section("# Using your tools", [
-    `Prefer dedicated tools over ${shell} when one fits (Read, Edit, Write, Glob, Grep) \u2014 reserve ${shell} for shell-only operations.`,
+    `Prefer dedicated tools over ${shell} when one fits (${dedicated.join(", ")}) \u2014 reserve ${shell} for shell-only operations.`,
     ...(tasks
       ? [
           `Use ${tasks} to plan and track work. Mark each task completed as soon as it's done; don't batch.`,
@@ -114,22 +177,16 @@ function usingTools({ tools }: PromptContext): string {
   ]);
 }
 
-function sessionGuidance({
-  tools,
-  hasSkills,
-  interactive,
-  env,
-}: PromptContext): string | null {
-  const agent = tools.has("Agent"),
+function sessionGuidance(context: PromptContext): string | null {
+  const { tools, hasSkills, interactive, env } = context,
+    mode = agentGuidanceMode(context),
     items = [
       interactive
         ? "If you need the user to run a shell command themselves (e.g., an interactive login like `gcloud auth login`), suggest they type `! <command>` in the prompt — the `!` prefix runs the command in this session so its output lands directly in the conversation."
         : null,
-      // tau has no inherited-context fork subagent, so the original's non-fork steer applies.
-      agent
-        ? "Use the Agent tool with specialized agents when the task at hand matches the agent's description. Subagents are valuable for parallelizing independent queries or for protecting the main context window from excessive results, but they should not be used excessively when not needed. Importantly, avoid duplicating work that subagents are already doing - if you delegate research to a subagent, do not also perform the same searches yourself."
-        : null,
-      agent && !triBoolean(env.CLAUDE_CODE_DISABLE_EXPLORE_PLAN_AGENTS)
+      agentGuidanceText(mode),
+      mode === "with-nudge" &&
+      !triBoolean(env.CLAUDE_CODE_DISABLE_EXPLORE_PLAN_AGENTS)
         ? "For broad codebase exploration or research that'll take more than 3 queries, spawn Agent with subagent_type=Explore. Otherwise use the Glob or Grep directly."
         : null,
       hasSkills && tools.has("Skill")
