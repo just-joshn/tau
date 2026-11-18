@@ -232,7 +232,14 @@ function runTests(
   const killGroup = () => {
     try {
       if (child.pid !== undefined) process.kill(-child.pid, "SIGKILL");
-    } catch {}
+    } catch (error) {
+      if (!(
+        error instanceof Error &&
+        "code" in error &&
+        error.code === "ESRCH"
+      ))
+        throw error;
+    }
   };
   let timedOut = false;
   const timer = Number.isFinite(ms)

@@ -137,5 +137,8 @@ function killTree(child: ChildProcess): void {
   try {
     if (process.platform === "win32") child.kill("SIGKILL");
     else process.kill(-child.pid, "SIGKILL");
-  } catch {}
+  } catch (error) {
+    if (!(error instanceof Error && "code" in error && error.code === "ESRCH"))
+      throw error;
+  }
 }
