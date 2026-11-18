@@ -1,0 +1,30 @@
+{
+  "caseId": "dev-fix-typo",
+  "version": 1,
+  "priority": "P1",
+  "category": "single-file edit",
+  "intent": "Fix the spelling mistake in greeting.txt without changing anything else.",
+  "allowedTools": ["Read", "Edit"],
+  "workspace": {
+    "files": {
+      "greeting.txt": "Helo, world!\nHave a nice day.\n"
+    }
+  },
+  "oracle": {
+    "checks": [
+      {
+        "kind": "file-matches",
+        "path": "greeting.txt",
+        "pattern": "^Hello, world!\\nHave a nice day\\.\\n?$"
+      }
+    ]
+  },
+  "acceptedVariations": ["A missing trailing newline is acceptable."],
+  "budget": {
+    "maxTurns": 6,
+    "maxOutputTokensPerCall": 16000,
+    "maxCostUsd": 0.75,
+    "timeoutMs": 180000
+  },
+  "rubric": ["Corrects 'Helo' to 'Hello'.", "Leaves the second line untouched."]
+}
