@@ -1,4 +1,4 @@
-import { readdir } from "node:fs/promises";
+import { lstat, readdir } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { parse as parseYaml } from "yaml";
 import ignore from "ignore";
@@ -554,6 +554,8 @@ export class LocalSkillRegistry {
       if (this.loaded.has(key)) continue;
       const admitted = await this.options.admitSource?.({ directory, source });
       if (admitted === false || typeof admitted === "string") {
+        // A withheld source that does not exist has nothing to withhold.
+        if (!(await exists(directory))) continue;
         this.issue(
           directory,
           source,
@@ -858,4 +860,18 @@ export async function createLocalSkillRegistry(
     });
   await registry.discover(locations);
   return registry;
+}
+
+/** Whether anything exists at the path, following no links; errors other than absence count as present. */
+async function exists(path: string): Promise<boolean> {
+  try {
+    await lstat(path);
+    return true;
+  } catch (error) {
+    return !(
+      error instanceof Error &&
+      "code" in error &&
+      (error.code === "ENOENT" || error.code === "ENOTDIR")
+    );
+  }
 }

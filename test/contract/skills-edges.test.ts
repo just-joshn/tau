@@ -212,6 +212,17 @@ test("a hook validator that returns a non-object withholds hooks and grants", as
   );
 });
 
+test("withholding a project source that does not exist reports nothing", async () => {
+  const { options, skills } = await workspace();
+  await rm(skills, { recursive: true });
+  const registry = await createLocalSkillRegistry({
+    ...options,
+    admitSource: () => "project skills disabled",
+  });
+  assert.deepEqual(registry.catalog(), []);
+  assert.deepEqual(registry.diagnostics, []);
+});
+
 test("source and skill admission callbacks can withhold with a reason", async () => {
   const { options, skill, skills } = await workspace();
   await skill("kept", "body");

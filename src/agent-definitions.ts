@@ -514,6 +514,8 @@ export class LocalAgentRegistry {
       if (this.options.sources?.[sourceKey] === false) continue;
       const admission = await this.options.admitSource?.(location);
       if (admission === false || typeof admission === "string") {
+        // A withheld source that does not exist has nothing to withhold.
+        if (!(await exists(location.directory))) continue;
         this.diagnostic(
           "source",
           typeof admission === "string" ? admission : "Agent source withheld",
@@ -753,3 +755,17 @@ export class LocalAgentRegistry {
 }
 export const createLocalAgentRegistry = (options: AgentRegistryOptions) =>
   LocalAgentRegistry.create(options);
+
+/** Whether anything exists at the path, following no links; errors other than absence count as present. */
+async function exists(path: string): Promise<boolean> {
+  try {
+    await lstat(path);
+    return true;
+  } catch (error) {
+    return !(
+      error instanceof Error &&
+      "code" in error &&
+      (error.code === "ENOENT" || error.code === "ENOTDIR")
+    );
+  }
+}

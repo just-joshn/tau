@@ -721,16 +721,19 @@ describe("session persistence", () => {
   test.skipIf(process.getuid?.() === 0)(
     "a turn whose session cannot be saved reports the save failure after any turn error",
     async () => {
+      const badTurn = {
+        kind: "error" as const,
+        status: 400,
+        body: {
+          type: "error",
+          error: { type: "invalid_request_error", message: "bad turn" },
+        },
+      };
+      // On a custom endpoint an unexplained 400 is resent once without thinking.display.
       const provider = await startMockProvider([
         said("unsaved answer"),
-        {
-          kind: "error",
-          status: 400,
-          body: {
-            type: "error",
-            error: { type: "invalid_request_error", message: "bad turn" },
-          },
-        },
+        badTurn,
+        badTurn,
       ]);
       const tau = startPty({ provider, args: ["--max-retries", "0"] });
       await tau.until(IDLE);
