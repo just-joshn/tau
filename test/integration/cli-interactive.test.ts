@@ -295,36 +295,159 @@ describe("tool approval prompts", () => {
     stopReason: "tool_use" as const,
   });
 
-  test("answering y runs the tool", async () => {
+  test("1 (Yes) in the permission dialog runs the tool", async () => {
     const provider = await startMockProvider([
       bash("echo approved > note.txt"),
       said("wrote it"),
     ]);
     const tau = startPty({ provider });
     await submit(tau, "write a note");
-    await tau.expect("Allow once? [y/N] ");
-    tau.write("y\r");
+    await tau.expect("Do you want to proceed?\n❯ 1. Yes\n  2. No\n");
+    tau.write("1");
     await tau.expect("wrote it");
     await exit(tau);
     expect(await Bun.file(join(tau.cwd, "note.txt")).text()).toBe("approved\n");
   });
 
-  test("answering anything else denies the tool and the model sees the denial", async () => {
+  test("Esc refuses, ends the turn, and the model sees the original's refusal", async () => {
     const provider = await startMockProvider([
       bash("echo nope > note.txt"),
       said("understood"),
     ]);
     const tau = startPty({ provider });
     await submit(tau, "write a note");
-    await tau.expect("Allow once? [y/N] ");
-    tau.write("\r");
-    await tau.expect("[tool error] Permission denied");
+    await tau.expect("Esc to cancel");
+    tau.write("\x1b");
+    await tau.expect("tau: Interrupted");
+    expect(provider.requests).toHaveLength(1);
+    await submit(tau, "why?");
     await tau.expect("understood");
     await exit(tau);
     expect(existsSync(join(tau.cwd, "note.txt"))).toBe(false);
     expect(JSON.stringify(body(provider.requests[1]).messages)).toContain(
-      "Permission denied",
+      "The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed.",
     );
+  });
+});
+
+describe("file edit permission dialog", () => {
+  const tool = (name: string, input: Record<string, unknown>, id: string) =>
+    turn({ type: "tool_use", id, name, input });
+  /** Read then Edit a.txt for each step, each ending its own turn. */
+  const edits = (...steps: [string, string][]) =>
+    steps.flatMap(([from, to], index) => [
+      tool("Read", { file_path: "a.txt" }, `read_${index}`),
+      tool(
+        "Edit",
+        { file_path: "a.txt", old_string: from, new_string: to },
+        `edit_${index}`,
+      ),
+      said(`edited ${index}`),
+    ]);
+  const OPTIONS =
+    "Do you want to make this edit to a.txt?\n" +
+    "❯ 1. Yes\n" +
+    "  2. Yes, and switch to accept edits (auto-approve file edits and common file commands) for this session (shift+tab)\n" +
+    "  3. No\n\nEsc to cancel · Tab to amend\n";
+  const contents = (tau: PtySession) => Bun.file(join(tau.cwd, "a.txt")).text();
+
+  test("shows the original's question and options; Yes applies once", async () => {
+    const provider = await startMockProvider(
+      edits(["alpha", "beta"], ["beta", "gamma"]),
+    );
+    const tau = startPty({ provider, files: { "a.txt": "alpha\n" } });
+    await submit(tau, "first");
+    await tau.expect(
+      `Edit file\na.txt\nReplace:\nalpha\nWith:\nbeta\n${OPTIONS}`,
+    );
+    tau.write("1");
+    await tau.expect("edited 0");
+    expect(await contents(tau)).toBe("beta\n");
+    await submit(tau, "second");
+    await tau.expect(OPTIONS);
+    tau.write("\r");
+    await tau.expect("edited 1");
+    await exit(tau);
+    expect(await contents(tau)).toBe("gamma\n");
+  });
+
+  test("Yes, and switch to accept edits stops asking for the session", async () => {
+    const provider = await startMockProvider(
+      edits(["alpha", "beta"], ["beta", "gamma"]),
+    );
+    const tau = startPty({ provider, files: { "a.txt": "alpha\n" } });
+    await submit(tau, "first");
+    await tau.expect(OPTIONS);
+    tau.write("2");
+    await tau.expect("⏵⏵ accept edits on\n");
+    await tau.expect("edited 0");
+    await submit(tau, "second");
+    const screen = await tau.expect("edited 1");
+    expect(screen.split("Do you want to make this edit").length).toBe(2);
+    await submit(tau, "/permissions");
+    await tau.expect("Permissions: acceptEdits");
+    await exit(tau);
+    expect(await contents(tau)).toBe("gamma\n");
+  });
+
+  test("Tab sends feedback with the refusal and the turn continues", async () => {
+    const provider = await startMockProvider([
+      ...edits(["alpha", "beta"]).slice(0, 2),
+      said("will use gamma"),
+    ]);
+    const tau = startPty({ provider, files: { "a.txt": "alpha\n" } });
+    await submit(tau, "first");
+    await tau.expect(OPTIONS);
+    tau.write("\t");
+    await tau.expect("No, and tell Claude what to do differently: ");
+    tau.write("use gamma\r");
+    await tau.expect("will use gamma");
+    await exit(tau);
+    expect(await contents(tau)).toBe("alpha\n");
+    expect(JSON.stringify(body(provider.requests[2]).messages)).toContain(
+      "NOT written to the file). To tell you how to proceed, the user said:\\nuse gamma",
+    );
+  });
+});
+
+describe("slash commands", () => {
+  test("/help lists the built-in registry with the original's descriptions", async () => {
+    const tau = startPty({ env: { ANTHROPIC_API_KEY: "unused" } });
+    await submit(tau, "/help");
+    const screen = await tau.expect("No custom commands yet");
+    for (const line of [
+      "/clear                Start a new session with empty context; previous session stays on disk (resumable with /resume) (/reset, /new)",
+      "/compact              Free up context by summarizing the conversation so far",
+      "/exit                 Exit the CLI (/quit)",
+      "/help                 Show help and available commands",
+      "/resume <session id>  Resume a previous session (/continue)",
+    ])
+      expect(screen.replace(/\n(?=\S)/g, "")).toContain(line);
+    await submit(tau, "/reset");
+    await tau.expect(/New session [0-9a-f-]{36}/);
+    await submit(tau, "/nope");
+    await tau.expect("Unknown command: /nope");
+    await submit(tau, "/exit");
+    await tau.expect(/Goodbye!|See ya!|Bye!|Catch you later!/);
+    expect((await tau.exited).exitCode).toBe(0);
+  });
+
+  test("Ctrl-C at the prompt asks for a second press before exiting", async () => {
+    const tau = startPty({ env: { ANTHROPIC_API_KEY: "unused" } });
+    await tau.expect(PROMPT);
+    tau.write("draft");
+    await tau.expect("draft");
+    tau.write("\x03");
+    await tau.expect("ctrl+c again to exit");
+    await tau.expect(PROMPT);
+    // Like the original, the first press clears the typed input.
+    expect(tau.screen()).toMatch(/\ntau>\nctrl\+c again to exit\n\ntau>$/);
+    expect(tau.screen()).not.toContain("draft");
+    await Bun.sleep(900);
+    tau.write("\x03");
+    await tau.expect("ctrl+c again to exit");
+    tau.write("\x03");
+    expect((await tau.exited).exitCode).toBe(0);
   });
 });
 

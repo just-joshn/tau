@@ -1,11 +1,20 @@
 #!/usr/bin/env bun
 import { admitSessionPersistence, isInteractiveLaunch } from "./launch-mode.js";
+import { existsSync } from "node:fs";
 import { realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout, stderr } from "node:process";
 import { terminalText as safe, replaceProvisional } from "./terminal.js";
+import {
+  permissionDialog,
+  rejectionMessage,
+  type ToolApprovalAnswer,
+  type ToolApprovalRequest,
+} from "./permission-dialog.js";
+import { choosePermission } from "./permission-choice.js";
+import { goodbye, helpText, slashCommand } from "./slash-commands.js";
 import { runAgent } from "./agent.js";
 import {
   help,
@@ -344,13 +353,22 @@ async function main(): Promise<void> {
   let permissionPrompt:
     ReturnType<typeof createMcpPermissionPrompt> | undefined;
   let closing = false;
+  // The original exits on a second Ctrl-C within 800ms; the first clears the input.
+  let exitArmedAt = -Infinity;
   const interrupt = () => {
     if (active) {
       active.abort();
       stderr.write("\nCancelling…\n");
-    } else {
+    } else if (!terminal || performance.now() - exitArmedAt <= 800) {
       closing = true;
       terminal?.close();
+    } else {
+      exitArmedAt = performance.now();
+      terminal.write(null, { ctrl: true, name: "e" });
+      terminal.write(null, { ctrl: true, name: "u" });
+      // readline redraws from the prompt's second row, so the hint keeps a spare line.
+      stdout.write("\nctrl+c again to exit\n\n");
+      terminal.prompt();
     }
   };
   process.on("SIGINT", interrupt);
@@ -366,6 +384,34 @@ async function main(): Promise<void> {
       active ? { signal: active.signal } : {},
     );
     return /^(y|yes)$/i.test(answer.trim());
+  };
+  const approveTool = async (
+    description: string,
+    request: ToolApprovalRequest,
+  ): Promise<ToolApprovalAnswer> => {
+    if (!terminal || closing || active?.signal.aborted) return false;
+    const owner = active;
+    const choice = await choosePermission(
+      { readline: terminal, input: stdin, output: stdout },
+      permissionDialog(request, description, {
+        cwd,
+        mode,
+        exists: request.path !== undefined && existsSync(request.path),
+      }),
+      owner?.signal,
+    );
+    switch (choice.kind) {
+      case "accept-once":
+        return true;
+      case "accept-session":
+        for (const update of choice.updates) mode = update.mode;
+        stdout.write("⏵⏵ accept edits on\n");
+        return true;
+      case "reject":
+        // Without feedback the original stops the turn after recording the refusal.
+        if (choice.feedback === undefined) owner?.abort();
+        return { approved: false, message: rejectionMessage(choice.feedback) };
+    }
   };
   const createHookHost = () => {
     const hookSessionId = session.id;
@@ -1420,7 +1466,7 @@ async function main(): Promise<void> {
         ...(activeHooks().hasToolHooks ? { hooks: activeHooks().runtime } : {}),
         readTokenCounter: (text, signal) =>
           provider.countFileTokens({ model: currentModel(), text, signal }),
-        approve,
+        approve: approveTool,
       });
       const external = visibleMcp();
       const combined = external
@@ -1886,17 +1932,17 @@ async function main(): Promise<void> {
       }
       const [command, ...rest] = input.split(/\s+/);
       const value = rest.join(" ");
-      switch (command) {
-        case "/exit":
-        case "/quit":
+      switch (slashCommand(command?.slice(1) ?? "")) {
+        case "exit":
+          stdout.write(`${goodbye()}\n`);
           closing = true;
           break;
-        case "/help":
+        case "help":
           stdout.write(
-            "/help · /exit · /clear · /compact · /model [ID] · /permissions [MODE] · /status · /save · /resume UUID · /skills · /SKILL [args]\n",
+            helpText(session.model, skillHost?.runtime.catalog() ?? []),
           );
           break;
-        case "/skills":
+        case "skills":
           stdout.write(
             (skillHost?.runtime
               .catalog()
@@ -1904,10 +1950,10 @@ async function main(): Promise<void> {
               .join("\n") || "No local skills available.") + "\n",
           );
           break;
-        case "/compact":
+        case "compact":
           await compactManually();
           break;
-        case "/clear":
+        case "clear":
           await store.save(session);
           retiredHookHosts.push(activeHooks());
           session = newSession(cwd, session.model);
@@ -1931,11 +1977,11 @@ async function main(): Promise<void> {
           }
           stdout.write(`New session ${session.id}\n`);
           break;
-        case "/model":
+        case "model":
           if (value) session.model = value;
           stdout.write(`Model: ${safe(session.model)}\n`);
           break;
-        case "/permissions": {
+        case "permissions": {
           if (value) {
             const parsed = permissionModeSchema.safeParse(value);
             if (!parsed.success) {
@@ -1959,7 +2005,7 @@ async function main(): Promise<void> {
           stdout.write(`Permissions: ${mode}\n`);
           break;
         }
-        case "/status":
+        case "status":
           stdout.write(
             JSON.stringify(
               {
@@ -1975,11 +2021,11 @@ async function main(): Promise<void> {
             ) + "\n",
           );
           break;
-        case "/save":
+        case "save":
           await store.save(session);
           stdout.write(`Saved ${session.id}\n`);
           break;
-        case "/resume":
+        case "resume":
           try {
             const loaded = await store.load(value);
             await store.save(session);
@@ -2010,7 +2056,7 @@ async function main(): Promise<void> {
           break;
         default:
           if (command && skillHost?.has(command.slice(1))) await turn(input);
-          else stderr.write("Unknown command. Use /help.\n");
+          else stderr.write(`Unknown command: ${safe(command ?? "")}\n`);
       }
     }
   } finally {
