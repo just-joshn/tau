@@ -126,7 +126,7 @@ TYPE_WAIT = 3
 
 
 def startup():
-    steps = [Step("startup", screen=r"(?i)trust|theme|api key|for shortcuts|tau> ", timeout=30, quiet=1.0)]
+    steps = [Step("startup", screen=r"(?i)trust|theme|text style|api key|welcome|for shortcuts|tau> ", timeout=30, quiet=1.0)]
     # Two passes: a screen may appear later than its position in the list.
     steps += [Step(f"first-run-{name}-{attempt}", when=pattern, send=keys, quiet=1.0, timeout=5)
               for attempt in (1, 2) for name, pattern, keys in FIRST_RUN]
