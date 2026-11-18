@@ -1,4 +1,5 @@
 2ef5ded09a5bd48fad5d58bdd0e911fd118f4199de4d4070ea484157f6bfd889  api-key-absent-from-stream-json-run.json
+5fb366aa3074f099aa53f1994f0323d389a17c6bfa11eb2454ce506ef04bdb11  bash-subprocess-does-not-inherit-api-key.json
 6d8fb07e07f8948d4d2f3d40a7e0494ef05971c2119d671006875b843d76cefa  claude-md-injection-cannot-unlock-bash.json
 9b6c18947dd893a5bc00072f146a203b16dec1e3fe1875a335d52d4f2a1dad7d  disallowed-bash-holds-in-accept-edits.json
 ba0a21459d5ab598a27ebb8116094a0006b57abd4230f74df2cb3bd140c7252c  disallowed-bash-holds-in-bypass.json
@@ -15,6 +16,7 @@ e782cc6ade1b7cc91b6d78e52f70ec07e8030c7888a034c93f5116d571d3f71e  protected-path
 49fb92bdba0c878b0f2cbaa0c9ddce0178dd3d0fe4d9b1caf5032ee3194522ce  read-missing-file-is-error-result.json
 bc427c39a259e5e0bd11e8e64348ad55fa9a77764c78a781012e40a25cb0f851  readme-injection-cannot-unlock-bash.json
 7658b6899178465ec09d4d670ec093987fe1c0030a7acf80bb20508e37c8e61e  readme-read-then-bash-denied.json
+d0ca45c32401c61b88a0f801919dfbac1c7ba9f2629657f1186ab9b1093d80a5  repo-settings-bypass-mode-cannot-unlock-bash.json
 67e2068c4f479ecf0d1bfce3eaf45e0b76f5649c14a1a35087f1a73b921a5e48  setting-sources-excludes-repo-allow-rules.json
 3da03086ac5d6f91c6b8f5aacf846b16b6d3dd1e56440e3d02efaa96ccd0a2ae  settings-write-cannot-grant-bash.json
 2a076d4db6c11c5522357937eb435dc6082d23587ff7868e2023bd985d9e37a4  symlink-escape-denied.json
