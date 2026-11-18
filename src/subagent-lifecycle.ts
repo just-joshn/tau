@@ -5,7 +5,7 @@ import type {
   HookResult,
   HookRunOptions,
 } from "./hooks.js";
-import { sanitizeHookAttachmentText } from "./hook-attachment-projection.js";
+import { escapeReminderText } from "./attachments.js";
 import type {
   SubagentPlan,
   SubagentStopDecision,
@@ -37,7 +37,7 @@ export function renderSubagentHookAdditionalContext(
   event: "SubagentStart" | "SubagentStop",
   content: readonly string[],
 ): string {
-  return `<system-reminder>\n${sanitizeHookAttachmentText(`${event} hook additional context: ${content.join("\n")}`)}\n</system-reminder>`;
+  return `<system-reminder>\n${escapeReminderText(`${event} hook additional context: ${content.join("\n")}`)}\n</system-reminder>`;
 }
 
 /** Event consumers around the existing registry; no hook admission, child execution or registry ownership. */
@@ -138,12 +138,12 @@ export function createSubagentLifecycle(options: SubagentLifecycleOptions) {
   ): string => {
     const reason =
       result.reason ?? result.error ?? (result.stderr || "Blocked by hook");
-    if (result.exitCode !== 2) return sanitizeHookAttachmentText(reason);
+    if (result.exitCode !== 2) return escapeReminderText(reason);
     const hook = registry
       .list(result.event)
       .find((entry) => entry.id === result.id)?.hook;
     const command = [result.command, ...(hook?.args ?? [])].join(" ");
-    return sanitizeHookAttachmentText(
+    return escapeReminderText(
       `[${command}]: ${result.stderr || "No stderr output"}`,
     );
   };
@@ -160,8 +160,7 @@ export function createSubagentLifecycle(options: SubagentLifecycleOptions) {
     if (!blocks.length)
       result.push(
         ...batch.blockingErrors.map(
-          (block) =>
-            `Stop hook feedback:\n${sanitizeHookAttachmentText(block)}`,
+          (block) => `Stop hook feedback:\n${escapeReminderText(block)}`,
         ),
       );
     if (batch.additionalContext.length)

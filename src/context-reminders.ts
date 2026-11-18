@@ -1,15 +1,17 @@
 import { lstat, readFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { REMINDER_IDS, type Message, type ReminderId } from "./types.js";
-import { activeContextStart } from "./context-usage.js";
+import { activeContextStart, contextTokens } from "./context-usage.js";
+import {
+  escapeReminderTags,
+  systemReminder,
+  type Attachment,
+} from "./attachments.js";
 import {
   promptModel,
   totalTokensText,
   type PromptEnv,
 } from "./system-prompt.js";
-
-export const wrapReminder = (text: string): string =>
-  `<system-reminder>\n${text}\n</system-reminder>`;
 
 export interface ReminderContext {
   cwd: string;
@@ -21,7 +23,6 @@ export interface ReminderContext {
   model: string;
   /** Local calendar date, YYYY-MM-DD. */
   date: string;
-  usedTokens: number;
   attribution: { commit: string; pr: string };
   env: PromptEnv;
 }
@@ -79,10 +80,10 @@ function modelIdentity({ model }: ReminderContext): string {
 function gitAttribution({ attribution }: ReminderContext): string {
   const lines = [
     attribution.commit
-      ? `- End git commit messages with:\n${escapeReminder(attribution.commit)}`
+      ? `- End git commit messages with:\n${escapeReminderTags(attribution.commit)}`
       : null,
     attribution.pr
-      ? `- End pull request descriptions with:\n${escapeReminder(attribution.pr)}`
+      ? `- End pull request descriptions with:\n${escapeReminderTags(attribution.pr)}`
       : null,
   ].filter((line) => line !== null);
   const replaces =
@@ -92,9 +93,6 @@ function gitAttribution({ attribution }: ReminderContext): string {
     : `From here on, do not add attribution lines to git commit messages or pull request descriptions (${replaces}, and applies even if a CLAUDE.md or memory rule asks for attribution lines).`;
 }
 
-const escapeReminder = (text: string) =>
-  text.replaceAll(/<(?=\s*(?:\/\s*)?system-reminder\b)/gi, "&lt;");
-
 /** Reminders this module owns; catalog and deferred-tool producers tag their own rows. */
 export const TURN_REMINDERS: readonly TurnReminder[] = [
   { id: "environment", render: environment },
@@ -102,7 +100,8 @@ export const TURN_REMINDERS: readonly TurnReminder[] = [
   {
     id: "total_tokens",
     everyTurn: true,
-    render: (context) => totalTokensText(context, context.usedTokens),
+    // Source `reanchorTaskBudget`: a user turn restarts the countdown.
+    render: (context) => totalTokensText(context, 0),
   },
   { id: "date", render: ({ date }) => `Today's date is ${date}.` },
   { id: "git_attribution", render: gitAttribution },
@@ -131,10 +130,38 @@ export function turnStartReminders(
       : [
           {
             id: reminder.id,
-            block: { type: "text", text: wrapReminder(text) },
+            block: { type: "text", text: systemReminder(text) },
           },
         ];
   });
+}
+
+/**
+ * Source `cumulativeUsed`: context growth since the turn's countdown was anchored
+ * (its last turn-start reminder), never decreasing within the turn.
+ */
+export function turnTokensUsed(history: readonly Message[]): number {
+  const anchorRow = history.findLastIndex((message) =>
+    message.reminders?.includes("total_tokens"),
+  );
+  let anchor = 0,
+    used = 0;
+  for (const [index, message] of history.entries()) {
+    if (message.role !== "assistant" || !message.usage) continue;
+    const total = contextTokens(message.usage);
+    if (index < anchorRow) anchor = total;
+    else used = Math.max(used, total - anchor);
+  }
+  return used;
+}
+
+/** Source `mAs` without a new prompt: the countdown owed before a later request in a turn. */
+export function roundAttachments(
+  context: Pick<ReminderContext, "model" | "env">,
+  history: readonly Message[],
+): Attachment[] {
+  const text = totalTokensText(context, turnTokensUsed(history));
+  return text === null ? [] : [{ type: "total_tokens_reminder", text }];
 }
 
 const rank = (id: ReminderId) => REMINDER_IDS.indexOf(id);

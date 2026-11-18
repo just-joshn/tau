@@ -16,6 +16,7 @@ import type {
 import { ToolPermissionDenied } from "../../src/tool-policy.js";
 import { UNPARSED_TOOL_INPUT } from "../../src/tool-input.js";
 import type { PermissionMode, ToolResult } from "../../src/types.js";
+import { failureFeedback, hookTexts } from "../helpers/hook-attachments.js";
 
 const name = "mcp__fixture__lookup";
 
@@ -290,7 +291,7 @@ test("a server failure runs the failure hook and appends its context", async () 
     error: unknown,
   ): Promise<ToolFailureHookResult> => {
     seen.push(error);
-    return { additionalContext: ["failure noted"] };
+    return failureFeedback("failure noted");
   };
   const { run } = fixture({
     callTool: async () => {
@@ -302,7 +303,7 @@ test("a server failure runs the failure hook and appends its context", async () 
   assert.equal(result.content, "MCP tool failed");
   assert.equal(result.is_error, true);
   assert.equal(result.permissionDenied, undefined);
-  assert.deepEqual(result.hookContext, ["failure noted"]);
+  assert.deepEqual(hookTexts(result.hookAttachments), ["failure noted"]);
   assert.deepEqual(seen, ["server exploded"]);
 });
 
@@ -323,7 +324,7 @@ test("a throwing failure hook still yields the server error", async () => {
   const result = await run({});
   assert.equal(result.content, "server down");
   assert.equal(result.is_error, true);
-  assert.equal(result.hookContext, undefined);
+  assert.equal(result.hookAttachments, undefined);
 });
 
 test("a post-hook replacement output is projected, keeping its error flag and saving binaries to the hook directory", async () => {

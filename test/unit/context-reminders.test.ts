@@ -27,7 +27,6 @@ const context = (
   osVersion: "Darwin 27.2.0",
   model: "claude-sonnet-4-5-20250929",
   date: "2026-11-18",
-  usedTokens: 0,
   attribution: attributionTexts("claude-sonnet-4-5-20250929", {}),
   env: { SHELL: "/bin/sh" },
   ...overrides,
@@ -61,15 +60,21 @@ test("the first turn carries the original's reminders, in order and verbatim", (
   );
 });
 
-test("later turns repeat only the token countdown, and worktrees and shells are described", () => {
+test("later turns repeat only the token countdown, re-anchored, and worktrees and shells are described", () => {
   const row: Message = {
     role: "user",
     content: [{ type: "text", text: "first" }],
   };
   prependReminders(row, turnStartReminders(context(), []));
-  const later = turnStartReminders(context({ usedTokens: 13 }), [row]);
+  const answered: Message = {
+    role: "assistant",
+    content: [{ type: "text", text: "done" }],
+    usage: { input_tokens: 10, output_tokens: 3 },
+  };
+  // Source reanchorTaskBudget: each user turn restarts the countdown at the full budget.
+  const later = turnStartReminders(context(), [row, answered]);
   assert.deepEqual(later.map(inner), [
-    "<total_tokens>14999987 tokens left</total_tokens>",
+    "<total_tokens>15000000 tokens left</total_tokens>",
   ]);
   const [environment] = turnStartReminders(
     context({

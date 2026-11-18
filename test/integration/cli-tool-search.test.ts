@@ -135,6 +135,8 @@ async function workspace() {
               HOME: join(root, "home"),
               CLAUDE_CONFIG_DIR: join(root, "config"),
               TAU_HOME: join(root, "state"),
+              // Tool results here stay exact; cli-async-hooks pins the folded countdown.
+              CLAUDE_CODE_TOTAL_TOKENS_REMINDER: "off",
               TAU_MANAGED_ROOT: join(root, "managed"),
               ANTHROPIC_MODEL: "claude-sonnet-4-5-20250929",
               ANTHROPIC_API_KEY: "tool-search-dummy",

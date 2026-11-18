@@ -223,6 +223,8 @@ async function runWorkflow(steps: Step[], args: string[]) {
             HOME: join(root, "home"),
             CLAUDE_CONFIG_DIR: config,
             TAU_HOME: join(root, "state"),
+            // Tool results here stay exact; cli-async-hooks pins the folded countdown.
+            CLAUDE_CODE_TOTAL_TOKENS_REMINDER: "off",
             TAU_MANAGED_ROOT: join(root, "managed"),
             NODE_EXTRA_CA_CERTS: join(tls, "cert.pem"),
             ANTHROPIC_MODEL: "claude-sonnet-4-6",

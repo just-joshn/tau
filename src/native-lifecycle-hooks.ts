@@ -7,7 +7,7 @@ import type {
   HookResult,
   HookRunOptions,
 } from "./hooks.js";
-import { sanitizeHookAttachmentText } from "./hook-attachment-projection.js";
+import { escapeReminderText } from "./attachments.js";
 import {
   captureNativePersistenceJson,
   createNativeAttachmentEvent,
@@ -465,7 +465,7 @@ export function createNativeLifecycleConsumer(
           await emit(
             createFeedback(
               host,
-              `Stop hook feedback:\n${sanitizeHookAttachmentText(value.text)}`,
+              `Stop hook feedback:\n${escapeReminderText(value.text)}`,
               value.cause,
             ),
             true,

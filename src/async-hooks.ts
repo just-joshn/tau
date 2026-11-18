@@ -1,7 +1,11 @@
 import { constants } from "node:fs";
 import { access } from "node:fs/promises";
 import { basename, isAbsolute } from "node:path";
-import { sanitizeHookAttachmentText } from "./hook-attachment-projection.js";
+import {
+  asyncHookResponseTexts,
+  escapeReminderText,
+  type AsyncHookResponseAttachment,
+} from "./attachments.js";
 import {
   hookOutputSchema,
   type AsyncHookLaunch,
@@ -18,20 +22,6 @@ export interface AsyncHookResponse {
   hookEvent: HookEvent;
   toolName?: string;
   command: string;
-  response: JsonObject;
-  stdout: string;
-  stderr: string;
-  exitCode: number;
-}
-
-/** Source `uAs` attachment. `command` is kept only for SessionStart. */
-export interface AsyncHookResponseAttachment {
-  type: "async_hook_response";
-  processId: string;
-  hookName: string;
-  hookEvent: HookEvent;
-  toolName?: string;
-  command?: string;
   response: JsonObject;
   stdout: string;
   stderr: string;
@@ -61,15 +51,6 @@ export type AsyncHookSettlement =
 
 function object(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-/** Source `_9`. */
-export function asyncHookResponseTexts(response: unknown): string[] {
-  const row = object(response) ? response : {};
-  const specific = object(row.hookSpecificOutput) ? row.hookSpecificOutput : {};
-  return [row.systemMessage, specific.additionalContext].filter(
-    (value): value is string => typeof value === "string" && value !== "",
-  );
 }
 
 /** Source `rgn`, the unbounded `HMe` reader of an ordinary host (`Lj()` false). */
@@ -393,7 +374,7 @@ export async function settleRewake(
     kind: "wake",
     notification: rewakeNotification(
       summary,
-      sanitizeHookAttachmentText(`${lead} ${detail}`),
+      escapeReminderText(`${lead} ${detail}`),
     ),
   };
 }
@@ -416,16 +397,6 @@ function sessionStartDuplicate(
     if (same && prior.exitCode === 0) return false;
   }
   return false;
-}
-
-/** Source `async_hook_response` message projection: one `qs(tD(text))` per text. */
-export function renderAsyncHookResponse(
-  attachment: AsyncHookResponseAttachment,
-): string[] {
-  return asyncHookResponseTexts(attachment.response).map(
-    (text) =>
-      `<system-reminder>\n${sanitizeHookAttachmentText(text)}\n</system-reminder>`,
-  );
 }
 
 export interface AsyncHookOwnerOptions {

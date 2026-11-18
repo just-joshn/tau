@@ -484,7 +484,15 @@ test("unsupported local metadata needs an explicit source projection and real as
                 type: "tool_result",
                 tool_use_id: "call-owned",
                 content: "x",
-                hookContext: ["OWNED HOOK"],
+                hookAttachments: [
+                  {
+                    phase: "post",
+                    type: "hook_blocking_error",
+                    hookName: "PostToolUse:Read",
+                    command: "hook",
+                    blockingError: "OWNED HOOK",
+                  },
+                ],
               },
             ],
           },

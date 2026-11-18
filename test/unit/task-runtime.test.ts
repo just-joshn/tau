@@ -15,6 +15,7 @@ import { runAgent } from "../../src/agent.js";
 import { projectMessages } from "../../src/thinking-history.js";
 import type { Message, Provider, ToolUse } from "../../src/types.js";
 import type { ToolHookRuntime } from "../../src/tool-hook-runtime.js";
+import { failureFeedback, hookTexts } from "../helpers/hook-attachments.js";
 
 function at<T>(items: readonly T[], index: number): T {
   const item = items.at(index);
@@ -272,7 +273,7 @@ test("TaskCreated blocking rolls back and consumes id; generic failure hook sees
     },
     async failure() {
       failures++;
-      return { additionalContext: ["owned failure feedback"] };
+      return failureFeedback("owned failure feedback");
     },
   };
   const f = await fixture({
@@ -288,7 +289,9 @@ test("TaskCreated blocking rolls back and consumes id; generic failure hook sees
     description: "owned",
   });
   assert.equal(refused.is_error, true);
-  assert.deepEqual(refused.hookContext, ["owned failure feedback"]);
+  assert.deepEqual(hookTexts(refused.hookAttachments), [
+    "owned failure feedback",
+  ]);
   assert.deepEqual(await f.store.list(), []);
   block = false;
   const created = await f.execute("TaskCreate", {

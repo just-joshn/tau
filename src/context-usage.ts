@@ -51,7 +51,9 @@ export function contextUsage(
     cache_read_input_tokens,
   };
 }
-export function contextTokens(usage: Usage): number {
+export function contextTokens(
+  usage: Usage | NonNullable<Message["usage"]>,
+): number {
   return Object.values(contextUsage(usage)).reduce(
     (sum, value) => sum + value,
     0,

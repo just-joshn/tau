@@ -7,7 +7,6 @@ import {
   admitAsyncAnswer,
   AsyncHookOwner,
   readAsyncAnswer,
-  renderAsyncHookResponse,
   rewakeNotification,
   rewakeScriptPaths,
   settleAsyncResponse,
@@ -15,6 +14,7 @@ import {
   unopenedRewakeScript,
   type RewakeNotification,
 } from "../../src/async-hooks.js";
+import { renderAttachment } from "../../src/attachments.js";
 import {
   createHookRegistry,
   type AsyncHookLaunch,
@@ -330,7 +330,7 @@ test("the notification envelope cannot be closed by hook text", () => {
 
 test("async responses render one reminder per text", () => {
   assert.deepEqual(
-    renderAsyncHookResponse({
+    renderAttachment({
       type: "async_hook_response",
       processId: "p",
       hookName: "h",

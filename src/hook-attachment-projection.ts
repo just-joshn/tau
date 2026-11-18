@@ -4,16 +4,15 @@ import {
   orderAssistantBlocks,
   type HistoryProjectionMessage,
 } from "./history-normalization.js";
+import { renderAttachment, type Attachment } from "./attachments.js";
 import type { ApiToolContent, WireBlock, WireMessage } from "./types.js";
 
 export interface HookAttachmentRow {
   type: "hook_attachment";
-  event: "PreToolUse" | "PostToolUse" | "PostToolUseFailure";
-  /** Records actual transcript placement; projection never infers it from event. */
-  phase: "pre" | "post" | "failure";
-  toolName: string;
+  /** Side of its tool result; absent for a standalone transcript attachment row. */
+  phase?: "pre" | "post" | "failure";
+  attachment: Attachment;
   toolUseId?: string;
-  content: readonly string[];
   source?: string;
   uuid?: string;
   placement?: "next_to_message";
@@ -31,8 +30,8 @@ export interface HookProjectionMessageRow {
 export type HookProjectionRow = HookProjectionMessageRow | HookAttachmentRow;
 export interface HookAttachmentPlacement {
   sourceIndex: number;
-  event: HookAttachmentRow["event"];
-  phase: HookAttachmentRow["phase"];
+  kind: Attachment["type"];
+  phase?: HookAttachmentRow["phase"];
   originToolUseId?: string;
   source?: string;
   uuid?: string;
@@ -46,18 +45,6 @@ export interface HookAttachmentProjection {
 export interface HookAttachmentProjectionOptions {
   /** Shipped Git/Fre gate, default false. This helper folds tagged hook text only. */
   reminderFold?: boolean;
-}
-
-/** Shipped XVt -> tD: stop additional context from closing its reminder wrapper. */
-export function sanitizeHookAttachmentText(value: string): string {
-  return value
-    .replace(/<(?=\s*(?:\/\s*)?system-reminder\b)/gi, "&lt;")
-    .replace(/<(?=\s*(?:\/\s*)?$)/, "&lt;");
-}
-export function renderHookAdditionalContext(
-  attachment: HookAttachmentRow,
-): string {
-  return `<system-reminder>\n${sanitizeHookAttachmentText(`${attachment.event}:${attachment.toolName} hook additional context: ${attachment.content.join("\n")}`)}\n</system-reminder>`;
 }
 
 type IndexedRow = { row: HookProjectionRow; index: number };
@@ -131,13 +118,16 @@ const protectedResult = (block: TrackedBlock): boolean => {
   return (
     block.preventFold === true ||
     (value.type === "tool_result" &&
-      [
+      ([
         "poll_",
         "gettask_",
         "projectread_",
         "toolu_pdfread_",
         "voicecallrecord_",
-      ].some((prefix) => value.tool_use_id.startsWith(prefix)))
+      ].some((prefix) => value.tool_use_id.startsWith(prefix)) ||
+        // Source xGo/o4e (`AGo`): a tool_reference result keeps text beside it.
+        (Array.isArray(value.content) &&
+          value.content.some((item) => item.type === "tool_reference"))))
   );
 };
 
@@ -206,11 +196,12 @@ function appendAttachment(
 }
 
 /**
- * Ordered ordinary-mode consumer for hook_additional_context transcript rows.
+ * Source `Vke`/`xGo`/`o4e` in ordinary mode: attachment rows render through the
+ * attachment table and fold into the preceding tool result.
  * Use after local reasoning/rich-content projection and before losing response IDs.
- * Source/event/phase remain available in placements, but never decide the host.
- * Parallel scheduling, api_system mode and arbitrary attachment kinds stay outside
- * this explicit input vocabulary. Unknown sibling text always remains a barrier.
+ * Kind/phase remain available in placements, but never decide the host.
+ * Parallel scheduling and api_system mode stay outside this input vocabulary.
+ * Unknown sibling text always remains a barrier.
  */
 export function projectHookAttachmentHistory(
   input: readonly HookProjectionRow[],
@@ -222,11 +213,12 @@ export function projectHookAttachmentHistory(
   let scan = 0;
   for (const { row, index: sourceIndex } of relocate(input)) {
     if (row.type === "hook_attachment") {
-      if (!row.content.length) continue;
+      const texts = renderAttachment(row.attachment);
+      if (!texts.length) continue;
       const placement: HookAttachmentPlacement = {
         sourceIndex,
-        event: row.event,
-        phase: row.phase,
+        kind: row.attachment.type,
+        ...(row.phase === undefined ? {} : { phase: row.phase }),
         ...(row.toolUseId === undefined
           ? {}
           : { originToolUseId: row.toolUseId }),
@@ -235,18 +227,20 @@ export function projectHookAttachmentHistory(
         channel: "user_text",
       };
       placements.push(placement);
-      const block: TrackedBlock = {
-        value: { type: "text", text: renderHookAdditionalContext(row) },
-        attachment: placement,
-      };
-      const previous = output.at(-1);
-      if (previous?.role === "user")
-        output[output.length - 1] = appendAttachment(
-          previous,
-          block,
-          options.reminderFold === true,
-        );
-      else output.push({ role: "user", blocks: [block] });
+      for (const text of texts) {
+        const block: TrackedBlock = {
+          value: { type: "text", text },
+          attachment: placement,
+        };
+        const previous = output.at(-1);
+        if (previous?.role === "user")
+          output[output.length - 1] = appendAttachment(
+            previous,
+            block,
+            options.reminderFold === true,
+          );
+        else output.push({ role: "user", blocks: [block] });
+      }
       continue;
     }
     const message = row.message;

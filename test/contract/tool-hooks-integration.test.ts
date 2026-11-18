@@ -25,6 +25,7 @@ import type {
   Provider,
   ToolUse,
 } from "../../src/types.js";
+import { hookTexts } from "../helpers/hook-attachments.js";
 
 const signal = () => new AbortController().signal;
 const call = (name: string, input: unknown): ToolUse => ({
@@ -476,10 +477,7 @@ test("actual registry commands rewrite after validation, preserve raw response, 
   );
   assert.equal(result.is_error, undefined);
   assert.match(result.content, /File written/);
-  assert.deepEqual(
-    result.hookAttachments?.flatMap((item) => item.content),
-    ["post context"],
-  );
+  assert.deepEqual(hookTexts(result.hookAttachments), ["post context"]);
   assert.equal(await readFile(join(cwd, "new"), "utf8"), "hook content\n");
   const rows = (await readFile(log, "utf8"))
     .trim()
@@ -719,14 +717,23 @@ test("agent commits hook attachments after tool results without contaminating ra
         };
       const row = projectMessages(f.messages).at(-1);
       assert.ok(row);
+      // Source xGo with rich content: each attachment joins the result's own blocks.
       assert.deepEqual(row.content, [
         {
           type: "tool_result",
           tool_use_id: "owned-call",
-          content: [{ type: "text", text: "raw result" }],
+          content: [
+            { type: "text", text: "raw result\n" },
+            {
+              type: "text",
+              text: '<system-reminder>\nPostToolUse:Read hook blocking error from command: "hook": [hook]: post block\n</system-reminder>\n',
+            },
+            {
+              type: "text",
+              text: "<system-reminder>\nPostToolUse:Read hook additional context: post context\n</system-reminder>",
+            },
+          ],
         },
-        { type: "text", text: "pre context" },
-        { type: "text", text: "post context" },
       ]);
       return {
         content: [{ type: "text", text: "done" }],
@@ -740,7 +747,21 @@ test("agent commits hook attachments after tool results without contaminating ra
     tool_use_id: tool.id,
     content: "raw result",
     apiContent: [{ type: "text", text: "raw result" }],
-    hookContext: ["pre context", "post context"],
+    hookAttachments: [
+      {
+        phase: "post",
+        type: "hook_blocking_error",
+        hookName: "PostToolUse:Read",
+        command: "hook",
+        blockingError: "[hook]: post block",
+      },
+      {
+        phase: "post",
+        type: "hook_additional_context",
+        hookName: "PostToolUse:Read",
+        content: ["post context"],
+      },
+    ],
   });
   await runAgent(f.options);
   assert.equal(requests, 2);
@@ -791,19 +812,17 @@ test("failure-only command hooks attach feedback after failed execution without 
   assert.equal(failed.is_error, true);
   assert.match(failed.content, /owned-failure/);
   assert.equal(failed.hookStop, undefined);
-  assert.deepEqual(
-    failed.hookAttachments?.flatMap((item) => item.content),
-    ["owned recovery feedback"],
-  );
+  assert.deepEqual(hookTexts(failed.hookAttachments), [
+    "owned recovery feedback",
+  ]);
   const missing = await tools.execute(
     call("Read", { file_path: "missing" }),
     signal(),
   );
   assert.equal(missing.is_error, true);
-  assert.deepEqual(
-    missing.hookAttachments?.flatMap((item) => item.content),
-    ["owned recovery feedback"],
-  );
+  assert.deepEqual(hookTexts(missing.hookAttachments), [
+    "owned recovery feedback",
+  ]);
   const rows = (await readFile(log, "utf8"))
     .trim()
     .split("\n")
@@ -947,10 +966,10 @@ test("MCP post replacement validates raw output and retains pre/post context in 
   );
   const result = await tools.execute(call(name, {}), signal());
   assert.match(result.content, /rewritten result/);
-  assert.deepEqual(
-    result.hookAttachments?.flatMap((item) => item.content),
-    ["pre context", "post context"],
-  );
+  assert.deepEqual(hookTexts(result.hookAttachments), [
+    "pre context",
+    "post context",
+  ]);
   assert.ok(
     result.apiContent?.some(
       (block) => block.type === "text" && block.text === "rewritten result",
@@ -977,10 +996,10 @@ test("MCP post replacement validates raw output and retains pre/post context in 
   invalid = true;
   const kept = await tools.execute(call(name, {}), signal());
   assert.match(kept.content, /original result/);
-  assert.deepEqual(
-    kept.hookAttachments?.flatMap((item) => item.content),
-    ["pre context", "post context"],
-  );
+  assert.deepEqual(hookTexts(kept.hookAttachments), [
+    "pre context",
+    "post context",
+  ]);
   assert.equal(diagnostics.length, 1);
   assert.match(nth(diagnostics, 0), /invalid hook output rewrite/);
 });

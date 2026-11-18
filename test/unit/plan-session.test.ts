@@ -35,6 +35,7 @@ import { createTools } from "../../src/tools.js";
 import { ReadState } from "../../src/read-state.js";
 import { toolPolicySchema } from "../../src/tool-policy.js";
 import type { PermissionMode, ToolExecutor, ToolUse } from "../../src/types.js";
+import { failureFeedback, hookTexts } from "../helpers/hook-attachments.js";
 
 const signal = () => new AbortController().signal;
 const call = (name: string, input: unknown = {}): ToolUse => ({
@@ -135,7 +136,7 @@ async function fixture(initial: PlanPermissionState = { mode: "default" }) {
     },
     async failure(tool) {
       events.push(`failure:${tool.name}`);
-      return { additionalContext: ["owned failure feedback"] };
+      return failureFeedback("owned failure feedback");
     },
   };
   const options: PlanSessionOptions = {
@@ -768,7 +769,9 @@ test("actual plan submission failures invoke failure hooks after validation and 
   assert.equal(result.is_error, true);
   assert.match(result.content, /owned inbox unavailable/);
   assert.equal(f.state.mode, "plan");
-  assert.deepEqual(result.hookContext, ["owned failure feedback"]);
+  assert.deepEqual(hookTexts(result.hookAttachments), [
+    "owned failure feedback",
+  ]);
   assert.deepEqual(f.events, [
     "pre:ExitPlanMode",
     "policy:ExitPlanMode:none",

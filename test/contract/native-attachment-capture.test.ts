@@ -8,7 +8,7 @@ import {
   type NativeAttachmentCaptureResult,
   type NativeHookCaptureFacts,
 } from "../../src/native-attachment-capture.js";
-import { renderHookAdditionalContext } from "../../src/hook-attachment-projection.js";
+import { renderAttachment } from "../../src/attachments.js";
 import type { Message, ToolUse } from "../../src/types.js";
 
 const call: ToolUse = {
@@ -125,13 +125,11 @@ test("a real hook outcome retains raw content and exact identity while canonical
   assert.equal(row.attachment.hookName, "PostToolUse:Read");
   assert.deepEqual(row.event.rendered, [
     {
-      content: renderHookAdditionalContext({
-        type: "hook_attachment",
-        event: "PostToolUse",
-        phase: "post",
-        toolName: "Read",
+      content: renderAttachment({
+        type: "hook_additional_context",
+        hookName: "PostToolUse:Read",
         content: row.attachment.content,
-      }),
+      })[0],
     },
   ]);
   assert.equal(row.event.renderedRole, "system");

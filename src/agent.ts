@@ -12,6 +12,7 @@ import {
   ApiAttemptBudgetExhausted,
 } from "./attempt-ledger.js";
 import { canResumeThinking, markThinkingStripped } from "./thinking-history.js";
+import { attachmentMessage, type Attachment } from "./attachments.js";
 import { ProviderHttpError, resumePrefillRefused } from "./http-error.js";
 import {
   defaultOutputTokens,
@@ -173,6 +174,8 @@ export async function runAgent<
     signal: AbortSignal;
     stopHookActive: boolean;
   }) => Promise<AgentStopHookResult>;
+  /** Source `getAttachments` with no new prompt: attachments owed before each later request. */
+  roundAttachments?: (messages: readonly Message[]) => Attachment[];
 }): Promise<{
   messages: Message[];
   usage: Usage;
@@ -353,6 +356,11 @@ export async function runAgent<
   try {
     for (let turns = 1; turns <= options.maxTurns; turns++) {
       abortIfNeeded(options.signal);
+      // A trailing assistant row is a prefill continuation, not a new round.
+      if (turns > 1 && options.messages.at(-1)?.role === "user") {
+        const owed = options.roundAttachments?.(options.messages) ?? [];
+        options.messages.push(...owed.map(attachmentMessage));
+      }
       await options.tools.beforeModelRequest?.(options.signal);
       abortIfNeeded(options.signal);
       const apiWindow =
@@ -884,18 +892,7 @@ export async function runAgent<
           ? results.filter((_, index) => completedResults.has(index))
           : results;
         if (retained.length)
-          options.messages.push({
-            role: "user",
-            content: [
-              ...retained,
-              ...retained.flatMap((result) =>
-                (result.hookContext ?? []).map((text) => ({
-                  type: "text" as const,
-                  text,
-                })),
-              ),
-            ],
-          });
+          options.messages.push({ role: "user", content: retained });
       }
     }
     throw new AgentMaxTurnsError(options.maxTurns);

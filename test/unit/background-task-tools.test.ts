@@ -14,6 +14,7 @@ import type { ToolPolicy } from "../../src/tool-policy.js";
 import type { ToolHookRuntime } from "../../src/tool-hook-runtime.js";
 import type { ToolUse } from "../../src/types.js";
 import { z } from "zod";
+import { failureFeedback, hookTexts } from "../helpers/hook-attachments.js";
 function head<T>(items: readonly T[]): T {
   const [item] = items;
   assert.ok(item);
@@ -242,10 +243,7 @@ test("hooks see canonical alias, validated full replacements authorize and stop 
   assert.equal(head(seen).name, "TaskStop");
   assert.deepEqual(result.effectiveToolInput, { shell_id: "owned-b" });
   assert.deepEqual(model.input, { task_id: "owned-a" });
-  assert.deepEqual(
-    result.hookAttachments?.flatMap((item) => item.content),
-    ["owned pre context"],
-  );
+  assert.deepEqual(hookTexts(result.hookAttachments), ["owned pre context"]);
   const wire = projectMessages([
     { role: "assistant", content: [model] },
     { role: "user", content: [result] },
@@ -382,7 +380,7 @@ test("ownership is delegated at stop after Pre and permissions; failure hooks re
         assert.equal(tool.name, "TaskStop");
         assert.ok(error instanceof BackgroundTaskError);
         assert.equal(error.code, "not_owner");
-        return { additionalContext: ["Owned failure feedback"] };
+        return failureFeedback("Owned failure feedback");
       },
     },
     authorize() {
@@ -398,7 +396,9 @@ test("ownership is delegated at stop after Pre and permissions; failure hooks re
   assert.equal(result.is_error, true);
   assert.equal(result.inputRejected, undefined);
   assert.match(result.content, /scheduler refuses/);
-  assert.deepEqual(result.hookContext, ["Owned failure feedback"]);
+  assert.deepEqual(hookTexts(result.hookAttachments), [
+    "Owned failure feedback",
+  ]);
   assert.equal(owned(f).status, "running");
   assert.equal(head(f.stops)[1].callerAgentId, "another");
 });

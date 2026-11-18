@@ -179,6 +179,8 @@ async function fixture() {
               HOME: home,
               CLAUDE_CONFIG_DIR: config,
               TAU_MANAGED_ROOT: join(root, "managed"),
+              // Tool results here stay exact; cli-async-hooks pins the folded countdown.
+              CLAUDE_CODE_TOTAL_TOKENS_REMINDER: "off",
               TAU_HOME: join(root, "state"),
               CLAUDE_CODE_FORK_SUBAGENT: "0",
               CLAUDE_CODE_SUBAGENT_MODEL: "inherit",
