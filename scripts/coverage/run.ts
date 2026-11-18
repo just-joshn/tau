@@ -7,7 +7,8 @@
 // `bun run test:coverage -- --reporter=junit` (bun run drops the "--").
 // Writes coverage/coverage-final.json, lcov.info and coverage-summary.json.
 // --focus narrows printing and gating to the named files and lists each of
-// their uncovered branches. --merge unions a saved coverage-final.json first.
+// their uncovered branches. --merge unions a saved coverage-final.json first,
+// skipping with a warning each file whose source changed since it was saved.
 import {
   createCoverageMap,
   type CoverageMap,

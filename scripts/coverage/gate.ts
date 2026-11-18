@@ -68,12 +68,31 @@ export function resolveFocus(
   });
 }
 
-/** The entries of a saved coverage map that merge into `current`. */
+/**
+ * Splits a saved coverage map into the entries whose statement, function and
+ * branch maps match `current`, and the paths of the rest. istanbul merges by
+ * location, so a stale entry would add its locations to the totals.
+ */
 export function mergeableCoverage(
   saved: CoverageMapData,
-  _current: CoverageMap,
+  current: CoverageMap,
 ): { fresh: CoverageMapData; stale: string[] } {
-  return { fresh: saved, stale: [] };
+  const fresh: CoverageMapData = {};
+  const stale: string[] = [];
+  const files = new Set(current.files());
+  for (const [path, entry] of Object.entries(saved)) {
+    const now = files.has(path) ? current.fileCoverageFor(path) : undefined;
+    if (
+      now !== undefined &&
+      Bun.deepEquals(
+        [entry.statementMap, entry.fnMap, entry.branchMap],
+        [now.statementMap, now.fnMap, now.branchMap],
+      )
+    )
+      fresh[path] = entry;
+    else stale.push(path);
+  }
+  return { fresh, stale };
 }
 
 /** The istanbul coverage map saved at `path`. */
