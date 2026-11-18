@@ -299,3 +299,23 @@ describe("input box", () => {
     expect(frame.cursor).toEqual({ row: 27, column: 24 });
   });
 });
+
+describe("explore rows", () => {
+  test("consecutive searches and reads collapse into one counted row", () => {
+    let items: TranscriptItem[] = [];
+    for (const [id, name] of [
+      ["g1", "Grep"],
+      ["r1", "Read"],
+      ["g2", "Glob"],
+      ["r2", "Read"],
+    ] as const)
+      items = startTool(
+        items,
+        { type: "tool_use", id, name, input: { pattern: "x" } },
+        CWD,
+        () => undefined,
+      );
+    const rows = screen({ ...base(fixture("tour-ready")), items });
+    expect(rows[6]).toBe("  Searched for 2 patterns, read 2 files");
+  });
+});

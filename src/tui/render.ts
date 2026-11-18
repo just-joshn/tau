@@ -134,19 +134,15 @@ function item(entry: TranscriptItem, columns: number): Line[] {
     case "assistant":
       return hanging(entry.text, [span("⏺ ", { fg: COLOR.text })], 2, columns);
     case "explore": {
+      // The original's order: searches, then reads; only the first verb is capitalized.
       const counts = [
-        ["Read", entry.reads, "file"],
-        ["searched for", entry.searches, "pattern"],
+        ["Searched for", "searched for", entry.searches, "pattern"],
+        ["Read", "read", entry.reads, "file"],
       ] as const;
       const spans = counts
-        .filter(([, count]) => count > 0)
-        .flatMap(([verb, count, noun], index) => [
-          span(
-            index
-              ? `, ${verb} `
-              : `${verb.charAt(0).toUpperCase()}${verb.slice(1)} `,
-            dim,
-          ),
+        .filter(([, , count]) => count > 0)
+        .flatMap(([first, later, count, noun], index) => [
+          span(index ? `, ${later} ` : `${first} `, dim),
           span(String(count), { ...dim, bold: true }),
           span(` ${noun}${count === 1 ? "" : "s"}`, dim),
         ]);
