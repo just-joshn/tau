@@ -826,22 +826,25 @@ describe("protected write classification", () => {
     ).toBe("deny");
   });
 
-  test("the macOS data-volume spelling of the config folder is the same folder", () => {
-    const w = world();
-    const data = "/System/Volumes/Data" + w.config;
-    const outcome = w.write(posix.join(data, "daemon", "x"));
-    expect(outcome.behavior).toBe("deny");
-    expect(reason(outcome)).toContain("daemon folder");
-    for (const path of [
-      "/System/Volumes/Data/unlisted/daemon/x",
-      "/System/Volumes/Other/x/daemon",
-      "/System/Other/Data/x/daemon",
-      "/Other/Volumes/Data/x/daemon",
-      "/System/Volumes/Data",
-      "relative/System/Volumes/Data/x/y",
-    ])
-      expect(w.write(path).behavior).toBe("passthrough");
-  });
+  test.skipIf(process.platform !== "darwin")(
+    "the macOS data-volume spelling of the config folder is the same folder",
+    () => {
+      const w = world();
+      const data = "/System/Volumes/Data" + w.config;
+      const outcome = w.write(posix.join(data, "daemon", "x"));
+      expect(outcome.behavior).toBe("deny");
+      expect(reason(outcome)).toContain("daemon folder");
+      for (const path of [
+        "/System/Volumes/Data/unlisted/daemon/x",
+        "/System/Volumes/Other/x/daemon",
+        "/System/Other/Data/x/daemon",
+        "/Other/Volumes/Data/x/daemon",
+        "/System/Volumes/Data",
+        "relative/System/Volumes/Data/x/y",
+      ])
+        expect(w.write(path).behavior).toBe("passthrough");
+    },
+  );
 
   test("a relative config directory explains the three-folder resolution", () => {
     const w = world();
