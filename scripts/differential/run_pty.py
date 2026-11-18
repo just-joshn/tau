@@ -79,7 +79,10 @@ def main():
     mock = PtyMock()
     master, slave, tty = open_pty()
     other_master, other_slave, other_tty = open_pty()
-    context = LocalRoot(mock.handler()) if args.unsandboxed else Isolation(directory, mock.handler(), tty_paths=[tty, "/dev/tty"])
+    # The positive canary opens a granted PTY of its own: a sandboxed session leader that opens the
+    # session PTY would make it its controlling terminal, and macOS revokes that terminal when it exits.
+    probe_master, probe_slave, probe_tty = open_pty()
+    context = LocalRoot(mock.handler()) if args.unsandboxed else Isolation(directory, mock.handler(), tty_paths=[tty, probe_tty, "/dev/tty"])
     session = None
     try:
         runtime = {}
@@ -92,7 +95,7 @@ def main():
             if args.executable == "tau":
                 context.env.update(bun_environment(context.root))
             context.verify()
-            tty_canaries(context, tty, other_tty)
+            tty_canaries(context, probe_tty, other_tty)
             if args.executable == "original":
                 command = [str(context.copy_target(PINNED_TARGET))]
                 runtime = {"target_sha256": TARGET_SHA256}
@@ -100,7 +103,7 @@ def main():
                 bun, entry, runtime, _ = prepare_bun_adapter(context, directory, stem)
                 command = [str(bun), "--no-install", str(entry)]
             command = ["/usr/bin/sandbox-exec", "-f", str(context.sb_path), *command]
-        os.close(other_slave); os.close(other_master)
+        os.close(other_slave); os.close(other_master); os.close(probe_slave); os.close(probe_master)
         mock.work = context.root / "work"
         seed(context.root, context.env["ANTHROPIC_API_KEY"], args.setup)
         env = {**context.env, "TERM": "xterm-256color"}

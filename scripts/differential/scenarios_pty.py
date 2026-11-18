@@ -118,7 +118,7 @@ FIRST_RUN = [
     ("api-key", r"(?i)do you want to use this api key", "1"),  # focus starts on "No (recommended)"
     ("security-notes", r"(?i)security notes|press enter to continue", "\r"),
     ("terminal-setup", r"(?i)use claude code's terminal setup", "\x1b"),
-    ("trust", r"(?i)quick safety check|trust this folder", "\r"),
+    ("trust", r"(?i)quick safety check|trust this folder", "2"),  # the original preselects "No, exit"; option 2 is "Yes, I trust this folder"
 ]
 READY = {"original": r"\? for shortcuts", "tau": r"(?m)^tau> ?$"}
 DIALOG = {"original": r"(?i)do you want to make this edit", "tau": r"(?i)do you want to make this edit"}
