@@ -70,12 +70,16 @@ test("exit statuses, notes and escaped summaries reach the notification", async 
   await until(() => notifications.length >= 2);
   unsubscribe();
   assert.ok(published >= 2);
+  // The two exits settle asynchronously, so their notices may arrive in either order.
+  const notice = (id: string) =>
+    notifications.find((text) => text.includes(`<task-id>${id}</task-id>`)) ??
+    "";
   assert.match(
-    notifications[0] ?? "",
+    notice("baaaaaaaa"),
     /<task-id>baaaaaaaa<\/task-id>\n<output-file>[^<]+<\/output-file>\n<status>failed<\/status>\n<summary>Background command "Build &lt;all&gt; &amp; test" failed with exit code 2<\/summary>/,
   );
   assert.match(
-    notifications[1] ?? "",
+    notice("bbbbbbbbb"),
     /<tool-use-id>toolu_2<\/tool-use-id>[\s\S]*<summary>Background command "grep x f" completed \(exit code 1: No matches found\)<\/summary>/,
   );
   assert.deepEqual(
