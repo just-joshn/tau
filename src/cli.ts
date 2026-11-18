@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { admitSessionPersistence, isInteractiveLaunch } from "./launch-mode.js";
 import { realpath } from "node:fs/promises";
 import { resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
@@ -103,6 +104,15 @@ async function main(): Promise<void> {
     stdout.write("tau 0.1.0\n");
     return;
   }
+  const persistence = admitSessionPersistence(
+    options.noSessionPersistence,
+    isInteractiveLaunch(process.argv.slice(2), Boolean(stdout.isTTY)),
+  );
+  if (!persistence.ok) {
+    stderr.write(`${persistence.error}\n`);
+    process.exitCode = 1;
+    return;
+  }
   const cwd = await realpath(options.cwd);
   const interactive = !options.print && Boolean(stdin.isTTY && stdout.isTTY);
   const launch = await loadLaunchConfiguration(options, {
@@ -184,7 +194,9 @@ async function main(): Promise<void> {
         : { maxThinkingTokens: options.maxThinkingTokens }),
     },
   });
-  const store = await SessionStore.create(cwd);
+  const store = await SessionStore.create(cwd, undefined, {
+    persist: !persistence.sessionPersistenceDisabled,
+  });
   let session = options.resume
     ? options.resume.trim().toLowerCase().endsWith(".jsonl")
       ? (

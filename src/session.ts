@@ -73,18 +73,25 @@ export class SessionStore {
   private constructor(
     private readonly directory: string,
     private readonly cwd: string,
+    private readonly persist: boolean,
   ) {}
 
+  /** `persist: false` is the recovered `--no-session-persistence` disable fact: transcripts are never written. */
   static async create(
     cwd: string,
     home = process.env.TAU_HOME ?? join(homedir(), ".tau"),
+    { persist = true }: { persist?: boolean } = {},
   ): Promise<SessionStore> {
     const canonical = await realpath(cwd);
     const key = createHash("sha256")
       .update(canonical)
       .digest("hex")
       .slice(0, 24);
-    return new SessionStore(join(resolve(home), "sessions", key), canonical);
+    return new SessionStore(
+      join(resolve(home), "sessions", key),
+      canonical,
+      persist,
+    );
   }
 
   pathFor(id: string): string {
@@ -150,6 +157,7 @@ export class SessionStore {
   }
 
   async saveSubagent(archive: SubagentArchive): Promise<void> {
+    if (!this.persist) return;
     const parsed = subagentArchiveSchema.parse({
       ...archive,
       updatedAt: new Date().toISOString(),
@@ -184,6 +192,7 @@ export class SessionStore {
   }
 
   async save(session: Session): Promise<void> {
+    if (!this.persist) return;
     const parsed = sessionSchema.parse({
       ...session,
       updatedAt: new Date().toISOString(),

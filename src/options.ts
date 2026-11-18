@@ -52,6 +52,7 @@ export function parseOptions(args: string[]) {
       "mcp-config": { type: "string", multiple: true },
       "plugin-dir": { type: "string", multiple: true },
       "strict-mcp-config": { type: "boolean" },
+      "no-session-persistence": { type: "boolean" },
       settings: { type: "string" },
       "setting-sources": { type: "string" },
       "managed-settings": { type: "string" },
@@ -136,6 +137,7 @@ export function parseOptions(args: string[]) {
     managedSettings: values["managed-settings"],
     mcpConfig: values["mcp-config"] ?? [],
     strictMcpConfig: values["strict-mcp-config"] ?? false,
+    noSessionPersistence: values["no-session-persistence"] ?? false,
     help: values.help ?? false,
     version: values.version ?? false,
     print: values.print ?? false,
@@ -236,6 +238,7 @@ Usage: tau [options] [prompt]
       --mcp-config JSON_OR_PATH     Explicit stdio MCP servers; repeat to merge configs
       --plugin-dir PATH            Load an explicit local plugin directory; repeat to add
       --strict-mcp-config           Skip ordinary MCP autodiscovery; use explicit configs
+      --no-session-persistence      Do not save the session (print mode only)
       --settings JSON_OR_PATH       Additional settings document (overrides ordinary sources)
       --setting-sources LIST        user,project,local; empty disables all three
       --managed-settings JSON       Explicit parent managed settings document
