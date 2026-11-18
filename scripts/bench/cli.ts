@@ -15,7 +15,7 @@ import { availableParallelism, cpus, loadavg, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { z } from "zod";
-import { fixtureSse } from "../../test/sse-fixture.js";
+import { fixtureSse } from "../../test/helpers/sse-fixture.js";
 
 const statsSchema = z.object({
   runs: z.number(),

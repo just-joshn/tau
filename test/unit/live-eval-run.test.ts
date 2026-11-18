@@ -17,7 +17,7 @@ import {
   subsets,
   type EvalCase,
 } from "../../scripts/live-eval/schema.js";
-import { fixtureSse } from "../sse-fixture.js";
+import { fixtureSse } from "../helpers/sse-fixture.js";
 
 const runner = resolve("scripts/live-eval/run.ts");
 
