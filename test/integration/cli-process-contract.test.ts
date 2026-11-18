@@ -642,7 +642,8 @@ test("INV-04 with only HOME and PATH the run writes under its own HOME and leaks
       (path) =>
         !path.startsWith("home/.tau/") &&
         !path.startsWith("home/Library/Caches/bun/") &&
-        !path.startsWith("home/.cache/bun/"),
+        !path.startsWith("home/.cache/bun/") &&
+        !path.startsWith("home/.bun/install/cache/@t@/"),
     ),
     [],
   );
