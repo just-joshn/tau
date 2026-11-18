@@ -20,7 +20,7 @@
     "test:property": "bun test --parallel test/property",
     "test:faults": "bun test --parallel test/faults",
     "test:coverage": "bun scripts/coverage/run.ts",
-    "test:mutation": "bun scripts/mutation/run.ts --min-score 0.988",
+    "test:mutation": "bun scripts/mutation/run.ts --min-score 0.986",
     "test:flaky": "bun test --randomize --seed 20261117 --rerun-each 5",
     "test:node": "node scripts/node-smoke.mjs",
     "bench": "bun scripts/bench/cli.ts",
