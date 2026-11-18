@@ -46,6 +46,7 @@ in one bundle chunk (41 in `chunk-4h798pp0.js`; `identity_agent_sdk` and
 | `# Tone and style` | 4h798pp0 `ods` |
 | `# Text output` (standard style), pronouns | 4h798pp0 `kls("standard")`, `xls` |
 | `# Session-specific guidance` | 4h798pp0 `tds`, `nds`, `eds("with-nudge")`; explore gate `G5` = `!CLAUDE_CODE_DISABLE_EXPLORE_PLAN_AGENTS` |
+| `# auto memory` (gated; see `docs/auto-memory-contract.md`) | 2e8vamz8 `bQn`, `$o`, `xt` |
 | `# Environment` (latest models, surfaces, fast mode) | 4h798pp0 `gds`, `pls`; catalog `latest_per_family` in 9vmv3a50 |
 | `# Context management`, act-dont-rederive | 4h798pp0 `_ds`, `ids`, `sds` (`CLAUDE_CODE_ACT_DONT_REDERIVE`) |
 | total_tokens line and reminder | 4h798pp0 `YWn`, `Eme`, `vme`, `lVn`; capability `total_tokens_reminder` |
@@ -90,9 +91,6 @@ stream-json/`--verbose`):
 
 ## Not ported (remaining work)
 
-- `# auto memory`: needs main-session auto memory (directory creation, Write
-  access outside the workspace, MEMORY.md loading). Source: 2e8vamz8 `bQn`,
-  `$o`, `xt`. Emitting it now would describe a store tau cannot write.
 - Lean prompt bundle for `lean_prompt` models (Opus 5.5, Sonnet 5.5, Fable,
   Opus 4.8/5, Haiku 5.5): 4h798pp0 `rds` and model-gated sections
   (`_ls` readable variants, `Sls`, `wls`, `Cls`, `$Wn`, `Ils`, `Lls`, `Gls`).
