@@ -34,6 +34,7 @@ async function host(
     startCwd: start,
     env: {
       ...process.env,
+      HOME: root,
       CLAUDE_CODE_TMPDIR: path.join(root, "tmp"),
       CLAUDE_CONFIG_DIR: path.join(root, "config"),
       ...env,
@@ -262,6 +263,8 @@ test("a foreground timeout kills a leading sleep and backgrounds anything else",
 
 test("an aborted call kills the command and throws", async () => {
   const { run } = await host();
+  // The first call creates the shell snapshot; abort a running command.
+  await run({ command: "true" });
   const controller = new AbortController();
   const pending = run({ command: "sleep 5" }, controller.signal);
   setTimeout(() => controller.abort(), 100);

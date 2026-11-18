@@ -2,6 +2,7 @@
 // the model-visible tool_result texts, cd persistence, timeouts, and a
 // background command whose completion notification starts the next request.
 import assert from "node:assert/strict";
+import { existsSync, readdirSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { setDefaultTimeout, test } from "bun:test";
 import { z } from "zod";
@@ -191,4 +192,88 @@ test("a background command's completion reaches the next request, and TaskStop s
     ),
   );
   assert.equal(await readFile(output, "utf8"), "bg\n\n[exited with code 0]\n");
+});
+
+const SHELLS = ["/bin/bash", "/bin/zsh"].filter((shell) => existsSync(shell));
+// `files` are keyed relative to the workspace; the harness HOME is its sibling.
+const rcFiles = (text: string) => ({
+  "../home/.bashrc": text,
+  "../home/.zshrc": text,
+});
+const shellEnv = (shell: string) => ({
+  SHELL: shell,
+  CLAUDE_CODE_SHELL: shell,
+});
+
+for (const shell of SHELLS)
+  test(`${shell}: rc aliases and functions reach foreground and background commands`, async () => {
+    const provider = await startMockProvider([
+      bash("alias", { command: "greet" }),
+      bash("function", { command: "shout fg" }),
+      bash("empty", { command: "printf ''" }),
+      bash("bg", { command: "shout bg > bg.txt", run_in_background: true }),
+      turn({ type: "text", text: "waiting" }),
+      turn({ type: "text", text: "done" }),
+    ]);
+    const run = await runCli({
+      args: PRINT,
+      provider,
+      env: shellEnv(shell),
+      files: rcFiles(
+        `alias greet='echo hello from rc'\nshout() { echo "SHOUT:$1"; }\n`,
+      ),
+    });
+    assert.equal(run.exitCode, 0, run.stderr);
+    const seen = resultsOf(provider.requests[4]?.body);
+    assert.deepEqual(
+      [seen.alias, seen.function, seen.empty],
+      [
+        { content: "hello from rc", is_error: false },
+        { content: "SHOUT:fg", is_error: false },
+        { content: "(Bash completed with no output)", is_error: false },
+      ],
+    );
+    assert.equal(await readFile(`${run.cwd}/bg.txt`, "utf8"), "SHOUT:bg\n");
+    // The snapshot is deleted when the CLI exits.
+    assert.deepEqual(readdirSync(`${run.root}/config/shell-snapshots`), []);
+  });
+
+test("a broken rc file keeps what ran before the error", async () => {
+  const provider = await startMockProvider([
+    bash("alias", { command: "greet" }),
+    turn({ type: "text", text: "done" }),
+  ]);
+  const run = await runCli({
+    args: PRINT,
+    provider,
+    env: shellEnv("/bin/bash"),
+    files: rcFiles("alias greet='echo still here'\nif then fi\n"),
+  });
+  assert.equal(run.exitCode, 0, run.stderr);
+  assert.deepEqual(results(provider).alias, {
+    content: "still here",
+    is_error: false,
+  });
+});
+
+test("an rc file that exits fails the snapshot, so commands run in a login shell", async () => {
+  const provider = await startMockProvider([
+    bash("alias", { command: "greet" }),
+    bash("echo", { command: "echo ok" }),
+    turn({ type: "text", text: "done" }),
+  ]);
+  const run = await runCli({
+    args: PRINT,
+    provider,
+    env: shellEnv("/bin/bash"),
+    files: rcFiles("alias greet='echo never'\nexit 3\n"),
+  });
+  assert.equal(run.exitCode, 0, run.stderr);
+  const seen = results(provider);
+  assert.equal(seen.alias?.is_error, true);
+  assert.match(String(seen.alias?.content), /^Exit code 127\n/);
+  // A login shell may print its own startup noise before the output.
+  assert.equal(seen.echo?.is_error, false);
+  assert.match(String(seen.echo?.content), /(^|\n)ok$/);
+  assert.deepEqual(readdirSync(`${run.root}/config/shell-snapshots`), []);
 });

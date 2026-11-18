@@ -11,6 +11,9 @@ import threading
 from mock_api import MODEL, events
 
 DONE = "bash workflow done"
+# The dummy HOME's rc file, read by the shell snapshot. The profile denies awk
+# and sed, which the snapshot uses to capture options and aliases.
+BASHRC = "greet_fn() { echo function from bashrc; }\nalias greet_alias='echo alias from bashrc'\n"
 STEPS = [
     {"command": "echo hi"},
     {"command": "cd sub && pwd"},
@@ -21,6 +24,8 @@ STEPS = [
     {"command": "echo out; echo err >&2"},
     {"command": "sleep 3", "timeout": 300},
     {"command": "sleep 30"},
+    {"command": "greet_fn"},
+    {"command": "greet_alias"},
     {"command": "sleep 1; echo bg", "run_in_background": True, "description": "Print bg after a second"},
 ]
 
@@ -41,6 +46,7 @@ class BashMock:
 
     def prepare(self, isolation):
         (isolation.root / "work/sub").mkdir()
+        (isolation.root / "home/.bashrc").write_text(BASHRC)
 
     def respond(self, body):
         model = body.get("model", MODEL)
