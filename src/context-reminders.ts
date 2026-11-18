@@ -38,6 +38,16 @@ interface TurnReminder {
   /** Emitted again on every user turn, not only when absent from context. */
   everyTurn?: true;
   render(context: ReminderContext): string | null;
+  /** What to say when the active context already holds this reminder's `sent` text. */
+  renderSent?(context: ReminderContext, sent: string): string | null;
+}
+
+/** Source `f2t` for a local date; the original's assumed-UTC variant is not modeled. */
+function dateChange({ date }: ReminderContext, sent: string): string | null {
+  const told = /Today's date is (?:now )?(\d{4}-\d{2}-\d{2})/.exec(sent)?.[1];
+  return told === undefined || told === date
+    ? null
+    : `The date has changed. Today's date is now ${date}. No need to announce the new date \u2014 the user's own clock shows it.`;
 }
 
 const UNTRUSTED_DOWNLOADS =
@@ -106,7 +116,11 @@ export const TURN_REMINDERS: readonly TurnReminder[] = [
     // Source `reanchorTaskBudget`: a user turn restarts the countdown.
     render: (context) => totalTokensText(context, 0),
   },
-  { id: "date", render: ({ date }) => `Today's date is ${date}.` },
+  {
+    id: "date",
+    render: ({ date }) => `Today's date is ${date}.`,
+    renderSent: dateChange,
+  },
   { id: "git_attribution", render: gitAttribution },
 ];
 
@@ -120,14 +134,19 @@ export function turnStartReminders(
   context: ReminderContext,
   history: readonly Message[],
 ): ReminderBlock[] {
-  const sent = new Set(
-    history
-      .slice(activeContextStart([...history]))
-      .flatMap((message) => message.reminders ?? []),
-  );
+  // The newest text each reminder id put into the active context.
+  const sent = new Map<ReminderId, string>();
+  for (const message of history.slice(activeContextStart([...history])))
+    for (const [index, id] of (message.reminders ?? []).entries()) {
+      const block = message.content[index];
+      sent.set(id, block?.type === "text" ? block.text : "");
+    }
   return TURN_REMINDERS.flatMap((reminder) => {
-    if (!reminder.everyTurn && sent.has(reminder.id)) return [];
-    const text = reminder.render(context);
+    const told = sent.get(reminder.id);
+    const text =
+      reminder.everyTurn || told === undefined
+        ? reminder.render(context)
+        : (reminder.renderSent?.(context, told) ?? null);
     return text === null
       ? []
       : [

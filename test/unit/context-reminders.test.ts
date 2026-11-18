@@ -231,3 +231,32 @@ test("git facts find the nearest repository marker and linked worktrees", async 
 test("local dates are zero-padded calendar dates", () => {
   assert.equal(localDate(new Date(2026, 0, 5, 12)), "2026-01-05");
 });
+
+test("a later turn on a new local date says the date changed, once per change", () => {
+  const turn = (date: string, history: Message[]): Message => {
+    const row: Message = {
+      role: "user",
+      content: [{ type: "text", text: "go" }],
+    };
+    prependReminders(row, turnStartReminders(context({ date }), history));
+    return row;
+  };
+  const dateOf = (row: Message) => {
+    const index = row.reminders?.indexOf("date") ?? -1;
+    const block = row.content[index];
+    return index < 0 || block?.type !== "text" ? undefined : block.text;
+  };
+  const first = turn("2026-11-18", []);
+  const same = turn("2026-11-18", [first]);
+  assert.equal(dateOf(same), undefined);
+  const next = turn("2026-11-19", [first, same]);
+  assert.equal(
+    dateOf(next),
+    "<system-reminder>\nThe date has changed. Today's date is now 2026-11-19. No need to announce the new date \u2014 the user's own clock shows it.\n</system-reminder>",
+  );
+  assert.equal(dateOf(turn("2026-11-19", [first, same, next])), undefined);
+  assert.match(
+    dateOf(turn("2026-11-20", [first, same, next])) ?? "",
+    /is now 2026-11-20\./,
+  );
+});
