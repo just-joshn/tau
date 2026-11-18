@@ -20,7 +20,8 @@ export interface CatalogSkillMetadata {
   listingDescription?: string;
   whenToUse?: string;
   nameOnly?: boolean;
-  bundled?: boolean;
+  /** "bundled" lines keep their description when the listing is over budget. */
+  source?: string;
 }
 export interface AgentCatalogAttachment {
   type: "agent_listing_delta";
@@ -182,7 +183,10 @@ function formatSkills(
   if (fullWidth <= budget) return lines.map((line) => line.full).join("\n");
   const fixed = new Set<number>();
   skills.forEach((skill, index) => {
-    if (skill.nameOnly || (remaining === undefined && skill.bundled))
+    if (
+      skill.nameOnly ||
+      (remaining === undefined && skill.source === "bundled")
+    )
       fixed.add(index);
   });
   const flexible = lines.flatMap((line, index) =>

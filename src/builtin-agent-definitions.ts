@@ -1,4 +1,13 @@
 import type { LocalAgentDefinition } from "./agent-definitions.js";
+import {
+  CLAUDE_AGENT_PROMPT,
+  EXPLORE_PROMPT,
+  EXPLORE_PROMPT_SHELL_SEARCH,
+  GENERAL_PURPOSE_PROMPT,
+  PLAN_PROMPT,
+  PLAN_PROMPT_SHELL_SEARCH,
+  STATUSLINE_SETUP_PROMPT,
+} from "./builtin-agent-prompts.js";
 
 export const DEFAULT_BUILTIN_SUBAGENT_TYPE = "general-purpose";
 export const BUILTIN_AGENT_TYPES = [
@@ -108,7 +117,13 @@ function base(
     ...metadata,
   };
 }
-/** Independently authored short prompts; none of the shipped vendor prompt bodies are embedded. */
+/**
+ * general-purpose, statusline-setup, claude, Explore and Plan carry the original's
+ * getSystemPrompt text (src/builtin-agent-prompts.ts). Explore and Plan take the Bash
+ * branch of its shell choice and its find/grep branch exactly when guideToolMode is
+ * "bash"; statusline-setup omits the Windows-only Git Bash path note. web-fetch and
+ * claude-code-guide keep independently authored short prompts.
+ */
 function candidates(
   options: BuiltinAgentCatalogOptions,
 ): LocalAgentDefinition[] {
@@ -116,7 +131,7 @@ function candidates(
     base(
       "general-purpose",
       "General-purpose agent for researching complex questions, searching for code, and executing multi-step tasks. When you are searching for a keyword or file and are not confident that you will find the right match in the first few tries use this agent to perform the search for you.",
-      "Complete the delegated task using the tools and context supplied by the host. Respect the parent session's permissions. Verify relevant changes and return concrete findings and remaining issues.",
+      GENERAL_PURPOSE_PROMPT,
       { tools: ["*"] },
     ),
   ];
@@ -125,7 +140,7 @@ function candidates(
       base(
         "statusline-setup",
         "Use this agent to configure the user's Claude Code status line setting.",
-        "Inspect the admitted configuration and implement the requested status line change. Use only the supplied Read and Edit tools, preserve unrelated configuration, and describe the result.",
+        STATUSLINE_SETUP_PROMPT,
         { tools: ["Read", "Edit"], model: "sonnet", color: "orange" },
       ),
     );
@@ -134,16 +149,17 @@ function candidates(
       base(
         "claude",
         "Catch-all for any task that doesn't fit a more specific agent. FleetView's default when no agent name is typed.",
-        "Complete the delegated task within the supplied session context and permissions. Return a concise report with evidence and any unresolved work.",
+        CLAUDE_AGENT_PROMPT,
         { tools: ["*"] },
       ),
     );
   if (options.explorePlanEnabled) {
+    const shellSearch = options.guideToolMode === "bash";
     definitions.push(
       base(
         "Explore",
         'Fast read-only search agent for locating code. Use it to find files by pattern (eg. "src/components/**/*.tsx"), grep for symbols or keywords (eg. "API endpoints"), or answer "where is X defined / which files reference Y." Do NOT use it for code review, design-doc auditing, cross-file consistency checks, or open-ended analysis — it reads excerpts rather than whole files and will miss content past its read window. When calling, specify search breadth: "quick" for a single targeted lookup, "medium" for moderate exploration, or "very thorough" to search across multiple locations and naming conventions.',
-        "Investigate the codebase to answer the delegated question. Search and read relevant code, cite file locations, and explain the relationships you establish. Keep the investigation read-only, including shell commands; do not modify files.",
+        shellSearch ? EXPLORE_PROMPT_SHELL_SEARCH : EXPLORE_PROMPT,
         {
           disallowedTools: EXPLORATION_DISALLOWED_TOOLS,
           model: "inherit",
@@ -155,7 +171,7 @@ function candidates(
       base(
         "Plan",
         "Software architect agent for designing implementation plans. Use this when you need to plan the implementation strategy for a task. Returns step-by-step plans, identifies critical files, and considers architectural trade-offs.",
-        "Read the relevant code and requirements, identify existing behavior and constraints, and produce an actionable implementation plan with affected files, tradeoffs, and validation steps. Keep all investigation read-only, including shell commands; do not modify files.",
+        shellSearch ? PLAN_PROMPT_SHELL_SEARCH : PLAN_PROMPT,
         {
           disallowedTools: EXPLORATION_DISALLOWED_TOOLS,
           model: "inherit",

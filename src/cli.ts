@@ -92,6 +92,8 @@ import {
 import { createSessionTaskHost } from "./task-session.js";
 import { createSessionAgentHost } from "./agent-session.js";
 import { wrapCatalogTools } from "./catalog-session.js";
+import { TAU_VERSION } from "./version.js";
+import { BUILTIN_PLUGINS } from "./builtin-skills/index.js";
 import { TOOL_SEARCH, toolSearchEnabled } from "./tool-search.js";
 import { formatBackgroundNotification } from "./background-notifications.js";
 import { createBackgroundTaskTools } from "./background-task-tools.js";
@@ -136,8 +138,6 @@ import {
 import { SdkInputFatal, sdkUserTurns, type SdkUserTurn } from "./sdk-input.js";
 import { createBackgroundShells } from "./background-shells.js";
 import { createShellHost, interpretExit } from "./bash-tool.js";
-
-const TAU_VERSION = "0.1.0";
 
 /** Diagnostics go to stderr, or into the transcript while the full-screen UI owns the terminal. */
 let diagnostics = (text: string): boolean => processStderr.write(text);
@@ -1769,8 +1769,10 @@ async function main(): Promise<void> {
       queryModelForTools = queryModel;
       const tools = await createSessionTools();
       if (sdk) {
-        const skills =
-          skillHost?.runtime.catalog().map((skill) => skill.name) ?? [];
+        const commands = skillHost?.runtime.catalog() ?? [];
+        const skills = commands
+          .filter((skill) => skill.source !== "builtinCommand")
+          .map((skill) => skill.name);
         const connected = new Set(mcp?.connectedServers);
         emit([
           sdk.init(session.id, {
@@ -1782,17 +1784,24 @@ async function main(): Promise<void> {
             })),
             model: queryModel,
             permissionMode: mode,
-            slashCommands: skills,
+            slashCommands: commands.map((skill) => skill.name),
             agents:
               (await agentHost?.catalog())?.map(
                 (definition) => definition.agentType,
               ) ?? [],
             skills,
-            plugins: plugins.plugins.map((plugin) => ({
-              name: plugin.name,
-              path: plugin.root,
-              source: plugin.source,
-            })),
+            plugins: [
+              ...BUILTIN_PLUGINS.map((name) => ({
+                name,
+                path: "builtin",
+                source: `${name}@builtin`,
+              })),
+              ...plugins.plugins.map((plugin) => ({
+                name: plugin.name,
+                path: plugin.root,
+                source: plugin.source,
+              })),
+            ],
             ...(memoryHost.autoMemory.enabled
               ? { memoryPaths: { auto: memoryHost.autoMemory.directory } }
               : {}),
@@ -2052,11 +2061,20 @@ async function main(): Promise<void> {
       }
     }
     if (!tui) await activeHooks().settleRewakes();
+    // The original's help puts bundled skills and built-in commands under
+    // "Commands" with their menu text; everything else is a custom command.
+    const builtin = (skill: { source: string }) =>
+      skill.source === "bundled" || skill.source === "builtinCommand";
     const skillEntries = () =>
       (skillHost?.runtime.catalog() ?? []).map((skill) => ({
         name: skill.name,
-        description: skill.description,
+        description: builtin(skill)
+          ? skill.menuDescription || skill.description
+          : skill.description,
+        builtin: builtin(skill),
       }));
+    const customEntries = () =>
+      skillEntries().filter((skill) => !skill.builtin);
     while (tui && !closing) {
       tui.setCommands(commandEntries(skillEntries(), session.model));
       tui.setModel(modelLabel(session.model));
@@ -2078,11 +2096,11 @@ async function main(): Promise<void> {
           closing = true;
           break;
         case "help":
-          tui.showHelp(skillEntries());
+          tui.showHelp(customEntries());
           break;
         case "skills":
           reply(
-            skillEntries()
+            customEntries()
               .map((skill) => `/${skill.name} ${skill.description}`)
               .join("\n") || "No local skills available.",
           );

@@ -114,7 +114,7 @@ test("tool inventory remains metadata only; explicit user and consent paths pres
   const runtime = await f.runtime({ registry });
   assert.match(
     at(runtime.definitions, 0).description,
-    /available skills listed in the conversation/,
+    /Available skills appear in a system-reminder listing/,
   );
   assert.deepEqual(
     runtime

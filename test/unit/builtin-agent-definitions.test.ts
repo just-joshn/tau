@@ -65,7 +65,10 @@ test("ordinary built-in catalog provides exact default identity and independentl
     resolveDefaultSubagentType(catalog.definitions),
     DEFAULT_BUILTIN_SUBAGENT_TYPE,
   );
-  assert.ok(general.prompt.length > 30 && general.prompt.length < 400);
+  assert.match(
+    general.prompt,
+    /^You are an agent for Claude Code, Anthropic's official CLI for Claude\./,
+  );
   assert.throws(
     () => Reflect.apply(Array.prototype.push, general.tools, ["Bash"]),
     TypeError,

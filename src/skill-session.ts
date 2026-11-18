@@ -30,6 +30,11 @@ import {
 } from "./query-model-effort.js";
 import { resolveDirectModelAlias } from "./direct-model-alias.js";
 import { pluginCustomizationOnly } from "./plugin-policy.js";
+import {
+  builtinSkillDefinitions,
+  bundledSkillsRoot,
+} from "./builtin-skills/index.js";
+import { TAU_VERSION } from "./version.js";
 
 /** Direct baked catalog before terminal fallbacks; account/provider tables remain separate. */
 export function resolveDirectSkillModelAlias(
@@ -147,6 +152,17 @@ export async function createSessionSkillHost(options: SessionSkillHostOptions) {
     }));
   if (!options.registry) {
     registry.registerDefinitions(options.pluginPrompts ?? []);
+    registry.registerDefinitions(
+      builtinSkillDefinitions({
+        gate: {
+          env,
+          interactive: options.interactive,
+          platform: process.platform,
+        },
+        cwd: options.cwd,
+        root: bundledSkillsRoot(env, TAU_VERSION),
+      }),
+    );
     for (const issue of registry.diagnostics)
       diagnostic(`${issue.message} (${issue.path})`);
   }
