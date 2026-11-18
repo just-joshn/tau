@@ -64,13 +64,13 @@ test.skipIf(posixOnly)(
 );
 
 test.skipIf(posixOnly)(
-  "Ctrl-C or Ctrl-D at an idle interactive prompt exits 0 without a request",
+  "Ctrl-C twice or Ctrl-D at an idle interactive prompt exits 0 without a request",
   async () => {
     const provider = await startMockProvider([]);
-    for (const key of ["\u0003", "\u0004"]) {
+    for (const keys of ["\u0003\u0003", "\u0004"]) {
       const tty = startPty({ provider });
       await tty.expect(PROMPT);
-      tty.write(key);
+      tty.write(keys);
       assert.equal((await tty.exited).exitCode, 0);
     }
     assert.equal(provider.requests.length, 0);
@@ -84,10 +84,10 @@ test.skipIf(posixOnly)(
     const tty = startPty({ provider });
     await tty.expect(PROMPT);
     tty.write("/help\r");
-    await tty.expect("/help · /exit");
+    await tty.expect("Show help and available commands");
     await tty.expect(PROMPT);
     tty.write("/no-such-command\r");
-    await tty.expect("Unknown command. Use /help.");
+    await tty.expect("Unknown command: /no-such-command");
     await tty.expect(PROMPT);
     tty.write("/exit\r");
     assert.equal((await tty.exited).exitCode, 0);

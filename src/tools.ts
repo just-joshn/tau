@@ -61,6 +61,10 @@ import {
   parseBashInput,
   type ShellHost,
 } from "./bash-tool.js";
+import type {
+  ToolApprovalAnswer,
+  ToolApprovalRequest,
+} from "./permission-dialog.js";
 import { decodeTextFile, encodeTextFile } from "./text-file.js";
 import {
   inheritedReadDeny,
@@ -357,7 +361,10 @@ export function createTools(options: {
     command: string;
     signal: AbortSignal;
   }) => BashPermissionSessionResult | undefined;
-  approve: (description: string) => Promise<boolean>;
+  approve: (
+    description: string,
+    request: ToolApprovalRequest,
+  ) => Promise<ToolApprovalAnswer>;
   /** The session's shell; a standalone executor gets its own. */
   shell?: ShellHost;
 }): ToolExecutor {
@@ -724,7 +731,7 @@ export function createTools(options: {
       if (options.mode === "acceptEdits" && name !== "Bash")
         return trace("acceptEdits");
     }
-    let approved: boolean;
+    let approved: ToolApprovalAnswer;
     const approvalDescription = safetyAsk
       ? `${sensitive}. Once approval is required.\n${description}`
       : description;
@@ -732,7 +739,11 @@ export function createTools(options: {
     // before it can change the host's live policy/candidate objects.
     const approvalTrace = trace("approval");
     try {
-      approved = await options.approve(approvalDescription);
+      approved = await options.approve(approvalDescription, {
+        tool: name,
+        ...(fileContext === undefined ? {} : { path: fileContext.canonical }),
+        ...(safetyAsk ? { sensitive: true } : {}),
+      });
     } catch (error) {
       throw new ToolPermissionDenied(
         error instanceof Error
@@ -741,6 +752,9 @@ export function createTools(options: {
         "pre-ask",
       );
     }
+    // A refusal that also ends the turn keeps its own message as the result.
+    if (typeof approved === "object")
+      throw new ToolPermissionDenied(approved.message, "pre-ask");
     if (signal.aborted)
       throw new ToolPermissionDenied("Permission approval aborted");
     if (!approved)

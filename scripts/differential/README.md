@@ -126,3 +126,26 @@ loopback port with the test-only certificate in test/fixtures/web-tls, trusted
 through NODE_EXTRA_CA_CERTS, because both CLIs upgrade http:// to https://.
 `web` sets skipWebFetchPreflight; `web-preflight` leaves the api.anthropic.com
 domain check on so the profile records how a denied preflight surfaces.
+
+## Interactive PTY runs
+
+`run_pty.py` drives the original or tau under a 100x30 pseudo-terminal
+(`TERM=xterm-256color`) with scripted keystrokes, waiting for screen text between
+steps. `vt.py` renders the screen and answers cursor/attribute/colour queries.
+The profile gains one grant only for these runs: read/write/ioctl on the PTY
+slave the run opened and on `/dev/tty`. Live canaries open that slave inside the
+profile and fail to open a second, unrelated PTY slave before anything runs.
+
+```sh
+python3 scripts/differential/run_pty.py original tour            # trust dialog shown, then accepted
+python3 scripts/differential/run_pty.py original tour --setup fresh   # every first-run screen
+python3 scripts/differential/run_pty.py original edit-always
+python3 scripts/differential/run_pty.py original edit-reject
+python3 scripts/differential/run_pty.py tau tour
+python3 scripts/differential/run_pty.py tau tour --unsandboxed   # tau only, host Bun, no Seatbelt
+python3 scripts/differential/test_vt.py
+```
+
+Each run writes `<executable>-<scenario>-<setup>.{raw.bin,json,screens.txt}`: raw
+bytes, per-step screens with byte ranges, mock requests, and the config and
+settings files left in the disposable root.
