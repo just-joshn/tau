@@ -684,7 +684,8 @@ type RuleRow = [command: string, rules: RuleSet, expected: string];
 
 function ruled(rules: RuleSet, options: Options = {}) {
   const f = owner(options);
-  for (const behavior of ["allow", "ask", "deny"] as const)
+  const behaviors: ("allow" | "ask" | "deny")[] = ["allow", "ask", "deny"];
+  for (const behavior of behaviors)
     for (const content of rules[behavior] ?? []) f.add(behavior, content);
   return f;
 }
@@ -765,4 +766,81 @@ test.each([
     );
     expect(label(decision)).toBe(expected);
   },
+);
+
+test("prompt messages name the reason a person is asked", () => {
+  const f = owner();
+  const message = (
+    reason: Parameters<typeof f.controller.native.El>[1],
+    tool = "Bash",
+  ) => f.scoped(() => f.controller.native.El(tool, reason));
+  expect(
+    message({ type: "classifier", classifier: "net", reason: "egress" }),
+  ).toBe("Classifier 'net' requires approval for this Bash command: egress");
+  expect(message({ type: "sandboxOverride", reason: "escape" })).toBe(
+    "Run outside of the sandbox",
+  );
+  expect(message({ type: "workingDir", reason: "outside /work" })).toBe(
+    "outside /work",
+  );
+  expect(message({ type: "mode", mode: "plan" })).toBe(
+    "Current permission mode (Plan) requires approval for this Bash command",
+  );
+  expect(message({ type: "mode", mode: "custom" })).toBe(
+    "Current permission mode (Manual) requires approval for this Bash command",
+  );
+  expect(message({ type: "asyncAgent", reason: "background agent" })).toBe(
+    "background agent",
+  );
+  expect(message(undefined, "Edit")).toBe(
+    "Claude requested permissions to use Edit, but you haven't granted it yet.",
+  );
+  const ask: Decision = { behavior: "ask" };
+  const allow: Decision = { behavior: "allow" };
+  // Bash parts are listed without their redirections; other tools verbatim.
+  expect(
+    message({
+      type: "subcommandResults",
+      reasons: new Map<string, Decision>([
+        ["npm test > out.log", ask],
+        ["ls", allow],
+      ]),
+    }),
+  ).toBe(
+    "This Bash command contains multiple operations. The following part requires approval: npm test",
+  );
+  expect(
+    message(
+      {
+        type: "subcommandResults",
+        reasons: new Map<string, Decision>([
+          ["a > b", ask],
+          ["c", ask],
+        ]),
+      },
+      "PowerShell",
+    ),
+  ).toBe(
+    "This PowerShell command contains multiple operations. The following parts require approval: a > b, c",
+  );
+  expect(
+    message({
+      type: "subcommandResults",
+      reasons: new Map<string, Decision>([["ls", allow]]),
+    }),
+  ).toBe(
+    "This Bash command contains multiple operations that require approval",
+  );
+});
+
+pioTable(
+  "acceptEdits touch arguments",
+  [
+    // $HOME/x lands outside the working directory.
+    ["touch $HOME/x", "ask none"],
+    // A wrapped touch is not admitted by the mode.
+    ["command touch a", "passthrough other/no-rule-match"],
+  ],
+  { readOnly: false },
+  policy({ mode: "acceptEdits" }),
 );

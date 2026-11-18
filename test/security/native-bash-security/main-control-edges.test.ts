@@ -777,3 +777,46 @@ table(
   },
   [["eval cat /work/b/secret", "ask other/semantics"]],
 );
+
+// An exact deny of a refused command holds on both readings, in every mode.
+table("exact deny of a refused command", { deny: ["eval ls"] }, [
+  ["eval ls", "deny rule"],
+]);
+
+table(
+  "exact deny of a refused command in bypassPermissions",
+  {
+    deny: ["eval ls"],
+    policy: { mode: "bypassPermissions" },
+  },
+  [["eval ls", "deny rule"]],
+);
+
+test("a prefix reader with no answer leaves each subcommand to the host suggestions", async () => {
+  const f = owner();
+  f.policyHost.ruleSuggestions = (command, s) =>
+    known(
+      [
+        {
+          type: "addRules",
+          rules: [{ toolName: "Bash", ruleContent: `${command}:*` }],
+          behavior: "allow",
+          destination: "localSettings",
+        },
+      ],
+      s,
+    );
+  const command = "npm test; npx foo";
+  const decision = await f.decide(command, (context) =>
+    f.main.native.nIe({ command }, context, async () => null),
+  );
+  expect(decision.behavior).toBe("passthrough");
+  expect(ruleContents(decision)).toEqual(["npm test:*", "npx foo:*"]);
+});
+
+// A leading plain `cd` into the working tree pins where the rest runs.
+table("commands after a pinned leading cd", {}, [
+  ["cd /work/sub && npm test && npx foo", "passthrough subcommandResults"],
+  ["cd /work/sub && npm test", "passthrough subcommandResults"],
+  ["cd ./sub && cat f && npx foo", "passthrough subcommandResults"],
+]);
