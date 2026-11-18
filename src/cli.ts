@@ -51,6 +51,9 @@ import { wrapCatalogTools } from "./catalog-session.js";
 import { formatBackgroundNotification } from "./background-notifications.js";
 import type { BackgroundAgentCompletion } from "./background-agent-runtime.js";
 import { createBackgroundTaskTools } from "./background-task-tools.js";
+import { createWebTools } from "./web-tools.js";
+import { webFetchModel } from "./web-fetch.js";
+import { resolveDirectModelAlias } from "./direct-model-alias.js";
 import { createChildCapabilityTools } from "./child-capability-tools.js";
 import { createChildPlanHost } from "./child-plan-host.js";
 import {
@@ -1184,6 +1187,45 @@ async function main(): Promise<void> {
         stderr.write(`Instructions: ${safe(message)}\n`),
     });
   let instructions = createInstructions();
+  const webTools = createWebTools({
+    mode: () => mode,
+    policy: () => skillHost?.policy() ?? policy,
+    hooks: () =>
+      activeHooks().hasToolHooks ? activeHooks().runtime : undefined,
+    approve,
+    fetch: {
+      skipPreflight: () =>
+        launch.snapshot.effective.skipWebFetchPreflight === true,
+      applyPrompt: async (userPrompt, signal) => {
+        const model = webFetchModel(
+          currentModel(),
+          process.env,
+          resolveDirectModelAlias("haiku"),
+        );
+        const completion = await provider.complete({
+          model,
+          system: "",
+          messages: [
+            { role: "user", content: [{ type: "text", text: userPrompt }] },
+          ],
+          tools: [],
+          maxTokens: defaultOutputTokens(model),
+          thinking: { mode: "disabled", mechanical: true },
+          disablePromptCaching: true,
+          signal,
+          onText: () => {},
+        });
+        return completion.content
+          .flatMap((block) => (block.type === "text" ? [block.text] : []))
+          .join("");
+      },
+    },
+    search: {
+      send: (body, signal) => provider.postMessages(body, signal),
+      model: currentModel,
+      maxTokens: defaultOutputTokens,
+    },
+  });
   const createSessionTools = async () => {
     await mcp?.refreshTools();
     let cached: import("./types.js").ToolExecutor | undefined,
@@ -1258,7 +1300,9 @@ async function main(): Promise<void> {
       cachedPolicy = key;
       return (cached = activeHooks().wrap(
         instructions.wrap(
-          taskStopTools().wrap(taskHost?.wrap(combined) ?? combined),
+          taskStopTools().wrap(
+            webTools.wrap(taskHost?.wrap(combined) ?? combined),
+          ),
           session.messages,
           readState,
         ),

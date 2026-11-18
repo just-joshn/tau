@@ -23,6 +23,7 @@ export const taskPolicyNameSchema = z.enum([
   "TaskList",
 ]);
 export const planPolicyNameSchema = z.enum(["EnterPlanMode", "ExitPlanMode"]);
+export const webToolNameSchema = z.enum(["WebFetch", "WebSearch"]);
 export const agentPolicyNameSchema = z.enum(["Agent", "Task"]);
 export const backgroundTaskPolicyNameSchema = z.enum([
   "TaskStop",
@@ -55,6 +56,7 @@ export const selectableToolNameSchema = z.union([
   planPolicyNameSchema,
   agentPolicyNameSchema,
   backgroundTaskPolicyNameSchema,
+  webToolNameSchema,
 ]);
 const scopedBuiltinFamilies = new Set(["Read", "Write", "Edit", "Bash"]);
 // Ng/joi's finite native compatibility set, under fYr's default-true feature.
@@ -81,7 +83,9 @@ export const toolRuleNameSchema = z.union([
   taskPolicyNameSchema,
   planPolicyNameSchema,
   backgroundTaskPolicyNameSchema,
+  webToolNameSchema,
   z.string().regex(/^(TaskStop|KillShell|KillBash)\([\s\S]*\)$/),
+  z.string().regex(/^WebFetch\([\s\S]*\)$/),
   z.string().refine((rule) => agentRule(rule) !== null),
   z.string().refine(builtinCallRule),
   z.string().refine((rule) => parseSkillPermissionRule(rule) !== undefined),
@@ -205,6 +209,12 @@ function splitSourcedRule(rule: string): ParsedSettingsRule {
       : { tool: "Skill", skillRule: trimmed };
   const agent = agentRule(trimmed);
   if (agent) return { tool: "Agent", agentRule: trimmed };
+  // WebFetch(domain:…) content belongs to the web tool's own matcher.
+  if (/^WebFetch\([\s\S]*\)$/.test(trimmed)) {
+    const parsed = parseNativePermissionRule(trimmed);
+    if (parsed.kind === "call") return { tool: "WebFetch", dedicated: true };
+    if (parsed.kind === "bare") return { tool: "WebFetch" };
+  }
   if (builtinCallRule(trimmed)) {
     const parsed = parseNativePermissionRule(trimmed);
     if (parsed.kind === "bare")
