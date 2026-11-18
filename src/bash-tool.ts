@@ -647,20 +647,19 @@ export function createShellHost(options: ShellHostOptions) {
     }
 
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let onAbort = () => {};
     const ending = await new Promise<
       { kind: "exit"; code: number } | { kind: "timeout" } | { kind: "abort" }
     >((resolve) => {
       void child.exited.then((code) => resolve({ kind: "exit", code }));
       timer = setTimeout(() => resolve({ kind: "timeout" }), limit);
-      context.signal.addEventListener(
-        "abort",
-        () => resolve({ kind: "abort" }),
-        {
-          once: true,
-        },
-      );
-      if (context.signal.aborted) resolve({ kind: "abort" });
-    }).finally(() => clearTimeout(timer));
+      onAbort = () => resolve({ kind: "abort" });
+      context.signal.addEventListener("abort", onAbort, { once: true });
+      if (context.signal.aborted) onAbort();
+    }).finally(() => {
+      clearTimeout(timer);
+      context.signal.removeEventListener("abort", onAbort);
+    });
 
     if (ending.kind === "abort") {
       await child.kill();
