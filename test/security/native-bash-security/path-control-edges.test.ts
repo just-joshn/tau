@@ -7,7 +7,9 @@ import {
 } from "../../../src/native-bash-security/path-control.js";
 import type {
   NativeBashSecurityDecision as Decision,
+  NativeBashSecurityLinkNote as LinkNote,
   NativeBashSecurityPolicy as Policy,
+  NativeBashSecuritySensitivePath as Sensitive,
 } from "../../../src/native-bash-security/security-types.js";
 import { fixture, known, policy } from "./security-fixture.js";
 
@@ -61,6 +63,7 @@ function owner(options: Parameters<typeof fixture>[0] = {}, patch: Patch = {}) {
     feature: (_key, _default, s) =>
       known({ value: true, source: "virtual-test" }, s),
     mountedDriveRmPromptDisabled: (s) => known(false, s),
+    pathPrimitive: (_kind, path, s) => known(path, s),
     ...patch.host,
     filesystem: { ...f.host.filesystem, ...disk(), ...patch.filesystem },
     filePolicy: { ...f.host.filePolicy, ...patch.filePolicy },
@@ -370,4 +373,290 @@ test("input and output redirects are checked by direction", async () => {
     ],
     ["cat < /dev/stdin", { plain: "passthrough:none" }],
   ]);
+});
+
+const internalDeny: Decision = { behavior: "deny", message: "internal deny" };
+const settingsDeny: Decision = {
+  behavior: "deny",
+  decisionReason: {
+    type: "safetyCheck",
+    reason: "settings file",
+    classifierApprovable: false,
+    circuitBreaker: "claudeSettingsFile",
+  },
+};
+const sensitive: Sensitive = {
+  safe: false,
+  message: "sensitive path",
+  classifierApprovable: true,
+};
+const insideNote: LinkNote = {
+  landing: "/home/test/real",
+  landingOutside: false,
+  spellingInside: true,
+  carriedOut: false,
+};
+const carriedNote: LinkNote = {
+  landing: "/outside/real",
+  landingOutside: true,
+  spellingInside: false,
+  carriedOut: true,
+};
+
+function facts(
+  protectedWrite: Decision | undefined,
+  sensitivity: Sensitive | undefined,
+  note: LinkNote | undefined,
+): Patch {
+  return {
+    filePolicy: {
+      ...(protectedWrite && {
+        protectedWrite: (_path, _spellings, _p, s) => known(protectedWrite, s),
+      }),
+      ...(sensitivity && {
+        sensitiveWrite: (_path, _spellings, _p, _o, s) => known(sensitivity, s),
+      }),
+      ...(note && { symlinkNote: (_i, _p, s) => known(note, s) }),
+    },
+  };
+}
+
+function shape(d: Decision) {
+  const reason = d.decisionReason;
+  return reason?.type === "safetyCheck"
+    ? {
+        kind: kind(d),
+        approvable: reason.classifierApprovable,
+        also: reason.also ?? [],
+        message: d.message,
+      }
+    : { kind: kind(d), message: d.message };
+}
+
+test("an expanded output target merges protected, sensitive and link facts", async () => {
+  const restricted = policy({ restricted: true });
+  const rows: [string, Patch, Policy, ReturnType<typeof shape>][] = [
+    [
+      "safe",
+      facts(undefined, undefined, undefined),
+      policy(),
+      {
+        kind: "ask:shell-expansion",
+        message: "Shell expansion syntax in paths requires manual approval",
+      },
+    ],
+    [
+      "sensitive",
+      facts(undefined, sensitive, undefined),
+      policy(),
+      {
+        kind: "ask:safety",
+        approvable: true,
+        also: [],
+        message: "sensitive path",
+      },
+    ],
+    [
+      "sensitive, restricted",
+      facts(undefined, sensitive, undefined),
+      restricted,
+      {
+        kind: "ask:restrictedMode",
+        approvable: false,
+        also: [],
+        message: "sensitive path",
+      },
+    ],
+    [
+      "sensitive with circuits, restricted",
+      facts(
+        undefined,
+        {
+          ...sensitive,
+          circuitBreaker: "connectorFileSend",
+          also: ["isolatePeerMachines"],
+        },
+        undefined,
+      ),
+      restricted,
+      {
+        kind: "ask:restrictedMode",
+        approvable: false,
+        also: ["connectorFileSend", "isolatePeerMachines"],
+        message: "sensitive path",
+      },
+    ],
+    [
+      "internal deny",
+      facts(internalDeny, undefined, undefined),
+      policy(),
+      {
+        kind: "ask:internalHardDeny",
+        approvable: true,
+        also: [],
+        message: "internal deny",
+      },
+    ],
+    [
+      "internal deny, restricted",
+      facts(internalDeny, undefined, undefined),
+      restricted,
+      {
+        kind: "ask:restrictedMode",
+        approvable: false,
+        also: ["internalHardDeny"],
+        message: "internal deny",
+      },
+    ],
+    [
+      "internal deny through a link",
+      facts(internalDeny, undefined, insideNote),
+      policy(),
+      {
+        kind: "ask:internalHardDeny",
+        approvable: false,
+        also: [],
+        message: "internal deny",
+      },
+    ],
+    [
+      "settings file",
+      facts(settingsDeny, undefined, undefined),
+      policy(),
+      {
+        kind: "ask:claudeSettingsFile",
+        approvable: false,
+        also: ["internalHardDeny"],
+        message: "settings file",
+      },
+    ],
+    [
+      "settings file, restricted",
+      facts(settingsDeny, undefined, undefined),
+      restricted,
+      {
+        kind: "ask:restrictedMode",
+        approvable: false,
+        also: ["internalHardDeny", "claudeSettingsFile"],
+        message: "settings file",
+      },
+    ],
+    [
+      "internal deny and sensitive",
+      facts(internalDeny, sensitive, undefined),
+      policy(),
+      {
+        kind: "ask:safety",
+        approvable: true,
+        also: ["internalHardDeny"],
+        message: "sensitive path",
+      },
+    ],
+    [
+      "sensitive through a link",
+      facts(undefined, sensitive, insideNote),
+      policy(),
+      {
+        kind: "ask:safety",
+        approvable: true,
+        also: [],
+        message:
+          "sensitive path. /home/test/.bashrc resolves through a symlink to /home/test/real.",
+      },
+    ],
+    [
+      "carried out of the working directories",
+      facts(undefined, undefined, carriedNote),
+      policy(),
+      {
+        kind: "ask:safety",
+        approvable: false,
+        also: [],
+        message:
+          "/home/test/.bashrc resolves through a symlink to /outside/real, which is outside the allowed working directories",
+      },
+    ],
+  ];
+  for (const [label, patch, p, want] of rows) {
+    const f = owner({}, patch);
+    expect([label, shape(await f.run("echo x > ~/.bashrc", p))]).toEqual([
+      label,
+      want,
+    ]);
+  }
+  // An Edit deny on the expanded target is a deny, whatever else applies.
+  const locked = owner(
+    { writeDeny: "/home/test/locked" },
+    facts(settingsDeny, sensitive, carriedNote),
+  );
+  expect(kind(await locked.run("echo x > ~/locked"))).toBe("deny:rule");
+  expect(kind(await locked.run("echo x > ~/locked", policy(), true))).toBe(
+    "deny:rule",
+  );
+});
+
+test("several expanded output targets keep the strongest circuits", async () => {
+  const f = owner(
+    {},
+    {
+      filePolicy: {
+        sensitiveWrite: (_path, _spellings, _p, _o, s) => known(sensitive, s),
+        protectedWrite: (path, _spellings, _p, s) =>
+          known(
+            path.endsWith("settings.json")
+              ? settingsDeny
+              : { behavior: "passthrough" },
+            s,
+          ),
+      },
+    },
+  );
+  const merged = shape(await f.run("echo x > ~/a > ~/settings.json"));
+  expect(merged).toEqual({
+    kind: "ask:safety",
+    approvable: false,
+    also: ["internalHardDeny", "claudeSettingsFile"],
+    message: "sensitive path",
+  });
+  // A relative glob target and a traversal target are expanded too.
+  for (const command of [
+    "echo x >> *.log",
+    "echo x > sub/../*.log",
+    "touch f > ~/x",
+  ])
+    expect([command, shape(await f.run(command))]).toEqual([
+      command,
+      {
+        kind: "ask:safety",
+        approvable: true,
+        also: [],
+        message: "sensitive path",
+      },
+    ]);
+  // The text-only entry has no per-target facts; it keeps the generic hold.
+  expect(kind(f.text("echo x > ~/settings.json"))).toBe("ask:shell-expansion");
+});
+
+test("network devices, process substitution and removals rank by bypass immunity", async () => {
+  const f = owner();
+  expect(kind(await f.run("echo x > /dev/tcp/h/80"))).toBe("ask:net-redirect");
+  expect(kind(f.text("echo x > /dev/udp/h/53"))).toBe("ask:net-redirect");
+  expect(kind(f.text("cat <(ls)"))).toBe("ask:process-substitution");
+  expect(kind(f.text("echo x > >(cat)"))).toBe("ask:process-substitution");
+  // A bypass-immune removal ask outranks process substitution and an
+  // expanded redirect.
+  for (const command of [
+    "rm -rf / ; cat <(ls)",
+    "rm -rf / > ~/x",
+    "echo x > ~/a; rm -rf /",
+  ])
+    expect([command, kind(f.text(command))]).toEqual([
+      command,
+      "ask:dangerousRemoval",
+    ]);
+  for (const command of ["rm -rf / > ~/x", "echo x > ~/a; rm -rf /"])
+    expect([command, kind(await f.run(command))]).toEqual([
+      command,
+      "ask:dangerousRemoval",
+    ]);
 });
