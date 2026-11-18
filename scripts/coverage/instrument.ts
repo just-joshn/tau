@@ -10,8 +10,14 @@
 // $TAU_COVERAGE_DIR/raw/<pid>-<n>.json.
 import { plugin } from "bun";
 import type { CoverageMapData } from "istanbul-lib-coverage";
-import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import {
+  linkSync,
+  mkdirSync,
+  readFileSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join, resolve } from "node:path";
 
 declare global {
@@ -98,19 +104,19 @@ function instrumenterVersion(): string {
 async function installFlush(rawDir: string) {
   // bun test --parallel evaluates this preload in a fresh global per test
   // file, so the same pid flushes several times with no shared counter.
-  // Exclusive create picks the next free <pid>-<n> name instead.
+  // Linking picks the next free <pid>-<n> name instead, and only after the
+  // whole file is written, so a child killed mid-write leaves no partial
+  // .json for run.ts to read.
   const flush = () => {
     const coverage = globalThis.__coverage__;
     if (coverage === undefined) return;
     mkdirSync(rawDir, { recursive: true });
+    const temporary = join(rawDir, `${process.pid}-${randomUUID()}.tmp`);
+    writeFileSync(temporary, JSON.stringify(coverage));
     for (let n = 0; ; n++) {
       try {
-        writeFileSync(
-          join(rawDir, `${process.pid}-${n}.json`),
-          JSON.stringify(coverage),
-          { flag: "wx" },
-        );
-        return;
+        linkSync(temporary, join(rawDir, `${process.pid}-${n}.json`));
+        break;
       } catch (error) {
         if (!(
           error instanceof Error &&
@@ -120,6 +126,7 @@ async function installFlush(rawDir: string) {
           throw error;
       }
     }
+    unlinkSync(temporary);
   };
   // The bun test runner never emits "exit"; outside the runner afterAll throws.
   try {
