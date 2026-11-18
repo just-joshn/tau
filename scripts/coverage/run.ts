@@ -1,8 +1,10 @@
 // Runs the suite under istanbul instrumentation and gates branch coverage.
 //
 //   bun scripts/coverage/run.ts [--serial] [--focus <src path>]...
-//     [--merge <coverage-final.json>] [-- <extra bun test args>]
+//     [--merge <coverage-final.json>] [<bun test args>]
 //
+// Every other argument goes to bun test, so the package script takes
+// `bun run test:coverage -- --reporter=junit` (bun run drops the "--").
 // Writes coverage/coverage-final.json, lcov.info and coverage-summary.json.
 // --focus narrows printing and gating to the named files and lists each of
 // their uncovered branches. --merge unions a saved coverage-final.json first.
@@ -15,10 +17,18 @@ import {
 import { createContext } from "istanbul-lib-report";
 import { create } from "istanbul-reports";
 import { createInstrumenter } from "istanbul-lib-instrument";
-import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
-import { join, relative, resolve } from "node:path";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join, relative, resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { INSTRUMENTER_OPTIONS } from "./instrument.ts";
+import { cachedInstrumentation, INSTRUMENTER_OPTIONS } from "./instrument.ts";
 
 const BRANCH_FLOOR = 80; // total and every src file
 const LINE_FLOOR = 85; // total
@@ -26,30 +36,49 @@ const FUNCTION_FLOOR = 85; // total
 
 const root = resolve(import.meta.dir, "../..");
 const coverageDir = join(root, "coverage");
-const { values, positionals } = parseArgs({
+// Unknown options pass through, so tokens rather than values drive this.
+const { tokens } = parseArgs({
   args: process.argv.slice(2),
   options: {
-    serial: { type: "boolean", default: false },
-    focus: { type: "string", multiple: true, default: [] },
+    serial: { type: "boolean" },
+    focus: { type: "string", multiple: true },
     merge: { type: "string" },
   },
   allowPositionals: true,
+  strict: false,
+  tokens: true,
 });
-const focus = values.focus.map((file) => resolve(root, file));
+let serial = false;
+let mergePath: string | undefined;
+const focus: string[] = [];
+const testArgs: string[] = [];
+for (const token of tokens) {
+  if (token.kind === "positional") testArgs.push(token.value);
+  else if (token.kind === "option-terminator") continue;
+  else if (token.name === "serial") serial = true;
+  else if (token.name === "focus" && token.value !== undefined)
+    focus.push(resolve(root, token.value));
+  else if (token.name === "merge") mergePath = token.value;
+  else
+    testArgs.push(
+      token.inlineValue === true
+        ? `${token.rawName}=${token.value}`
+        : token.rawName,
+    );
+}
 
 // Read --merge before cleaning, since it may live under coverage/.
-const merged =
-  values.merge === undefined ? undefined : readCoverage(values.merge);
+const merged = mergePath === undefined ? undefined : readCoverage(mergePath);
 rmSync(coverageDir, { recursive: true, force: true });
+
+// Every source starts at zero, so one no test loaded still counts.
+const map = createCoverageMap({});
+for (const fileCoverage of instrumentSources())
+  map.addFileCoverage(fileCoverage);
 
 const preload = `--preload=${join(import.meta.dir, "instrument.ts")}`;
 const testRun = Bun.spawnSync(
-  [
-    process.execPath,
-    "test",
-    ...(values.serial ? [] : ["--parallel"]),
-    ...positionals,
-  ],
+  [process.execPath, "test", ...(serial ? [] : ["--parallel"]), ...testArgs],
   {
     cwd: root,
     stdio: ["inherit", "inherit", "inherit"],
@@ -61,16 +90,14 @@ const testRun = Bun.spawnSync(
   },
 );
 
-const map = createCoverageMap({});
 const rawDir = join(coverageDir, "raw");
 const rawFiles = existsSync(rawDir)
   ? readdirSync(rawDir).filter((name) => name.endsWith(".json"))
   : [];
 for (const name of rawFiles) map.merge(readCoverage(join(rawDir, name)));
 if (merged !== undefined) map.merge(merged);
-zeroFillUnloadedSources(map);
 console.log(
-  `merged ${rawFiles.length} raw coverage files${values.merge === undefined ? "" : ` and ${values.merge}`}`,
+  `merged ${rawFiles.length} raw coverage files${mergePath === undefined ? "" : ` and ${mergePath}`}`,
 );
 
 const context = createContext({ dir: coverageDir, coverageMap: map });
@@ -143,21 +170,28 @@ function isCoverageMapData(value: unknown): value is CoverageMapData {
   );
 }
 
-// A source no test loaded still counts, with every counter at zero.
-function zeroFillUnloadedSources(coverage: CoverageMap) {
-  const loaded = new Set(coverage.files());
+// Instruments every src file once, here, and fills the cache the preload
+// reads. Without this a cold cache makes each spawned CLI run babel over
+// every module it imports, about 1.2s per child instead of 0.2s, and the
+// parallel CLI tests then miss their deadlines. Returns each file's coverage
+// with every counter at zero.
+function instrumentSources() {
   const instrumenter = createInstrumenter(INSTRUMENTER_OPTIONS);
-  const sources = readdirSync(join(root, "src"), {
-    recursive: true,
-    encoding: "utf8",
-  })
+  return readdirSync(join(root, "src"), { recursive: true, encoding: "utf8" })
     .filter((file) => file.endsWith(".ts"))
-    .map((file) => join(root, "src", file));
-  for (const file of sources) {
-    if (loaded.has(file)) continue;
-    instrumenter.instrumentSync(readFileSync(file, "utf8"), file);
-    coverage.addFileCoverage(instrumenter.lastFileCoverage());
-  }
+    .map((file) => {
+      const path = join(root, "src", file);
+      const source = readFileSync(path, "utf8");
+      const contents = instrumenter.instrumentSync(source, path);
+      const cached = cachedInstrumentation(path, source);
+      if (!existsSync(cached)) {
+        mkdirSync(dirname(cached), { recursive: true });
+        const temporary = `${cached}.${process.pid}`;
+        writeFileSync(temporary, contents);
+        renameSync(temporary, cached);
+      }
+      return instrumenter.lastFileCoverage();
+    });
 }
 
 function printUncoveredBranches(coverage: CoverageMap) {

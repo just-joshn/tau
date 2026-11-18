@@ -1,18 +1,14 @@
-// Bun preload that instruments <repo>/src/**/*.ts with istanbul, because
-// Bun's own coverage has no branch data. scripts/coverage/run.ts loads it into
-// the test runner and every descendant bun process through BUN_OPTIONS, and
-// each process writes its counters to $TAU_COVERAGE_DIR/raw/<pid>-<n>.json.
+// Bun preload that loads <repo>/src/**/*.ts instrumented with istanbul,
+// because Bun's own coverage has no branch data. scripts/coverage/run.ts
+// instruments every source into the cache before tests start, then loads this
+// preload into the test runner and every descendant bun process through
+// BUN_OPTIONS. Each process only reads the cache, so a spawned CLI pays
+// neither babel nor the istanbul import, and writes its counters to
+// $TAU_COVERAGE_DIR/raw/<pid>-<n>.json.
 import { plugin } from "bun";
 import type { CoverageMapData } from "istanbul-lib-coverage";
-import { createInstrumenter } from "istanbul-lib-instrument";
 import { createHash } from "node:crypto";
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 declare global {
@@ -20,6 +16,7 @@ declare global {
 }
 
 const root = resolve(import.meta.dir, "../..");
+const cacheDir = join(root, "node_modules", ".cache", "tau-coverage");
 const outputDir = process.env.TAU_COVERAGE_DIR;
 
 export const INSTRUMENTER_OPTIONS = {
@@ -27,41 +24,45 @@ export const INSTRUMENTER_OPTIONS = {
   parserPlugins: ["typescript"],
   coverageVariable: "__coverage__",
 };
+const version = instrumenterVersion();
+
+/** Where the instrumented copy of `source`, read from `path`, is cached. */
+export function cachedInstrumentation(path: string, source: string): string {
+  const key = createHash("sha256")
+    .update(version)
+    .update("\0")
+    .update(path)
+    .update("\0")
+    .update(source)
+    .digest("hex");
+  return join(cacheDir, `${key}.ts`);
+}
 
 if (outputDir !== undefined) {
-  installInstrumenter();
+  installLoader();
   await installFlush(join(outputDir, "raw"));
 }
 
-function installInstrumenter() {
-  const cacheDir = join(root, "node_modules", ".cache", "tau-coverage");
-  const version = instrumenterVersion();
+function installLoader() {
   const sourceRoot = join(root, "src").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  let instrumenter: ReturnType<typeof createInstrumenter> | undefined;
   plugin({
     name: "tau-istanbul",
     setup(build) {
       build.onLoad(
         { filter: new RegExp(`^${sourceRoot}/.*\\.ts$`) },
         ({ path }) => {
-          const source = readFileSync(path, "utf8");
-          const key = createHash("sha256")
-            .update(version)
-            .update("\0")
-            .update(path)
-            .update("\0")
-            .update(source)
-            .digest("hex");
-          const cached = join(cacheDir, `${key}.ts`);
-          if (existsSync(cached))
+          const cached = cachedInstrumentation(
+            path,
+            readFileSync(path, "utf8"),
+          );
+          try {
             return { contents: readFileSync(cached, "utf8"), loader: "ts" };
-          instrumenter ??= createInstrumenter(INSTRUMENTER_OPTIONS);
-          const contents = instrumenter.instrumentSync(source, path);
-          mkdirSync(cacheDir, { recursive: true });
-          const temporary = `${cached}.${process.pid}.${crypto.randomUUID()}`;
-          writeFileSync(temporary, contents);
-          renameSync(temporary, cached);
-          return { contents, loader: "ts" };
+          } catch (error) {
+            throw new Error(
+              `${path} has no instrumented copy; run bun scripts/coverage/run.ts, which fills ${cacheDir} before tests start`,
+              { cause: error },
+            );
+          }
         },
       );
     },
@@ -76,11 +77,11 @@ function instrumenterVersion(): string {
       "utf8",
     ),
   );
-  const version =
+  const installed =
     typeof manifest === "object" && manifest !== null && "version" in manifest
       ? String(manifest.version)
       : "unknown";
-  return `${version} ${JSON.stringify(INSTRUMENTER_OPTIONS)}`;
+  return `${installed} ${JSON.stringify(INSTRUMENTER_OPTIONS)}`;
 }
 
 async function installFlush(rawDir: string) {
