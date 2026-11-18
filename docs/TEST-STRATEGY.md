@@ -154,7 +154,7 @@ Other open items:
 - One test is quarantined, see [Quarantined tests](#quarantined-tests).
 - Every failure exits with status 1, including usage errors and SIGINT. The strategy suggests distinct codes, such as 130 for SIGINT. The tests pin status 1.
 - Windows is not in the CI matrix, because tau claims no Windows support and nothing here verifies it.
-- No workflow has run on GitHub-hosted runners yet. The Linux leg was checked in a local container, see [the decisions](test-strategy-decisions.md#verification-status).
+- `verify.yml` passes on GitHub-hosted runners. `nightly.yml` and the weekly `live-eval.yml` schedule have not run there, because GitHub starts scheduled workflows only from the default branch. See [the verification status](test-strategy-decisions.md#verification-status).
 - The live evaluation has not run against the real API.
 
 ## Quarantined tests

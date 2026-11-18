@@ -61,9 +61,10 @@ These were run on the integration branch:
 - In a Linux container built from `node:26-bookworm` with Bun 1.4.4, running as a non-root user on arm64, the suite passed three runs in a row and the coverage gate passed.
 - actionlint, `bun audit` with the one exception, and gitleaks over all 87 commits reported nothing.
 - Without an API key, `bun run eval:live` exited 2 with status `unavailable`.
+- On GitHub-hosted `ubuntu-latest` and `macos-latest` runners, `verify.yml` passed every job. The first hosted run failed 8 Grep tests, because the runner images have no `rg` and the local container had one installed. Every job that runs tests now installs `ripgrep`.
 
 These were not run:
 
-- GitHub-hosted runners. The workflows pass `actionlint`, and every step command was run locally.
+- `nightly.yml` and `live-eval.yml` on GitHub. Their schedules start only from the default branch, so they first run after this work reaches `main`. Their step commands were run locally.
 - The live evaluation against the real API, because no key was available.
 - Windows.

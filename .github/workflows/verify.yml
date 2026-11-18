@@ -112,7 +112,9 @@ jobs:
         with:
           name: verify-evidence
           path: |
-            coverage/
+            coverage/lcov.info
+            coverage/coverage-final.json
+            coverage/coverage-summary.json
             test-results/
           if-no-files-found: warn
           retention-days: 14
