@@ -87,6 +87,9 @@ import { TOOL_SEARCH, toolSearchEnabled } from "./tool-search.js";
 import { formatBackgroundNotification } from "./background-notifications.js";
 import { createBackgroundTaskTools } from "./background-task-tools.js";
 import { createWebTools } from "./web-tools.js";
+import { bindGuardedTool, wrapGuardedTools } from "./guarded-tool.js";
+import { monitorTool } from "./monitor-tool.js";
+import { createWorktreeTools, worktreeBaseRef } from "./worktree-tools.js";
 import { webFetchModel } from "./web-fetch.js";
 import { resolveDirectModelAlias } from "./direct-model-alias.js";
 import { createChildCapabilityTools } from "./child-capability-tools.js";
@@ -1431,13 +1434,43 @@ async function main(): Promise<void> {
       maxTokens: defaultOutputTokens,
     },
   });
+  const guardedHost = {
+    mode: () => mode,
+    policy: () => skillHost?.policy() ?? policy,
+    hooks: () =>
+      activeHooks().hasToolHooks ? activeHooks().runtime : undefined,
+    approve,
+  };
+  const worktrees = createWorktreeTools({
+    shell: shellHost,
+    baseRef: () => worktreeBaseRef(launch.snapshot.effective),
+  });
+  const sessionTools = [
+    bindGuardedTool(
+      monitorTool({
+        shell: shellHost,
+        facts: () => ({
+          singleShot: !interactive && !streamInput,
+          backgroundDisabled: shellHost.facts().backgroundDisabled,
+        }),
+      }),
+      guardedHost,
+    ),
+    bindGuardedTool(worktrees.enter, guardedHost),
+    bindGuardedTool(worktrees.exit, guardedHost),
+  ];
   const createSessionTools = async () => {
     await mcp?.refreshTools();
     let cached: import("./types.js").ToolExecutor | undefined,
       cachedPolicy: string | undefined;
     const base = () => {
       const currentPolicy = skillHost?.policy() ?? policy;
-      const key = JSON.stringify([currentPolicy, activeHooks().revision, mode]);
+      const key = JSON.stringify([
+        currentPolicy,
+        activeHooks().revision,
+        mode,
+        shellHost.root,
+      ]);
       if (cached && cachedPolicy === key) return cached;
       const planPath = planHost?.location();
       const memoryAccess = memoryHost.fileAccess(
@@ -1445,7 +1478,7 @@ async function main(): Promise<void> {
         () => mode,
       );
       const builtins = createTools({
-        cwd,
+        cwd: shellHost.root,
         mode,
         policy: currentPolicy,
         readState,
@@ -1508,7 +1541,11 @@ async function main(): Promise<void> {
       return (cached = activeHooks().wrap(
         instructions.wrap(
           taskStopTools().wrap(
-            webTools.wrap(taskHost?.wrap(combined) ?? combined),
+            wrapGuardedTools(
+              webTools.wrap(taskHost?.wrap(combined) ?? combined),
+              sessionTools,
+              guardedHost,
+            ),
           ),
           session.messages,
           readState,

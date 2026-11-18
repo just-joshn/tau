@@ -25,6 +25,11 @@ export const taskPolicyNameSchema = z.enum([
 ]);
 export const planPolicyNameSchema = z.enum(["EnterPlanMode", "ExitPlanMode"]);
 export const webToolNameSchema = z.enum(["WebFetch", "WebSearch"]);
+export const monitorWorktreeNameSchema = z.enum([
+  "Monitor",
+  "EnterWorktree",
+  "ExitWorktree",
+]);
 export const agentPolicyNameSchema = z.enum(["Agent", "Task"]);
 export const backgroundTaskPolicyNameSchema = z.enum([
   "TaskStop",
@@ -59,6 +64,7 @@ export const selectableToolNameSchema = z.union([
   agentPolicyNameSchema,
   backgroundTaskPolicyNameSchema,
   webToolNameSchema,
+  monitorWorktreeNameSchema,
 ]);
 const scopedBuiltinFamilies = new Set(["Read", "Write", "Edit", "Bash"]);
 // Ng/joi's finite native compatibility set, under fYr's default-true feature.
@@ -87,6 +93,7 @@ export const toolRuleNameSchema = z.union([
   planPolicyNameSchema,
   backgroundTaskPolicyNameSchema,
   webToolNameSchema,
+  monitorWorktreeNameSchema,
   z.string().regex(/^(TaskStop|KillShell|KillBash)\([\s\S]*\)$/),
   z.string().regex(/^WebFetch\([\s\S]*\)$/),
   z.string().refine((rule) => agentRule(rule) !== null),

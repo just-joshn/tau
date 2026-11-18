@@ -154,6 +154,9 @@ const BASE: Record<string, (tag: string) => Record<string, unknown>> = {
     prompt: "x",
   }),
   WebSearch: () => ({ query: "bad search" }),
+  Monitor: (tag) => ({ description: "bad", command: `touch bad-${tag}.txt` }),
+  EnterWorktree: (tag) => ({ name: `bad-${tag}` }),
+  ExitWorktree: () => ({ action: "keep" }),
   Agent: () => ({ description: "bad", prompt: "bad" }),
   Skill: () => ({ skill: "demo" }),
 };
@@ -348,9 +351,10 @@ function assertRejected(matrix: MatrixRun, variants: readonly Variant[]) {
 // Variants tau accepts today, each a KNOWN-GAP below:
 // - src/tool-input.ts normalizeToolInput strips a __proto__ key, and the call
 //   then runs with its remaining fields.
-// - Write, Edit, Bash and Skill advertise open schemas and their zod schemas
-//   (src/tools.ts, src/skill-session.ts) strip unknown keys, so a constructor
-//   key is ignored and the call runs; Write creates its file.
+// - Write, Edit, Bash, Monitor and Skill advertise open schemas and their zod
+//   schemas (src/tools.ts, src/skill-session.ts, src/monitor-tool.ts) strip
+//   unknown keys, so a constructor key is ignored and the call runs; Write
+//   creates its file. Monitor's schema is the original's non-strict Ee.
 // - src/task-runtime.ts coerceTaskCreateInput repairs TaskCreate input: it
 //   drops unknown keys and wrong-typed activeForm/metadata, although the
 //   advertised schema is strict, then creates the task.
@@ -358,7 +362,9 @@ function assertRejected(matrix: MatrixRun, variants: readonly Variant[]) {
 const ACCEPTED_TODAY = (variant: Variant) =>
   variant.label === "__proto__ key" ||
   (variant.label === "constructor key" &&
-    ["Write", "Edit", "Bash", "Skill", "TaskCreate"].includes(variant.tool)) ||
+    ["Write", "Edit", "Bash", "Monitor", "Skill", "TaskCreate"].includes(
+      variant.tool,
+    )) ||
   (variant.tool === "TaskCreate" &&
     /^(activeForm|metadata) wrong type/.test(variant.label));
 

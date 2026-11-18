@@ -366,6 +366,88 @@
       }
     },
     {
+      "name": "Monitor",
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "description": {
+            "type": "string",
+            "description": "Short human-readable description of what you are monitoring (shown in notifications)."
+          },
+          "timeout_ms": {
+            "default": 300000,
+            "description": "Kill the monitor after this deadline. Default 300000ms. Deadlines above 600000ms are capped to 600000ms. You are notified at expiry and can re-arm.",
+            "type": "number",
+            "minimum": 1000,
+            "maximum": 3600000
+          },
+          "command": {
+            "description": "Shell command or script. Each stdout line is an event; exit ends the watch.",
+            "type": "string"
+          },
+          "ws": {
+            "type": "object",
+            "properties": {
+              "url": {
+                "type": "string"
+              },
+              "protocols": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$"
+                }
+              }
+            },
+            "required": ["url"],
+            "additionalProperties": false,
+            "description": "WebSocket to open. Each text frame is an event; binary frames are reported as a placeholder line. Socket close ends the watch. Cannot be combined with command."
+          }
+        },
+        "required": ["description", "timeout_ms"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "EnterWorktree",
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "name": {
+            "description": "Optional name for a new worktree. Each \"/\"-separated segment may contain only letters, digits, dots, underscores, and dashes; max 64 chars total. A random name is generated if not provided. Mutually exclusive with `path`.",
+            "type": "string"
+          },
+          "path": {
+            "description": "Path to an existing worktree to switch into instead of creating a new one. Must appear in `git worktree list` for the current repo — or, on first entry from the launch directory, for a repo nested inside it (multi-repo workspace). Mutually exclusive with `name`.",
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "ExitWorktree",
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["keep", "remove"],
+            "description": "\"keep\" leaves the worktree and branch on disk; \"remove\" deletes the worktree and, unless a hook made it or git refuses, its branch."
+          },
+          "discard_changes": {
+            "description": "Required true when action is \"remove\" and the worktree has uncommitted files or unmerged commits. The tool will refuse and list them otherwise. It also removes the worktree under any task still running there, so set it only after the user has confirmed.",
+            "type": "boolean"
+          }
+        },
+        "required": ["action"],
+        "additionalProperties": false
+      }
+    },
+    {
       "name": "TaskStop",
       "input_schema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
