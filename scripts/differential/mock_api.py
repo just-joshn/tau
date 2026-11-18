@@ -2,6 +2,7 @@
 import http.server
 import json
 import threading
+from scenarios_catalog import CATALOG_SCENARIO, catalog_turn
 
 MODEL = "claude-sonnet-4-5-20250929"
 SCENARIOS = ["text", "files", "failures"]
@@ -26,13 +27,14 @@ def events(content, stop_reason="end_turn", model=MODEL):
 
 class MockState:
     def __init__(self, scenario="text", sse_framing="named"):
-        if scenario not in [*SCENARIOS, "mcp", "settings", "eager-instructions", RECOVERY_SCENARIO] or sse_framing not in ["named", "data-only"]:
+        if scenario not in [*SCENARIOS, "mcp", "settings", "eager-instructions", RECOVERY_SCENARIO, CATALOG_SCENARIO] or sse_framing not in ["named", "data-only"]:
             raise ValueError("Unknown mock scenario or SSE framing")
         self.scenario = scenario
         self.sse_framing = sse_framing
         self.requests = []
         self.lock = threading.Lock()
         self.generations = 0
+        self.work = None  # Absolute workspace for scenarios whose inputs name files.
 
     def handler(self):
         state = self
@@ -73,6 +75,8 @@ class MockState:
                     return
                 if state.scenario == "text":
                     content = [{"type": "text", "text": "mock done"}]; stop = "end_turn"
+                elif state.scenario == CATALOG_SCENARIO:
+                    content, stop = catalog_turn(generation, state.work)
                 elif state.scenario == "mcp":
                     if generation == 1:
                         content = [{"type": "tool_use", "id": "fixture-mcp-1", "name": "mcp__fixture__lookup", "input": {"query": "example"}}]; stop = "tool_use"
