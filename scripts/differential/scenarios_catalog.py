@@ -63,7 +63,7 @@ def summarize(record: dict) -> dict:
         "placeholder": [tool(b, "DeferredToolPlaceholder") for b in bodies[:1]],
         "notebook_tool_per_request": [None if tool(b, DEFERRED) is None else {"defer_loading": tool(b, DEFERRED).get("defer_loading")} for b in bodies],
         "tool_search_result": result(bodies[1], "1") if len(bodies) > 1 else None,
-        "read_result_text": json.dumps(result(bodies[2], "2")) if len(bodies) > 2 else None,
+        "read_result_text": json.dumps(result(bodies[2], "2"), sort_keys=True) if len(bodies) > 2 else None,
         "notebook_edit_result": result(bodies[3], "3") if len(bodies) > 3 else None,
         "final_notebook": record.get("final_file"),
     }
