@@ -99,7 +99,9 @@ import { formatBackgroundNotification } from "./background-notifications.js";
 import { createBackgroundTaskTools } from "./background-task-tools.js";
 import { createWebTools } from "./web-tools.js";
 import { bindGuardedTool, wrapGuardedTools } from "./guarded-tool.js";
+import { createCronTools, cronToolsEnabled } from "./cron-tools.js";
 import { monitorTool } from "./monitor-tool.js";
+import { sendMessageTool } from "./send-message.js";
 import { createWorktreeTools, worktreeBaseRef } from "./worktree-tools.js";
 import { webFetchModel } from "./web-fetch.js";
 import { resolveDirectModelAlias } from "./direct-model-alias.js";
@@ -1487,7 +1489,32 @@ async function main(): Promise<void> {
     shell: shellHost,
     baseRef: () => worktreeBaseRef(launch.snapshot.effective),
   });
+  const cron = cronToolsEnabled(process.env)
+    ? createCronTools({
+        projectDir: () => shellHost.root,
+        sessionId: () => session.id,
+        procStart: new Date(
+          Date.now() - Math.floor(process.uptime() * 1000),
+        ).toISOString(),
+      })
+    : undefined;
   const sessionTools = [
+    ...(cron === undefined
+      ? []
+      : [
+          bindGuardedTool(cron.create, guardedHost),
+          bindGuardedTool(cron.remove, guardedHost),
+          bindGuardedTool(cron.list, guardedHost),
+        ]),
+    bindGuardedTool(
+      sendMessageTool({
+        caller: () => ({ kind: "main" }),
+        agents: () => [],
+        deliverToMain() {},
+        deliverToAgent: () => false,
+      }),
+      guardedHost,
+    ),
     bindGuardedTool(
       monitorTool({
         shell: shellHost,
