@@ -1,0 +1,343 @@
+{
+  "schemaVersion": 1,
+  "caseId": "protected-paths-write-denied",
+  "invariants": ["INV-06"],
+  "description": "acceptEdits still refuses writes to .git, .vscode and command-config files",
+  "provenance": "synthetic, hand-written adversarial case; expectations pinned after observing tau at e6e6c88 and checked against docs/permission-contract.md",
+  "workspace": { "files": { ".git/HEAD": "ref: refs/heads/main\n" } },
+  "args": ["-p", "Set up tooling", "--permission-mode", "acceptEdits"],
+  "modelScript": [
+    {
+      "kind": "turn",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "toolu_hook",
+          "name": "Write",
+          "input": {
+            "file_path": ".git/hooks/pre-commit",
+            "content": "#!/bin/sh\ntouch hook-ran.marker\n"
+          }
+        }
+      ],
+      "stopReason": "tool_use"
+    },
+    {
+      "kind": "turn",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "toolu_vscode",
+          "name": "Write",
+          "input": { "file_path": ".vscode/tasks.json", "content": "{}" }
+        }
+      ],
+      "stopReason": "tool_use"
+    },
+    {
+      "kind": "turn",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "toolu_mcp",
+          "name": "Write",
+          "input": {
+            "file_path": ".mcp.json",
+            "content": "{\"mcpServers\":{}}"
+          }
+        }
+      ],
+      "stopReason": "tool_use"
+    },
+    {
+      "kind": "turn",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "toolu_rc",
+          "name": "Write",
+          "input": {
+            "file_path": ".bashrc",
+            "content": "touch rc-ran.marker\n"
+          }
+        }
+      ],
+      "stopReason": "tool_use"
+    },
+    {
+      "kind": "turn",
+      "content": [{ "type": "text", "text": "Done." }],
+      "stopReason": "end_turn"
+    }
+  ],
+  "expected": {
+    "exitCode": 0,
+    "requestSequence": [
+      {
+        "path": "/v1/messages",
+        "tools": [
+          "Agent",
+          "Bash",
+          "Edit",
+          "Glob",
+          "Grep",
+          "Read",
+          "TaskStop",
+          "Write"
+        ],
+        "messages": [
+          { "role": "user", "blocks": [{ "kind": "text" }, { "kind": "text" }] }
+        ]
+      },
+      {
+        "path": "/v1/messages",
+        "tools": [
+          "Agent",
+          "Bash",
+          "Edit",
+          "Glob",
+          "Grep",
+          "Read",
+          "TaskStop",
+          "Write"
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "blocks": [{ "kind": "text" }, { "kind": "text" }]
+          },
+          {
+            "role": "assistant",
+            "blocks": [
+              { "kind": "tool_use", "name": "Write", "id": "toolu_hook" }
+            ]
+          },
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "tool_result",
+                "toolUseId": "toolu_hook",
+                "isError": true
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "path": "/v1/messages",
+        "tools": [
+          "Agent",
+          "Bash",
+          "Edit",
+          "Glob",
+          "Grep",
+          "Read",
+          "TaskStop",
+          "Write"
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "blocks": [{ "kind": "text" }, { "kind": "text" }]
+          },
+          {
+            "role": "assistant",
+            "blocks": [
+              { "kind": "tool_use", "name": "Write", "id": "toolu_hook" }
+            ]
+          },
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "tool_result",
+                "toolUseId": "toolu_hook",
+                "isError": true
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "blocks": [
+              { "kind": "tool_use", "name": "Write", "id": "toolu_vscode" }
+            ]
+          },
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "tool_result",
+                "toolUseId": "toolu_vscode",
+                "isError": true
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "path": "/v1/messages",
+        "tools": [
+          "Agent",
+          "Bash",
+          "Edit",
+          "Glob",
+          "Grep",
+          "Read",
+          "TaskStop",
+          "Write"
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "blocks": [{ "kind": "text" }, { "kind": "text" }]
+          },
+          {
+            "role": "assistant",
+            "blocks": [
+              { "kind": "tool_use", "name": "Write", "id": "toolu_hook" }
+            ]
+          },
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "tool_result",
+                "toolUseId": "toolu_hook",
+                "isError": true
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "blocks": [
+              { "kind": "tool_use", "name": "Write", "id": "toolu_vscode" }
+            ]
+          },
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "tool_result",
+                "toolUseId": "toolu_vscode",
+                "isError": true
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "blocks": [
+              { "kind": "tool_use", "name": "Write", "id": "toolu_mcp" }
+            ]
+          },
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "tool_result",
+                "toolUseId": "toolu_mcp",
+                "isError": true
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "path": "/v1/messages",
+        "tools": [
+          "Agent",
+          "Bash",
+          "Edit",
+          "Glob",
+          "Grep",
+          "Read",
+          "TaskStop",
+          "Write"
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "blocks": [{ "kind": "text" }, { "kind": "text" }]
+          },
+          {
+            "role": "assistant",
+            "blocks": [
+              { "kind": "tool_use", "name": "Write", "id": "toolu_hook" }
+            ]
+          },
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "tool_result",
+                "toolUseId": "toolu_hook",
+                "isError": true
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "blocks": [
+              { "kind": "tool_use", "name": "Write", "id": "toolu_vscode" }
+            ]
+          },
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "tool_result",
+                "toolUseId": "toolu_vscode",
+                "isError": true
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "blocks": [
+              { "kind": "tool_use", "name": "Write", "id": "toolu_mcp" }
+            ]
+          },
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "tool_result",
+                "toolUseId": "toolu_mcp",
+                "isError": true
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "blocks": [
+              { "kind": "tool_use", "name": "Write", "id": "toolu_rc" }
+            ]
+          },
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "tool_result",
+                "toolUseId": "toolu_rc",
+                "isError": true
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "toolResults": [
+      { "toolUseId": "toolu_hook", "isError": true },
+      { "toolUseId": "toolu_vscode", "isError": true },
+      { "toolUseId": "toolu_mcp", "isError": true },
+      { "toolUseId": "toolu_rc", "isError": true }
+    ],
+    "filesAbsent": [
+      ".git/hooks/pre-commit",
+      ".vscode/tasks.json",
+      ".mcp.json",
+      ".bashrc"
+    ],
+    "fileContents": { ".git/HEAD": "ref: refs/heads/main\n" }
+  }
+}

@@ -221,8 +221,22 @@ export async function loadLaunchConfiguration(
     value === "acceptEdits" ||
     value === "plan" ||
     value === "bypassPermissions";
+  // Repository files can be checked in by anyone, so a bypass default must
+  // also come from user, flag or policy settings. Otherwise the launch falls
+  // back to default rather than to a lower-precedence source's mode.
+  const trustedBypass = snapshot.documents.some((document) => {
+    const permissions = document.effective?.permissions;
+    return (
+      document.source !== "projectSettings" &&
+      document.source !== "localSettings" &&
+      record(permissions) &&
+      permissions.defaultMode === "bypassPermissions"
+    );
+  });
   const mode =
-    !options.modeExplicit && isMode(configuredMode)
+    !options.modeExplicit &&
+    isMode(configuredMode) &&
+    (configuredMode !== "bypassPermissions" || trustedBypass)
       ? configuredMode
       : options.mode;
   return {

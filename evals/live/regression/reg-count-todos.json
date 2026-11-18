@@ -1,0 +1,32 @@
+{
+  "caseId": "reg-count-todos",
+  "version": 1,
+  "priority": "P1",
+  "category": "multi-file search",
+  "intent": "How many lines in the TypeScript files under src/ contain the marker TODO? Reply with the count.",
+  "allowedTools": ["Read", "Glob", "Grep"],
+  "workspace": {
+    "files": {
+      "src/a.ts": "// TODO: validate input\nexport const a = 1;\n// TODO: remove legacy path\n",
+      "src/b.ts": "export const b = 2; // TODO: rename\n",
+      "src/notes.md": "TODO: this markdown line must not be counted\n",
+      "README.md": "TODO list lives in issues.\n"
+    }
+  },
+  "oracle": {
+    "checks": [
+      {
+        "kind": "answer-matches",
+        "pattern": "\\b(3|three)\\b"
+      }
+    ]
+  },
+  "acceptedVariations": ["Spelling the count as a word ('three')."],
+  "budget": {
+    "maxTurns": 6,
+    "maxOutputTokensPerCall": 16000,
+    "maxCostUsd": 0.75,
+    "timeoutMs": 180000
+  },
+  "rubric": ["Counts only .ts files under src/.", "Reports 3."]
+}

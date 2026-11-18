@@ -64,7 +64,7 @@ A temporary directory contains a filename of 40 `a` characters. An isolated buil
 
 The timing is one local observation, not a portable performance promise. The shipped regression test requires normal completion rather than a particular millisecond result.
 
-`test/glob.test.ts` adds 12 tests, including **115,940 deterministic comparisons** against a size-bounded independent regex oracle, newline/UTF-16/literal cases, exact shared-budget checks, real filesystem/symlink boundaries and the isolated child regression. The oracle never receives long adversarial patterns. A dispatch regression additionally covers NULs, unknown fields and directory validation.
+`test/contract/glob.test.ts` adds 12 tests, including **115,940 deterministic comparisons** against a size-bounded independent regex oracle, newline/UTF-16/literal cases, exact shared-budget checks, real filesystem/symlink boundaries and the isolated child regression. The oracle never receives long adversarial patterns. A dispatch regression additionally covers NULs, unknown fields and directory validation.
 
 Final local verification:
 

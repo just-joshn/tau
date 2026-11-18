@@ -7,7 +7,7 @@ dist
 *.tgz
 
 # code coverage
-coverage
+/coverage/
 *.lcov
 
 # logs
@@ -38,3 +38,11 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 artifacts/
 __pycache__/
 *.pyc
+
+# test automation outputs
+test-results/
+bench-results/
+eval-results/
+
+# mutation testing output
+mutation-results/

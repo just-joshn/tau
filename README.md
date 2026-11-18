@@ -186,8 +186,11 @@ No original executable bytes, bundled application implementation, original syste
 bun run typecheck
 bun run lint
 bun fmt --check
-bun test
+bun run test
+bun run test:coverage
 ```
+
+`bun run test:coverage` fails when branch coverage is below 80% in total or in any `src` file. The [test strategy reference](docs/TEST-STRATEGY.md) lists the test tiers, CI gates, invariants and known gaps.
 
 The suite runs the recorded unit and integration tests (see [current verification status](docs/HANDOFF.md)): real temporary-directory tools, encoding/BOM/quote/escape fidelity, Read windows/byte/token pages/streaming boundaries/shared large-read room and stale-file guards, exhaustive bounded Glob comparisons and an isolated hang regression, regex modes/pagination/ordering and backend isolation, shell output/timeouts/cancellation, fragmented local HTTP SSE, shared API allowances, JSON fallback, billing/body bounds, header/body deadlines, ping limits and clock handling, retry cancellation/non-replay, indexed stream normalization, tool-JSON repair, model-specific thinking requests, output-limit continuation, signed-thinking/prefix recovery, context windows/usage/compaction, output-cap repair, reactive and larger-model admission, agent history, CLI tool use, permission denial, JSON output, session resume, instruction loading, stdio MCP discovery/modern and legacy negotiation, cancellation, dynamic catalogs, rich results and compiled MCP save/resume/permission workflows, source-aware configuration/instruction resolver fixtures, and SSE label/fallback regression cases. No network model calls or live keys are used.
 

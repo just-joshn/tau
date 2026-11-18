@@ -447,13 +447,14 @@ export function createTools(options: {
   const available = (name: ToolName) =>
     (policy.tools === undefined || policy.tools.includes(name)) &&
     matchingToolRule(policy, "deny", name) === undefined;
-  const rootPromise = realpath(options.cwd);
+  let rootPromise: Promise<string> | undefined;
+  const workspaceRoot = () => (rootPromise ??= realpath(options.cwd));
   async function safePath(
     input: string,
     operation?: ToolName,
     signal?: AbortSignal,
   ): Promise<string> {
-    const root = await rootPromise;
+    const root = await workspaceRoot();
     const target = path.resolve(root, input);
     const check = (candidate: string) => {
       const relative = path.relative(root, candidate);
@@ -508,7 +509,7 @@ export function createTools(options: {
     }
   }
   async function refuseSymlink(input: string): Promise<void> {
-    const lexical = path.resolve(await rootPromise, input);
+    const lexical = path.resolve(await workspaceRoot(), input);
     try {
       if ((await lstat(lexical)).isSymbolicLink())
         throw new Error("Refusing to write through a symlink");
@@ -618,7 +619,7 @@ export function createTools(options: {
       input: permissionInput,
     });
     let asks = wholeToolAsk !== undefined || hookPermission === "ask";
-    const root = fileContext === undefined ? undefined : await rootPromise;
+    const root = fileContext === undefined ? undefined : await workspaceRoot();
     const fileRules =
       fileContext !== undefined &&
       root !== undefined &&
@@ -678,7 +679,7 @@ export function createTools(options: {
       options.planWriteEligibility !== undefined &&
       (await options.planWriteEligibility({
         operation: name,
-        requestedPath: path.resolve(await rootPromise, fileContext.input),
+        requestedPath: path.resolve(await workspaceRoot(), fileContext.input),
         canonicalPath: fileContext.canonical,
         signal,
       }));
@@ -794,7 +795,7 @@ export function createTools(options: {
     file: string,
     input: string,
   ): Promise<void> {
-    const root = await rootPromise;
+    const root = await workspaceRoot();
     if (
       sensitiveWriteReason(input, root, options.sensitiveWritePaths) ===
         undefined &&
@@ -866,7 +867,7 @@ export function createTools(options: {
       return {
         ...normalized,
         file_path: path.resolve(
-          await rootPromise,
+          await workspaceRoot(),
           schemas[name].parse(input).file_path,
         ),
       };
@@ -879,7 +880,7 @@ export function createTools(options: {
       readContext = context;
     },
     async prepareCompaction(input) {
-      const cwd = await rootPromise;
+      const cwd = await workspaceRoot();
       // CLAUDE.md is the instruction file currently loaded by tau's prompt builder.
       const excludedPaths = [
         path.join(cwd, "CLAUDE.md"),
@@ -1288,7 +1289,7 @@ export function createTools(options: {
             inCall = true;
             if (!(await stat(start)).isDirectory())
               throw new Error("Glob path must be a directory");
-            const root = await rootPromise;
+            const root = await workspaceRoot();
             const matches: string[] = [];
             const matchesPattern = createGlobMatcher(input.pattern);
             for (const file of await files(start, signal)) {
@@ -1322,7 +1323,7 @@ export function createTools(options: {
               effectiveCall.input,
             );
             inCall = true;
-            const root = await rootPromise;
+            const root = await workspaceRoot();
             const directory = (await stat(start)).isDirectory();
             const executable = await findRipgrep();
             const deadline = Date.now() + 20000;
@@ -1428,7 +1429,7 @@ export function createTools(options: {
             inCall = true;
             const result = await shell(
               input.command,
-              await rootPromise,
+              await workspaceRoot(),
               input.timeout,
               signal,
             );

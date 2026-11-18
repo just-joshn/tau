@@ -1,0 +1,33 @@
+{
+  "caseId": "reg-create-summary-file",
+  "version": 1,
+  "priority": "P1",
+  "category": "file creation",
+  "intent": "Create the file notes/summary.md containing the single line: release 2.4 approved",
+  "allowedTools": ["Read", "Write"],
+  "workspace": {
+    "files": {
+      "notes/.keep": ""
+    }
+  },
+  "oracle": {
+    "checks": [
+      {
+        "kind": "file-matches",
+        "path": "notes/summary.md",
+        "pattern": "^\\s*release 2\\.4 approved\\s*$"
+      }
+    ]
+  },
+  "acceptedVariations": ["A trailing newline."],
+  "budget": {
+    "maxTurns": 6,
+    "maxOutputTokensPerCall": 16000,
+    "maxCostUsd": 0.75,
+    "timeoutMs": 180000
+  },
+  "rubric": [
+    "Creates exactly notes/summary.md.",
+    "The file contains only the requested line."
+  ]
+}

@@ -72,6 +72,6 @@ The50-span consolidated batch includes the adapter, generic evaluator, plan help
 - Scoped file/literal Bash rules are consumed by dedicated hosts; availability call forms and unsupported cross-server MCP grammar reject. Unknown shell/root/host profiles explicitly hold rather than become broad grants.
 - Scoped Edit(path) permits only selected Write/Edit operations; bare Edit and Write(path) do not grant Write through that shared family.
 - Native finite-set wildcard classification, source roots, inherited Read restrictions, hook-rewritten paths and compaction rereads retain their separate stages.
-- MCP positive availability, exact/server/star-suffix matching, ask/plan/required-interaction ordering and denial side effects are exercised in `test/tool-router.test.ts` and the compiled MCP workflow.
+- MCP positive availability, exact/server/star-suffix matching, ask/plan/required-interaction ordering and denial side effects are exercised in `test/unit/tool-router.test.ts` and the compiled MCP workflow.
 
-See `test/tool-policy.test.ts`, `test/tools.test.ts`, `test/scoped-permission-launch.test.ts`, `test/cli-scoped-permissions.test.ts` and the linked session/host tests. These tests verify tau's chosen subset, not the original executable's runtime behavior.
+See `test/security/tool-policy.test.ts`, `test/contract/tools.test.ts`, `test/security/scoped-permission-launch.test.ts`, `test/integration/cli-scoped-permissions.test.ts` and the linked session/host tests. These tests verify tau's chosen subset, not the original executable's runtime behavior.
