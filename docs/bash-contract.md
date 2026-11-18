@@ -13,6 +13,7 @@ in `docs/bash-needles.json` each occur once, in one chunk.
 | Shell session: start folder, current cwd, background registry | `createShellHost` | session `ts(e).cwd`, `Te()` |
 | Outcome: `completed` · `failed` · `background` · `refused` | `BashOutcome`, `renderBashOutcome` | `mapToolResultToToolResultBlockParam`, `Eq`/`HLr` |
 | Background task `{id, command, description, outputFile, toolUseId, status}` | `src/background-shells.ts` | `Vit`, `HE("local_bash")`, `kc` |
+| Shell snapshot: absent → `creating` → `ready(file)` \| `failed(reason)`, one per process and shell | `src/shell-snapshot.ts` `SnapshotState` | `Feo` (`y`, `a`), `OZn`, `sM().markSnapshotAvailable` |
 
 ## Schema and description
 
@@ -56,14 +57,50 @@ in `docs/bash-needles.json` each occur once, in one chunk.
 - Command: 4h798pp0 `buildExecCommand`: extglob off (`Tbs`), `unsetenv`
   unalias (`Rbs`), `eval '<cmd>' < /dev/null` (`LZn`/`NZn`; no `/dev/null` with
   a heredoc or `<` redirect), then `pwd -P >| <cwd file>`, joined with `&&`.
-  Spawned `<shell> -c -l <string>` (`getSpawnArgs`, the no-snapshot branch),
-  detached, stdout and stderr on one output-file descriptor (`eTs`).
+  With a usable snapshot the string starts with
+  `source <file> 2>/dev/null || true` and spawns as `<shell> -c <string>`;
+  without one it spawns `<shell> -c -l <string>` (`getSpawnArgs`). Detached,
+  stdout and stderr on one output-file descriptor (`eTs`). Foreground and
+  background calls share this path.
 - Child env (`c0o`, `G9e`): `SHELL`, `GIT_EDITOR=true`, `CLAUDECODE=1`,
   `CLAUDE_CODE_EXECPATH`, `CLAUDE_CODE_SESSION_ID`, `CLAUDE_CODE_CHILD_SESSION`,
   `CLAUDE_PID`.
 - Output file: x2fk4g86 `kc`/`St`:
   `${CLAUDE_CODE_TMPDIR||/tmp}/claude-<uid>/<sanitized start cwd>/<session>/tasks/<id>.output`.
   Ids are `b` + 8 base-36 characters (3v9pk43h `HE`).
+
+## Shell snapshot
+
+Needles: `docs/shell-snapshot-needles.json`.
+
+- When: lazily, on the first Bash call of the process (`v0e` → `Zbs.bash` →
+  `gto` caches `shellConfig` per host → `Xbs` → `Feo` → `OZn`). Main session
+  and subagents share it. No startup prewarm in 2.1.326. tau keys the cache
+  by shell, `HOME` and config folder, and shares it across shell hosts.
+- Creation (`OZn`): `<shell> -c -l <script>` via `execFile`, env = process
+  env (none under `CLAUDE_CODE_DONT_INHERIT_ENV`) plus `SHELL`,
+  `GIT_EDITOR=true`, `CLAUDECODE=1`; timeout `RWe` 10000 ms; maxBuffer 1 MiB.
+  File: `<CLAUDE_CONFIG_DIR or ~/.claude>/shell-snapshots/snapshot-<bash|zsh|sh>-<ms>-<6 base36>.sh`
+  (`_Jn` adds a session suffix only when `hJn()`, which is false).
+- Script (`zws`): `SNAPSHOT_FILE=<Jr(file)>`, then `source "<rc>" < /dev/null`
+  when `~/.zshrc` / `~/.bashrc` (`~/.profile` for other shells; `Zvt`) exists,
+  then a fresh file with `unalias -a`. With an rc file (`Hws`): bash writes
+  `shopt -p`, one `eval %q` line per function not named `_x…` (`PZn` on
+  macOS, `$ws` batched read on bash ≥ 5.1 elsewhere, gate
+  `tengu_gentle_pumice` default true), `set -o` lines that are on plus
+  `monitor`, `shopt -s expand_aliases`, and `\alias -p` as `alias -- …`; zsh
+  writes `typeset -f` per `typeset +f` name, `setopt` lines, and `alias` as
+  `alias -- …`; at most 1000 aliases. Without one, bash gets only
+  `shopt -s expand_aliases`. Then a quoted here-document
+  (`CLAUDE_CODE_END_<16>`) with the `pkill` guard (`Iws`) and `export PATH=<the CLI's PATH>` (`Gws`): the
+  rc file's PATH changes do not survive on macOS and Linux.
+- Result: an `execFile` error (nonzero exit, `exit` in the rc file, timeout)
+  or a missing file afterwards → failed; every call then spawns with `-l`.
+  Success registers deletion at exit (`kt`). Each call checks the file
+  (`Ceo` = `access`); a deleted file falls back to `-l` for that call only.
+- `isSnapshotUsable` only decides whether a plugin refresh keeps the snapshot
+  (`a0o`). `skipSnapshot` is read by `Feo` but no caller sets it. A diskless
+  session (`vA`) never snapshots.
 
 ## Working directory
 
@@ -119,8 +156,11 @@ in `docs/bash-needles.json` each occur once, in one chunk.
 
 ## Remaining differences (tau)
 
-- No shell snapshot of `~/.zshrc`/`~/.bashrc` (`OZn`); tau always takes the
-  original's `-l` fallback, so rc-file aliases and functions are absent.
+- Shell snapshot gaps: no `rg` alias/function or `find`/`grep` shadows (tau
+  embeds no rg, bfs or ugrep; Grep uses rg from PATH), no plugin `bin/` PATH
+  entries or plugin-refresh rebuild (`a0o`), no shell-export capture (`jws`,
+  bridge sessions only), no spawn-env probe (`DZn`), no Windows PATH probe
+  (`Bws`), no cgroup wrapper (`eos`), no debug log or telemetry.
 - Lean description variant (`D2r`, `ZI`) and the `F5e` JSON task result are
   not ported; the oracle shows neither.
 - Aborting a turn kills the foreground command; the original moves it to the
@@ -141,3 +181,8 @@ in `docs/bash-needles.json` each occur once, in one chunk.
 (steps in `scenarios_bash.py`). The comparison normalizes the root, task ids,
 session ids and the original's `<total_tokens>` reminder, and accepts the
 description difference only as the declared embedded-search gate.
+
+The dummy HOME holds a `.bashrc` with a function and an alias (steps
+`greet_fn`, `greet_alias`), so both CLIs build a snapshot from a real rc
+file. The profile allows only `SYSTEM_PROGRAMS`, so `awk` and `sed` fail
+inside the snapshot script for both.
