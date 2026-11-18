@@ -29,3 +29,41 @@ test("an ordinary host failure is raised, not reported as unresolved", async () 
   };
   expect(f.check("cat private")).rejects.toBe(failure);
 });
+
+// A catastrophic removal must stay behind the dangerous-removal floor even
+// when a Bash prefix rule allows the wrapper in front of it; `env rm -rf /`
+// and `nice sh -c 'rm -rf /'` already do. These wrappers currently get the
+// allow. Remove `.failing` once the floor sees through them.
+test.failing.each([
+  ["sudo", "sudo rm -rf /"],
+  ["chroot", "chroot / sh -c 'rm -rf /'"],
+])(
+  "KNOWN-GAP an allowed %p prefix lets %p through the dangerous-removal floor",
+  async (prefix, command) => {
+    const f = createSecurityProcessFixture();
+    f.add("allow", `${prefix}:*`);
+    f.setSkip(false);
+    const result = await f.check(command);
+    if (result.status !== "resolved") throw new Error(result.dependency);
+    expect(result.outcome.behavior).not.toBe("allow");
+  },
+);
+
+test.each([
+  ["env", "env rm -rf /"],
+  ["nice", "nice sh -c 'rm -rf /'"],
+  ["bash", "bash -c 'rm -rf /'"],
+])(
+  "an allowed %p prefix keeps %p behind the dangerous-removal floor",
+  async (prefix, command) => {
+    const f = createSecurityProcessFixture();
+    f.add("allow", `${prefix}:*`);
+    f.setSkip(false);
+    const result = await f.check(command);
+    if (result.status !== "resolved") throw new Error(result.dependency);
+    expect(result.outcome.behavior).toBe("ask");
+    expect(result.outcome.decisionReason).toMatchObject({
+      circuitBreaker: "dangerousRemoval",
+    });
+  },
+);
