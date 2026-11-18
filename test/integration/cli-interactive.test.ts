@@ -33,6 +33,28 @@ async function submit(tau: PtySession, line: string): Promise<void> {
   tau.write(`${line}\r`);
 }
 
+/** The id of the session the banner or a /clear or /resume line names. */
+function sessionId(screen: string): string {
+  const ids = [
+    ...screen.matchAll(/(?:Session|New session|Resumed) ([0-9a-f-]{36})/g),
+  ];
+  const id = ids.at(-1)?.[1];
+  if (id === undefined) throw new Error(`no session id in:\n${screen}`);
+  return id;
+}
+
+async function until(
+  condition: () => boolean,
+  timeoutMs = 10_000,
+): Promise<void> {
+  const started = Date.now();
+  while (!condition()) {
+    if (Date.now() - started > timeoutMs)
+      throw new Error("condition not met in time");
+    await Bun.sleep(10);
+  }
+}
+
 async function exit(tau: PtySession): Promise<void> {
   await submit(tau, "/exit");
   expect(await tau.exited).toEqual({
@@ -177,5 +199,276 @@ describe("interactive REPL", () => {
     ).toBe(true);
     await submit(tau, "/quit");
     expect((await tau.exited).exitCode).toBe(0);
+  });
+});
+
+describe("session commands", () => {
+  test("/clear starts a new session whose requests omit the earlier history", async () => {
+    const provider = await startMockProvider([
+      said("first answer"),
+      said("second answer"),
+    ]);
+    const tau = startPty({ provider });
+    const before = sessionId(await tau.expect(PROMPT));
+    tau.write("remember apples\r");
+    await tau.expect("first answer");
+    await submit(tau, "/clear");
+    const after = sessionId(await tau.expect(/New session [0-9a-f-]{36}/));
+    expect(after).not.toBe(before);
+    await submit(tau, "what fruit?");
+    await tau.expect("second answer");
+    await exit(tau);
+    const second = JSON.stringify(body(provider.requests[1]).messages);
+    expect(second).toContain("what fruit?");
+    expect(second).not.toContain("remember apples");
+  });
+
+  test("/resume reloads an earlier session's history and rejects unknown ids", async () => {
+    const provider = await startMockProvider([said("noted"), said("recalled")]);
+    const tau = startPty({ provider });
+    const original = sessionId(await tau.expect(PROMPT));
+    tau.write("remember pears\r");
+    await tau.expect("noted");
+    await submit(tau, "/clear");
+    await tau.expect("New session");
+    await submit(tau, "/resume 00000000-0000-4000-8000-000000000000");
+    await tau.expect(/tau: .+/);
+    await submit(tau, `/resume ${original}`);
+    await tau.expect(`Resumed ${original}`);
+    await submit(tau, "what fruit?");
+    await tau.expect("recalled");
+    await exit(tau);
+    const resumed = JSON.stringify(body(provider.requests[1]).messages);
+    expect(resumed).toContain("remember pears");
+    expect(resumed).toContain("what fruit?");
+  });
+
+  test("a prompt given on the command line runs before the first REPL prompt", async () => {
+    const provider = await startMockProvider([said("answered at launch")]);
+    const tau = startPty({ provider, args: ["launch question"] });
+    const screen = await tau.expect("answered at launch");
+    expect(screen).not.toContain(PROMPT);
+    await exit(tau);
+    expect(JSON.stringify(body(provider.requests[0]).messages)).toContain(
+      "launch question",
+    );
+  });
+});
+
+describe("skills", () => {
+  test("/skills says when there are none", async () => {
+    const tau = startPty({ env: { ANTHROPIC_API_KEY: "unused" } });
+    await submit(tau, "/skills");
+    await tau.expect("No local skills available.");
+    await exit(tau);
+  });
+
+  test("/skills lists user skills and /NAME args runs the skill as a turn", async () => {
+    const provider = await startMockProvider([said("skill ran")]);
+    const tau = startPty({
+      provider,
+      configFiles: {
+        "skills/greet/SKILL.md":
+          "---\ndescription: Greets someone warmly\n---\nGreet $ARGUMENTS with enthusiasm.\n",
+      },
+    });
+    await submit(tau, "/skills");
+    await tau.expect("/greet Greets someone warmly");
+    await submit(tau, "/greet Ada");
+    await tau.expect("skill ran");
+    await exit(tau);
+    expect(JSON.stringify(body(provider.requests[0]).messages)).toContain(
+      "Greet Ada with enthusiasm.",
+    );
+  });
+});
+
+describe("interrupts and end of input", () => {
+  test("Ctrl-C cancels a running turn and the REPL keeps going", async () => {
+    const provider = await startMockProvider([
+      { kind: "hang" },
+      said("after cancel"),
+    ]);
+    const tau = startPty({ provider });
+    await submit(tau, "slow question");
+    await until(() => provider.requests.length === 1);
+    tau.write("\x03");
+    await tau.expect("Cancelling…");
+    await tau.expect("tau: Interrupted");
+    await submit(tau, "again");
+    await tau.expect("after cancel");
+    await exit(tau);
+  });
+
+  test("Ctrl-C at an idle prompt ends the session cleanly", async () => {
+    const tau = startPty({ env: { ANTHROPIC_API_KEY: "unused" } });
+    await tau.expect(PROMPT);
+    tau.write("\x03");
+    expect(await tau.exited).toEqual({
+      exitCode: 0,
+      signal: null,
+      timedOut: false,
+    });
+  });
+
+  test("Ctrl-D at an idle prompt ends the session cleanly", async () => {
+    const tau = startPty({ env: { ANTHROPIC_API_KEY: "unused" } });
+    await tau.expect(PROMPT);
+    tau.write("\x04");
+    expect(await tau.exited).toEqual({
+      exitCode: 0,
+      signal: null,
+      timedOut: false,
+    });
+  });
+});
+
+describe("tool approval prompts", () => {
+  const bash = (command: string) => ({
+    kind: "turn" as const,
+    content: [
+      {
+        type: "tool_use" as const,
+        id: "toolu_1",
+        name: "Bash",
+        input: { command },
+      },
+    ],
+    stopReason: "tool_use" as const,
+  });
+
+  test("answering y runs the tool", async () => {
+    const provider = await startMockProvider([
+      bash("echo approved > note.txt"),
+      said("wrote it"),
+    ]);
+    const tau = startPty({ provider });
+    await submit(tau, "write a note");
+    await tau.expect("Allow once? [y/N] ");
+    tau.write("y\r");
+    await tau.expect("wrote it");
+    await exit(tau);
+    expect(await Bun.file(join(tau.cwd, "note.txt")).text()).toBe("approved\n");
+  });
+
+  test("answering anything else denies the tool and the model sees the denial", async () => {
+    const provider = await startMockProvider([
+      bash("echo nope > note.txt"),
+      said("understood"),
+    ]);
+    const tau = startPty({ provider });
+    await submit(tau, "write a note");
+    await tau.expect("Allow once? [y/N] ");
+    tau.write("\r");
+    await tau.expect("[tool error] Permission denied");
+    await tau.expect("understood");
+    await exit(tau);
+    expect(existsSync(join(tau.cwd, "note.txt"))).toBe(false);
+    expect(JSON.stringify(body(provider.requests[1]).messages)).toContain(
+      "Permission denied",
+    );
+  });
+});
+
+describe("launch errors specific to a terminal", () => {
+  test.each([
+    [
+      ["--output-format", "json"],
+      "tau: Structured output requires --print or piped input",
+    ],
+    [
+      ["--max-thinking-tokens", "2000"],
+      "tau: --max-thinking-tokens requires print or piped mode",
+    ],
+  ])("%p is rejected in interactive mode", async (args, message) => {
+    const tau = startPty({ env: { ANTHROPIC_API_KEY: "unused" }, args });
+    await tau.expect(message);
+    expect((await tau.exited).exitCode).toBe(1);
+  });
+});
+
+describe("/compact", () => {
+  test("an empty conversation is preserved without a request", async () => {
+    const provider = await startMockProvider([]);
+    const tau = startPty({ provider });
+    await submit(tau, "/compact");
+    await tau.expect(
+      "Conversation context was preserved; compaction did not complete.",
+    );
+    await exit(tau);
+    expect(provider.requests).toHaveLength(0);
+  });
+
+  test("summarises the conversation with the configured output limit", async () => {
+    const provider = await startMockProvider([
+      said("long answer"),
+      said("<summary>The user asked a question.</summary>"),
+      said("continuing"),
+    ]);
+    const tau = startPty({
+      provider,
+      args: ["--max-tokens", "1500", "--max-api-attempts", "3"],
+    });
+    await submit(tau, "a question");
+    await tau.expect("long answer");
+    await submit(tau, "/compact");
+    await tau.expect("Compacting conversation context...");
+    await tau.expect("Conversation context compacted.");
+    await submit(tau, "next");
+    await tau.expect("continuing");
+    await exit(tau);
+    const summary = z
+      .looseObject({ max_tokens: z.number() })
+      .parse(provider.requests[1]?.body);
+    expect(summary.max_tokens).toBe(1500);
+    const after = JSON.stringify(body(provider.requests[2]).messages);
+    expect(after).toContain("The user asked a question.");
+    expect(after).not.toContain("long answer");
+  });
+
+  test("a summary that exhausts --max-api-attempts is reported and the conversation is kept", async () => {
+    const provider = await startMockProvider([
+      said("original answer"),
+      {
+        kind: "error",
+        status: 400,
+        body: {
+          type: "error",
+          error: { type: "invalid_request_error", message: "summary refused" },
+        },
+      },
+      said("still here"),
+    ]);
+    const tau = startPty({
+      provider,
+      args: ["--max-retries", "0", "--max-api-attempts", "1"],
+    });
+    await submit(tau, "a question");
+    await tau.expect("original answer");
+    await submit(tau, "/compact");
+    const screen = await tau.expect("tau: API attempt budget exhausted");
+    expect(screen).not.toContain("Conversation context compacted.");
+    await submit(tau, "next");
+    await tau.expect("still here");
+    await exit(tau);
+    expect(provider.requests).toHaveLength(3);
+    expect(JSON.stringify(body(provider.requests[2]).messages)).toContain(
+      "original answer",
+    );
+  });
+
+  test("Ctrl-C interrupts compaction", async () => {
+    const provider = await startMockProvider([
+      said("answer"),
+      { kind: "hang" },
+    ]);
+    const tau = startPty({ provider });
+    await submit(tau, "a question");
+    await tau.expect("answer");
+    await submit(tau, "/compact");
+    await until(() => provider.requests.length === 2);
+    tau.write("\x03");
+    await tau.expect("tau: Interrupted");
+    await exit(tau);
   });
 });

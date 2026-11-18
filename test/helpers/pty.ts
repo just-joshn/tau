@@ -21,6 +21,8 @@ export interface PtyOptions {
   args?: readonly string[];
   /** Workspace files written before launch, keyed by path relative to cwd. */
   files?: Readonly<Record<string, string>>;
+  /** Files written before launch, keyed by path relative to CLAUDE_CONFIG_DIR. */
+  configFiles?: Readonly<Record<string, string>>;
   /** Applied last; undefined removes a variable. */
   env?: Readonly<Record<string, string | undefined>>;
   /** Points the CLI at this provider with a sentinel API key. */
@@ -70,11 +72,15 @@ export function startPty(options: PtyOptions = {}): PtySession {
     tmp: join(root, "tmp"),
   };
   for (const dir of Object.values(dirs)) mkdirSync(dir);
-  for (const [file, content] of Object.entries(options.files ?? {})) {
-    const path = join(dirs.cwd, file);
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, content);
-  }
+  for (const [base, files] of [
+    [dirs.cwd, options.files],
+    [dirs.config, options.configFiles],
+  ] as const)
+    for (const [file, content] of Object.entries(files ?? {})) {
+      const path = join(base, file);
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, content);
+    }
   const env: Record<string, string | undefined> = {
     ...Object.fromEntries(INHERITED_ENV.map((key) => [key, process.env[key]])),
     HOME: dirs.home,
