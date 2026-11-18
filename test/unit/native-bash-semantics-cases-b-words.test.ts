@@ -173,3 +173,29 @@ table("words a shell passes through unchanged", [
   ["for f in $(ls); do echo hi; done", [["ls"], ["echo", "hi"]]],
   ['echo "a$(pwd)b"', [["pwd"], ["echo", `a${CMDSUB}b`]]],
 ]);
+
+table("a command substitution contributes its commands and a placeholder", [
+  [
+    'echo "a$(cd /tmp && ls)b"',
+    [["cd", "/tmp"], ["ls"], ["echo", `a${CMDSUB}b`]],
+  ],
+  ['echo "a$(  pwd  )b"', [["pwd"], ["echo", `a${CMDSUB}b`]]],
+  ['echo "a$(:)b"', [[":"], ["echo", `a${CMDSUB}b`]]],
+  ["x=`pwd`", [["pwd"]], ["x"]],
+  ["x=$(true\n)", [["true"]], ["x"]],
+  ["x=$(true \\\n)", [["true"]], ["x"]],
+  ["x=$(echo hi > f)", [["echo", "hi"]], ["x"]],
+  // A body with no command still runs: it stands as `true`.
+  ['echo "a$(x=1)b"', [["true"], ["echo", `a${CMDSUB}b`]]],
+  ["x=$(x=2); echo hi", [["true"], ["echo", "hi"]]],
+  ["x=$( )", [], ["x"]],
+  ["x=$(pwd; ls)", /This command can't be checked/],
+  ['echo "a$(echo $(pwd))b"', /A nested command in this command/],
+  ['echo "a$(true # c\n)b"', /A nested command in this command/],
+]);
+
+table(
+  "a commented command substitution passes when divergent shapes are read",
+  [['echo "a$(true # c\n)b"', [["true"], ["echo", `a${CMDSUB}b`]]]],
+  { readsDivergentShapes: true },
+);

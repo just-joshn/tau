@@ -425,3 +425,39 @@ test("a declaration-prefix reading that does not match the prefixes is refused",
       /variables set in front of declarations in this command can't be checked/,
     );
 });
+
+table(
+  "with the reading rule off, a zsh-only read form of a set NAME passes",
+  [["x=1; read x[1]", [["read", "x[1]"]], ["x", "x"]]],
+  (script) => features.withoutReadingRule(() => f.analyze(script)),
+);
+
+describe("with the zsh wrapper and nested read rules rolled back", () => {
+  // A reader that reports the rollout payload turned both rules off.
+  const off = () => ({
+    value: false,
+    source: "payload",
+    defaultHost: true,
+  });
+  const rolledBack = createNativeBashPreparationFeatures({
+    stagedReader: off,
+    nestedReader: off,
+  });
+  const g = createNativeBashSemantics(
+    parser,
+    rolledBack,
+    createNativeBashSemanticFeatures({
+      environment: {},
+      home: () => "/home/fixture",
+      cpuNow: () => 0,
+    }).host,
+  );
+  const rows: Row[] = [
+    ["command a[1]=2", [["command", "a[1]=2"]], ["a"]],
+    ["noglob x=*.txt", [["noglob", "x=*.txt"]], ["x"]],
+    ["builtin -p read x", [["builtin", "-p", "read", "x"]], ["x"]],
+    ["x=1; read x[1]", [["read", "x[1]"]], ["x", "x"]],
+  ];
+  for (const row of rows)
+    test(row[0], async () => check(await g.analyze(row[0]), row));
+});
