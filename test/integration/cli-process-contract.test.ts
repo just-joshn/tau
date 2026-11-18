@@ -451,14 +451,22 @@ function jsonLineParser() {
   return {
     records,
     push(chunk: Buffer) {
-      pending += decoder.write(chunk);
-      let newline = pending.indexOf("\n");
-      while (newline !== -1) {
-        const record: unknown = JSON.parse(pending.slice(0, newline));
+      // Only the new text can hold a newline, so scanning stays linear.
+      const text = decoder.write(chunk);
+      let start = 0;
+      for (
+        let newline = text.indexOf("\n");
+        newline !== -1;
+        newline = text.indexOf("\n", start)
+      ) {
+        const record: unknown = JSON.parse(
+          pending + text.slice(start, newline),
+        );
         records.push(record);
-        pending = pending.slice(newline + 1);
-        newline = pending.indexOf("\n");
+        pending = "";
+        start = newline + 1;
       }
+      pending += text.slice(start);
     },
     /** Bytes after the last newline; a complete stream leaves none. */
     rest: () => pending + decoder.end(),
