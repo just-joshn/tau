@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Capture tau's API requests for a mock_api scenario (copied Bun + source in the verified profile).
 
-Uses the oracle's print-mode flags. Tau has no stream-json/--verbose yet, so the default
-`--output-format json` drops those two flags; the record lists what was omitted.
+Uses the oracle's print-mode flags (stream-json with --verbose by default); the record
+lists any oracle flag a run omitted.
 """
 import argparse
 import json
@@ -25,7 +25,7 @@ def arguments(scenario, output_format):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("scenario", choices=SCENARIOS)
-    parser.add_argument("--output-format", choices=["json", "stream-json"], default="json")
+    parser.add_argument("--output-format", choices=["json", "stream-json"], default="stream-json")
     parser.add_argument("--artifacts", type=Path, default=REPO / "artifacts/differential-pass/prompt")
     args = parser.parse_args()
     directory = args.artifacts.resolve()
