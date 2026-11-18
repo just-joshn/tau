@@ -1,0 +1,15 @@
+import type { BuiltinSkillSpec } from "./types.js";
+
+export const updateConfigSkill: BuiltinSkillSpec = {
+  name: "update-config",
+  origin: "bundled",
+  description:
+    'Use this skill to configure the Claude Code harness via settings.json. Automated behaviors ("from now on when X", "each time X", "whenever X", "before/after X") require hooks configured in settings.json - the harness executes these, not Claude, so memory/preferences cannot fulfill them. Also use for: permissions ("allow X", "add permission", "move permission to"), env vars ("set X=Y"), hook troubleshooting, or any changes to settings.json/settings.local.json files. Examples: "allow npm commands", "add bq permission to global settings", "move permission to user settings", "set DEBUG=true", "when claude stops show X". For simple settings like theme/model, suggest the /config command.',
+  allowedTools: [],
+  disallowedTools: [],
+  userInvocable: true,
+  disableModelInvocation: false,
+  enabled: () => true,
+  prompt: () => "",
+  unported: ["body not yet ported"],
+};

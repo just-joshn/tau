@@ -10,7 +10,12 @@ import {
 export const SKILL_MAX_BYTES = 1_000_000;
 export const SKILL_EXPANSION_MAX_CHARS = 4_000_000;
 export type SkillSource =
-  "policySettings" | "userSettings" | "projectSettings" | "plugin";
+  | "policySettings"
+  | "userSettings"
+  | "projectSettings"
+  | "plugin"
+  | "bundled"
+  | "builtinCommand";
 export type SkillEffort = "low" | "medium" | "high" | "xhigh" | "max" | number;
 export interface SkillLocation {
   directory: string;
@@ -110,6 +115,8 @@ export interface AdmittedSkillDefinition {
   info: LocalSkill;
   body: string;
   isSkillMode?: boolean;
+  /** Built-in skills render their own text; no argument or variable substitution applies. */
+  render?: (args: string, context: { sessionId: string }) => Promise<string>;
 }
 interface SkillDefinition extends AdmittedSkillDefinition {}
 interface ParsedSkill {
@@ -518,7 +525,10 @@ export class LocalSkillRegistry {
       absolute(info.canonicalPath);
       absolute(info.baseDir);
       if (info.pluginRoot !== undefined) absolute(info.pluginRoot);
-      if (this.options.managedOnly && info.source !== "policySettings") {
+      if (
+        this.options.managedOnly &&
+        !["policySettings", "bundled", "builtinCommand"].includes(info.source)
+      ) {
         this.issue(
           info.path,
           info.source,
@@ -534,8 +544,11 @@ export class LocalSkillRegistry {
         typeof definition.body !== "string"
       )
         throw new Error("Invalid admitted skill definition");
-      const detached = structuredClone(definition);
-      this.definitions.push(detached);
+      const { render, ...data } = definition;
+      this.definitions.push({
+        ...structuredClone(data),
+        ...(render === undefined ? {} : { render }),
+      });
       count++;
     }
     return count;
@@ -779,6 +792,22 @@ export class LocalSkillRegistry {
       );
     const definition = this.definitions.find(({ info }) => info === selected);
     if (!definition) throw new Error(`Unknown or inactive skill: ${name}`);
+    if (definition.render) {
+      const text = await definition.render(args ?? "", {
+        sessionId: options.sessionId,
+      });
+      options.signal?.throwIfAborted();
+      return {
+        skill: selected,
+        text,
+        allowedTools: selected.allowedTools,
+        disallowedTools: selected.disallowedTools,
+        ...(selected.model === undefined ? {} : { model: selected.model }),
+        ...(selected.context === undefined
+          ? {}
+          : { context: selected.context }),
+      };
+    }
     let text =
       definition.isSkillMode === false
         ? definition.body

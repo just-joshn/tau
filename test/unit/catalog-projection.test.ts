@@ -208,7 +208,7 @@ test("priority budget keeps all names and collapses descriptions without reorder
     skills: [
       { name: "one", description: "description" },
       { name: "two", description: "description" },
-      { name: "three", description: "description", bundled: true },
+      { name: "three", description: "description", source: "bundled" },
     ],
     skillBudget: {
       override: 40,
