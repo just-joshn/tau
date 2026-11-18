@@ -11,7 +11,6 @@
 import {
   createCoverageMap,
   type CoverageMap,
-  type CoverageMapData,
   type Totals,
 } from "istanbul-lib-coverage";
 import { createContext } from "istanbul-lib-report";
@@ -27,7 +26,12 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
-import { mergeableCoverage, parseRunArgs, resolveFocus } from "./gate.ts";
+import {
+  mergeableCoverage,
+  parseRunArgs,
+  readCoverage,
+  resolveFocus,
+} from "./gate.ts";
 import { cachedInstrumentation, INSTRUMENTER_OPTIONS } from "./instrument.ts";
 
 const BRANCH_FLOOR = 80; // total and every src file
@@ -129,27 +133,6 @@ function outputName(report: "json" | "lcovonly" | "json-summary"): string {
     case "json-summary":
       return "coverage-summary.json";
   }
-}
-
-function readCoverage(path: string): CoverageMapData {
-  const data: unknown = JSON.parse(readFileSync(path, "utf8"));
-  if (!isCoverageMapData(data))
-    throw new Error(`${path} is not an istanbul coverage map`);
-  return data;
-}
-
-function isCoverageMapData(value: unknown): value is CoverageMapData {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    Object.values(value).every(
-      (file) =>
-        typeof file === "object" &&
-        file !== null &&
-        "path" in file &&
-        "branchMap" in file,
-    )
-  );
 }
 
 // Instruments every src file once, here, and fills the cache the preload

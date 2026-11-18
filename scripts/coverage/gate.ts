@@ -1,6 +1,7 @@
 // The decisions scripts/coverage/run.ts makes about its inputs, apart from
 // the script so tests can drive them without spawning the suite.
 import type { CoverageMap, CoverageMapData } from "istanbul-lib-coverage";
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 
@@ -73,4 +74,26 @@ export function mergeableCoverage(
   _current: CoverageMap,
 ): { fresh: CoverageMapData; stale: string[] } {
   return { fresh: saved, stale: [] };
+}
+
+/** The istanbul coverage map saved at `path`. */
+export function readCoverage(path: string): CoverageMapData {
+  const data: unknown = JSON.parse(readFileSync(path, "utf8"));
+  if (!isCoverageMapData(data))
+    throw new Error(`${path} is not an istanbul coverage map`);
+  return data;
+}
+
+function isCoverageMapData(value: unknown): value is CoverageMapData {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    Object.values(value).every(
+      (file) =>
+        typeof file === "object" &&
+        file !== null &&
+        "path" in file &&
+        "branchMap" in file,
+    )
+  );
 }
