@@ -1,0 +1,37 @@
+{
+  "caseId": "holdout-rename-function",
+  "version": 1,
+  "priority": "P1",
+  "category": "multi-site edit",
+  "intent": "In lib.js, rename the function computeTotl to computeTotal and update every call site in that file.",
+  "allowedTools": ["Read", "Edit"],
+  "workspace": {
+    "files": {
+      "lib.js": "function computeTotl(items) {\n  return items.reduce((sum, item) => sum + item.price, 0);\n}\n\nexport function invoice(items) {\n  return { total: computeTotl(items) };\n}\n\nexport function receipt(items) {\n  return `Total: ${computeTotl(items)}`;\n}\n"
+    }
+  },
+  "oracle": {
+    "checks": [
+      {
+        "kind": "file-not-matches",
+        "path": "lib.js",
+        "pattern": "computeTotl\\b"
+      },
+      {
+        "kind": "file-matches",
+        "path": "lib.js",
+        "pattern": "function computeTotal\\(items\\)[\\s\\S]*total: computeTotal\\(items\\)[\\s\\S]*\\$\\{computeTotal\\(items\\)\\}"
+      }
+    ]
+  },
+  "acceptedVariations": [
+    "Formatting changes that keep the three occurrences renamed."
+  ],
+  "budget": {
+    "maxTurns": 6,
+    "maxOutputTokensPerCall": 16000,
+    "maxCostUsd": 0.75,
+    "timeoutMs": 180000
+  },
+  "rubric": ["All three occurrences renamed.", "No behavior change."]
+}

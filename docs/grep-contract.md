@@ -102,7 +102,7 @@ A tentative single-glob addition was removed before completion: reusing the exis
 
 ## Local acceptance coverage
 
-`test/grep.test.ts` exercises real rg against temporary fixtures: regex versus literal matching, all modes, matching-line counts, case/line-number control, modification-time ordering, pagination/default/zero limit, unsupported fields/regex syntax, missing paths, NUL rejection, prefix/binary/symlink behavior and output caps. Controlled independent backend fixtures test draining, exit codes, minimal environment, timeout, cancellation and excessive output. An isolated process verifies relative PATH entries cannot execute a project-planted `rg`.
+`test/contract/grep.test.ts` exercises real rg against temporary fixtures: regex versus literal matching, all modes, matching-line counts, case/line-number control, modification-time ordering, pagination/default/zero limit, unsupported fields/regex syntax, missing paths, NUL rejection, prefix/binary/symlink behavior and output caps. Controlled independent backend fixtures test draining, exit codes, minimal environment, timeout, cancellation and excessive output. An isolated process verifies relative PATH entries cannot execute a project-planted `rg`.
 
 These tests establish tau's bounded contract only. They do not execute the original CLI, compare its runtime output, or contact Anthropic.
 

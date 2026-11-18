@@ -54,6 +54,6 @@ The50-span consolidated batch includes the adapter, generic evaluator, plan help
 - Noninteractive Write preapproval succeeds without globally bypassing permissions.
 - Hidden/denied tool calls from the local test model cannot change files.
 - Unsupported built-in wildcard, command/path and cross-server MCP rules fail before a request is sent.
-- MCP positive availability, exact/server/star-suffix matching, ask/plan/required-interaction ordering and denial side effects are exercised in `test/tool-router.test.ts` and the compiled MCP workflow.
+- MCP positive availability, exact/server/star-suffix matching, ask/plan/required-interaction ordering and denial side effects are exercised in `test/unit/tool-router.test.ts` and the compiled MCP workflow.
 
-See `test/tool-policy.test.ts`, `test/tools.test.ts`, and `test/cli.test.ts`. These tests verify tau's chosen subset, not the original executable's runtime behavior.
+See `test/security/tool-policy.test.ts`, `test/contract/tools.test.ts`, and `test/integration/cli.test.ts`. These tests verify tau's chosen subset, not the original executable's runtime behavior.
