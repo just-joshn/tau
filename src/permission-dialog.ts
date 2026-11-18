@@ -128,22 +128,3 @@ export function permissionDialog(
     options: [yes, ...session, no],
   };
 }
-
-export function renderPermissionDialog(
-  dialog: PermissionDialog,
-  focus: number,
-): string {
-  const lines = [
-    ...(dialog.title === undefined ? [] : [dialog.title]),
-    ...(dialog.subtitle === undefined ? [] : [dialog.subtitle]),
-    ...(dialog.body ? [dialog.body] : []),
-    dialog.question,
-    ...dialog.options.map(
-      (option, index) =>
-        `${index === focus ? "❯" : " "} ${index + 1}. ${option.label}`,
-    ),
-    "",
-    DIALOG_FOOTER,
-  ];
-  return `\n${lines.join("\n")}\n`;
-}

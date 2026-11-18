@@ -3,8 +3,9 @@
 Scope: what 2.1.326 shows in an interactive session, what tau shows, and the gaps.
 Evidence comes from the recovered bundle (`artifacts/claude-bundle`, read only).
 Every quoted literal has a needle in [interactive-needles.json](interactive-needles.json)
-that occurs once in one chunk. A live PTY capture of the original has not been
-run yet. The commands for it are at the end.
+that occurs once in one chunk. Live PTY captures of the original now exist.
+The full-screen port and its measured equality are in
+[tui-contract.md](tui-contract.md).
 
 ## Harness
 
@@ -45,11 +46,11 @@ appear in this order:
 | | Original 2.1.326 | tau |
 |---|---|---|
 | Header | "Edit file", "Create file", "Overwrite file" or "Edit notebook", then the path relative to cwd | same |
-| Body | Diff preview | The old/new text tau already printed (`Replace:`/`With:` or proposed content) |
+| Body | Diff preview | The same numbered patch, between `╌` rules |
 | Question | "Do you want to make this edit to **a.txt**?". The verb is "create" or "overwrite" for Write (`question-render`). | same, without bold |
 | Option 1 | "Yes" | "Yes" |
 | Option 2 (file edits) | "Yes, and switch to **accept edits (auto-approve file edits and common file commands)** for this session **(shift+tab)**" | same text |
-| Option 2 effect | `setMode acceptEdits`, destination `session` (`edit-session-row-update`). Nothing is written to disk. | The session mode becomes acceptEdits and tau prints "⏵⏵ accept edits on" |
+| Option 2 effect | `setMode acceptEdits`, destination `session` (`edit-session-row-update`). Nothing is written to disk. | The session mode becomes acceptEdits and the footer reads "⏵⏵ accept edits on (shift+tab to cycle)" |
 | When option 2 shows | Mode is `default` (`session-row-offered-in-default`) | Default mode, file inside cwd, path not protected |
 | Last option | "No" | "No" |
 | Footer | "Esc to cancel · Tab to amend" | same |
@@ -61,20 +62,17 @@ On refusal the model receives this tool result (`reject-tool-result`):
 > The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed.
 
 A refusal without feedback also aborts the turn (`reject-aborts-without-feedback`).
-Tau records the result, sends no further request, and prints `tau: Interrupted`.
+Tau records the result, sends no further request, and marks the row
+"Rejected update to a.txt" with no interruption row.
 With feedback, the text ends "To tell you how to proceed, the user said:\n<feedback>"
 and the turn continues. The same holds in tau.
 
 ## Slash commands
 
 The original registry holds about 80 built-ins plus bundled skills. Its `/help` is
-a tabbed dialog ("general", "commands", "custom-commands"). Tau keeps its
-readline prompt. The registry is `src/slash-commands.ts`, and `/help` prints three
-sections in order:
-
-1. The original's general-tab lead sentence.
-2. The built-ins with their aliases.
-3. Custom commands (skills), or "No custom commands yet".
+a tabbed dialog ("general", "commands", "custom-commands"). The registry is
+`src/slash-commands.ts`. Tau's `/help` is the same tabbed pane (see
+tui-contract.md).
 
 | Command | Aliases | Description source |
 |---|---|---|
@@ -87,27 +85,24 @@ sections in order:
 | /resume <session id> | continue | original. Tau has no picker. |
 | /save | | tau only |
 | /skills | | original |
-| /status | | tau. The original shows the Settings dialog's Status tab. |
+| /status | | tau. Opens the Settings pane's Status and Usage tabs. |
 
 An unknown command prints "Unknown command: /name". The original also suggests
 "Did you mean /x?" (`unknown-command`).
 
 ## Prompt and exit
 
-The original's first Ctrl-C clears the input and shows "ctrl+c again to exit"
-(`exit-confirm-text`). A second press within 800ms exits (`double-press-window`).
-Tau does the same and prints the hint above a fresh prompt. During a turn,
-Ctrl-C still cancels it.
+The original's first Ctrl-C clears the input and shows "Press Ctrl-C again to
+exit" in the footer (`exit-confirm-text`). A second press within 800ms exits
+(`double-press-window`). Tau does the same. During a turn, Ctrl-C or Esc
+cancels it.
 
 ## Gaps
 
-- **Not full screen.** Tau has no Ink layout: no input box, no `Try "…"` placeholder, no "? for shortcuts" footer, no mode indicator, no shift+tab mode cycling at the prompt.
+- **Full screen.** Closed by the TUI port. Its remaining gaps are listed in tui-contract.md.
 - **Missing standing grants.** There is no directory grant for edits outside cwd, no `.claude` folder session rule, no local-settings rule for generic or MCP tools, and no Bash prefix rule. Each of those cases gets a one-time dialog. The Bash rows belong to the Bash lane.
-- **No diff preview.** The dialog body is plain text.
 - **No amend on Yes.** Feedback with "Yes" ("and tell Claude what to do next") is not supported.
-- **Old approval prompts remain.** Approvals that do not pass through the built-in tool gate still use `Allow once? [y/N]`: bypass confirmation, MCP project servers, background task stop, subagent plan approval, MCP and web tool routers.
-- **Dialog commands.** The original's `/help`, `/status` and `/model` are dialogs. Tau prints text.
-- **Not yet verified against a capture.** Capture labels, layout and the refusal flow from the original, then reconcile this table.
+- **Tau-only approvals.** Approvals outside the built-in tool gate (bypass confirmation, MCP project servers, background task stop, subagent plan approval, MCP and web tool routers) are Yes/No dialogs in the permission frame.
 
 ## Root commands
 

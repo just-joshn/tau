@@ -1,0 +1,30 @@
+
+ ▐▛███▛█   Claude Code v2.1.326
+▝▜██████▀  Sonnet 4.5 · API Usage Billing
+ ▝▝   ▝▝   /private/tmp/tau-differential-geb27yup/work
+
+
+❯ TAU_PTY_EDIT
+
+  Read 1 file
+
+⏺ Update(a.txt)
+  ⎿  Rejected update to a.txt
+      1 -alpha
+      1 +beta
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏸ manual mode on · ? for shortcuts · ← for agents

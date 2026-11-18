@@ -4,19 +4,27 @@ import { existsSync } from "node:fs";
 import { realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
-import { createInterface } from "node:readline/promises";
-import { stdin, stdout, stderr } from "node:process";
-import { terminalText as safe, replaceProvisional } from "./terminal.js";
+import { stdin, stdout, stderr as processStderr } from "node:process";
+import { terminalText as safe } from "./terminal.js";
 import {
   permissionDialog,
   rejectionMessage,
   type ToolApprovalAnswer,
   type ToolApprovalRequest,
 } from "./permission-dialog.js";
-import { choosePermission } from "./permission-choice.js";
-import { goodbye, helpText, slashCommand } from "./slash-commands.js";
+import { goodbye, slashCommand } from "./slash-commands.js";
+import { Tui } from "./tui/app.js";
+import {
+  commandEntries,
+  displayPath,
+  modelChoices,
+  modelLabel,
+  resumeHint,
+  statusFields,
+} from "./tui/session-views.js";
 import { runAgent } from "./agent.js";
 import {
+  defaultModel,
   help,
   parseOptions,
   permissionModeSchema,
@@ -126,6 +134,10 @@ import { createBackgroundShells } from "./background-shells.js";
 import { createShellHost, interpretExit } from "./bash-tool.js";
 
 const TAU_VERSION = "0.1.0";
+
+/** Diagnostics go to stderr, or into the transcript while the full-screen UI owns the terminal. */
+let diagnostics = (text: string): boolean => processStderr.write(text);
+const stderr = { write: (text: string) => diagnostics(text) };
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Unknown error";
@@ -358,72 +370,93 @@ async function main(): Promise<void> {
       },
       session.messages,
     );
-  const terminal = interactive
-    ? createInterface({ input: stdin, output: stdout })
-    : undefined;
   let active: AbortController | undefined;
+  // Set when a refusal without feedback ends the turn, so the screen shows no interruption.
+  let rejectedTurn = false;
   let mcp: McpManager | undefined;
   let mcpServerNames: string[] = [];
   let permissionPrompt:
     ReturnType<typeof createMcpPermissionPrompt> | undefined;
   let closing = false;
-  // The original exits on a second Ctrl-C within 800ms; the first clears the input.
-  let exitArmedAt = -Infinity;
+  // Printed after the screen closes when /exit ended the session.
+  let farewell: string | undefined;
+  const tui = interactive
+    ? new Tui({
+        input: stdin,
+        output: stdout,
+        welcome: {
+          product: "tau",
+          version: TAU_VERSION,
+          model: modelLabel(session.model),
+          billing: "API Usage Billing",
+          cwd: displayPath(cwd),
+        },
+        cwd,
+        bypassAvailable: launch.mode === "bypassPermissions",
+        commands: commandEntries([], session.model),
+        mode: () => mode,
+        setMode: (next) => applyMode(next),
+        interrupt: () => active?.abort(),
+      })
+    : undefined;
+  // Keys reach the screen as raw input; SIGINT comes from outside the terminal.
   const interrupt = () => {
     if (active) {
       active.abort();
       stderr.write("\nCancelling…\n");
-    } else if (!terminal || performance.now() - exitArmedAt <= 800) {
-      closing = true;
-      terminal?.close();
     } else {
-      exitArmedAt = performance.now();
-      terminal.write(null, { ctrl: true, name: "e" });
-      terminal.write(null, { ctrl: true, name: "u" });
-      // readline redraws from the prompt's second row, so the hint keeps a spare line.
-      stdout.write("\nctrl+c again to exit\n\n");
-      terminal.prompt();
+      closing = true;
+      tui?.stop();
     }
   };
   process.on("SIGINT", interrupt);
-  terminal?.on("SIGINT", interrupt);
-  terminal?.on("close", () => {
-    closing = true;
-    active?.abort();
-  });
+  if (tui) {
+    tui.start();
+    // Hosts rebuilt per turn repeat their diagnostics; the transcript shows each once.
+    const shown = new Set<string>();
+    diagnostics = (text) => {
+      const notice = safe(text).trim();
+      if (notice && !shown.has(notice)) tui.notice(notice, "error");
+      shown.add(notice);
+      return true;
+    };
+  }
+  const applyMode = (next: typeof mode) => {
+    mode = next;
+    if (session.planState)
+      session.planState = { ...session.planState, active: mode === "plan" };
+  };
   const approve = async (description: string): Promise<boolean> => {
-    if (!terminal || closing || active?.signal.aborted) return false;
-    const answer = await terminal.question(
-      `\n${safe(description)}\nAllow once? [y/N] `,
-      active ? { signal: active.signal } : {},
-    );
-    return /^(y|yes)$/i.test(answer.trim());
+    if (!tui || closing || active?.signal.aborted) return false;
+    return tui.confirm(safe(description), active?.signal);
   };
   const approveTool = async (
     description: string,
     request: ToolApprovalRequest,
   ): Promise<ToolApprovalAnswer> => {
-    if (!terminal || closing || active?.signal.aborted) return false;
+    if (!tui || closing || active?.signal.aborted) return false;
     const owner = active;
-    const choice = await choosePermission(
-      { readline: terminal, input: stdin, output: stdout },
-      permissionDialog(request, description, {
+    const choice = await tui.choosePermission(
+      permissionDialog(request, safe(description), {
         cwd,
         mode,
         exists: request.path !== undefined && existsSync(request.path),
       }),
+      request,
       owner?.signal,
     );
     switch (choice.kind) {
       case "accept-once":
         return true;
       case "accept-session":
-        for (const update of choice.updates) mode = update.mode;
-        stdout.write("⏵⏵ accept edits on\n");
+        for (const update of choice.updates) applyMode(update.mode);
         return true;
       case "reject":
         // Without feedback the original stops the turn after recording the refusal.
-        if (choice.feedback === undefined) owner?.abort();
+        if (choice.feedback === undefined) {
+          rejectedTurn = true;
+          owner?.abort();
+        }
         return { approved: false, message: rejectionMessage(choice.feedback) };
     }
   };
@@ -1099,7 +1132,7 @@ async function main(): Promise<void> {
           hooks: context.hooks,
           canRequestApproval: () =>
             !closing &&
-            ((!plan.isAsync && Boolean(terminal)) ||
+            ((!plan.isAsync && Boolean(tui)) ||
               options.permissionPromptTool !== undefined),
           authorize: ({ call, hookPermission }) =>
             matchingToolRule(context.policy(), "ask", call.name, {
@@ -1304,7 +1337,7 @@ async function main(): Promise<void> {
       policy: () => skillHost?.policy() ?? policy,
       canRequestApproval: () =>
         !closing &&
-        (Boolean(terminal) || options.permissionPromptTool !== undefined),
+        (Boolean(tui) || options.permissionPromptTool !== undefined),
       approve,
       ...(options.permissionPromptTool === undefined
         ? {}
@@ -1589,7 +1622,8 @@ async function main(): Promise<void> {
     const historyStart = session.messages.length;
     let text = "";
     let committedText = "";
-    let provisionalText = "";
+    rejectedTurn = false;
+    tui?.beginTurn();
     let failure: string | undefined, failureError: unknown;
     // Each query (the prompt's, then one per drained notification) ends in its own result.
     let sdkQuery: SdkQuery | undefined,
@@ -1603,6 +1637,7 @@ async function main(): Promise<void> {
     };
     const onEvent = (event: AgentEvent) => {
       if (sdkQuery) emit(sdkQuery.accept(event));
+      tui?.event(event);
       switch (event.type) {
         case "usage":
           session.usage.input_tokens += event.usage.input_tokens;
@@ -1610,31 +1645,15 @@ async function main(): Promise<void> {
           break;
         case "text":
           text += event.text;
-          provisionalText += event.text;
-          if (options.format === "text" && interactive)
-            stdout.write(safe(event.text));
           break;
         case "text_reset":
           text = committedText + event.text;
-          if (options.format === "text" && provisionalText !== event.text) {
-            if (interactive) {
-              stdout.write(
-                replaceProvisional(
-                  provisionalText,
-                  event.text,
-                  stdout.columns ?? 80,
-                ),
-              );
-            }
-          }
-          provisionalText = event.text;
           break;
         case "assistant":
           committedText = text;
-          provisionalText = "";
           break;
         case "warning":
-          stderr.write(`\n${safe(event.message)}\n`);
+          if (!tui) stderr.write(`\n${safe(event.message)}\n`);
           break;
         case "thinking_stripped":
         case "model_request":
@@ -1642,7 +1661,7 @@ async function main(): Promise<void> {
         case "api_error":
           break;
         case "compaction":
-          if (options.format === "text") {
+          if (options.format === "text" && !tui) {
             if (event.stage === "start")
               stderr.write("\nCompacting conversation context...\n");
             else if (event.stage === "complete")
@@ -1656,13 +1675,13 @@ async function main(): Promise<void> {
           }
           break;
         case "tool_start":
-          if (options.format === "text")
+          if (options.format === "text" && !tui)
             stderr.write(
               `\n[${safe(event.tool.name)}] ${safe(JSON.stringify(event.tool.input)).slice(0, 500)}\n`,
             );
           break;
         case "tool_result":
-          if (options.format === "text")
+          if (options.format === "text" && !tui)
             stderr.write(
               `${event.result.is_error ? "[tool error] " : ""}${safe(event.result.content).slice(0, 1200)}\n`,
             );
@@ -1843,15 +1862,28 @@ async function main(): Promise<void> {
             options.verbose ? sdkTranscript.splice(0).concat(result) : result,
           ) + "\n",
         );
+    } else if (tui) {
+      tui.endTurn(
+        failure === undefined
+          ? { kind: "done" }
+          : turnSignal.aborted
+            ? { kind: rejectedTurn ? "silent" : "interrupted" }
+            : { kind: "failed", message: safe(failure) },
+      );
     } else {
-      if (!interactive) stdout.write(safe(answer));
+      stdout.write(safe(answer));
       stdout.write("\n");
       if (failure) stderr.write(`tau: ${safe(failure)}\n`);
     }
     if (failure && !interactive) process.exitCode = 1;
   };
-  const compactManually = async (): Promise<void> => {
+  /** /compact: the result rows the command shows. */
+  const compactManually = async (): Promise<{
+    text: string;
+    tone: "info" | "error";
+  }> => {
     active = new AbortController();
+    tui?.beginTurn();
     try {
       queryModelForTools = currentModel();
       const tools = await createSessionTools();
@@ -1880,20 +1912,22 @@ async function main(): Promise<void> {
           if (event.type === "usage") {
             session.usage.input_tokens += event.usage.input_tokens;
             session.usage.output_tokens += event.usage.output_tokens;
-          } else if (event.type === "compaction" && event.stage === "start")
-            stderr.write("Compacting conversation context...\n");
+          }
         },
       });
-      stdout.write(
-        compacted
-          ? "Conversation context compacted.\n"
-          : "Conversation context was preserved; compaction did not complete.\n",
-      );
+      return compacted
+        ? { text: "Conversation context compacted.", tone: "info" }
+        : {
+            text: "Conversation context was preserved; compaction did not complete.",
+            tone: "error",
+          };
     } catch (error) {
-      stderr.write(
-        `tau: ${active.signal.aborted ? "Interrupted" : safe(errorMessage(error))}\n`,
-      );
+      return {
+        text: active.signal.aborted ? "Interrupted" : safe(errorMessage(error)),
+        tone: "error",
+      };
     } finally {
+      tui?.endTurn({ kind: "silent" });
       active = undefined;
       try {
         await store.save(session);
@@ -1948,17 +1982,15 @@ async function main(): Promise<void> {
     } finally {
       active = undefined;
     }
-    if (interactive) {
-      stdout.write(
-        `tau · ${safe(session.model)} · ${safe(cwd)}\nSession ${session.id} · permissions: ${mode}\n/help for commands; Ctrl-C cancels a turn.\n`,
-      );
-    }
     if (mode === "bypassPermissions" || policy.allowedTools.includes("Bash")) {
       stderr.write(
         "WARNING: tools are explicitly preapproved; availability and deny rules still apply. Shell commands are NOT sandboxed.\n",
       );
     }
-    if (prompt) await turn(prompt);
+    if (prompt) {
+      tui?.user(prompt);
+      await turn(prompt);
+    }
     if (streamInput) {
       stdin.setEncoding("utf8");
       try {
@@ -1969,43 +2001,47 @@ async function main(): Promise<void> {
         process.exitCode = 1;
       }
     }
-    if (!terminal) await activeHooks().settleRewakes();
-    while (terminal && !closing) {
-      let input: string;
-      try {
-        input = (await terminal.question("\ntau> ")).trim();
-      } catch (error) {
-        if (closing) break;
-        throw error;
-      }
+    if (!tui) await activeHooks().settleRewakes();
+    const skillEntries = () =>
+      (skillHost?.runtime.catalog() ?? []).map((skill) => ({
+        name: skill.name,
+        description: skill.description,
+      }));
+    while (tui && !closing) {
+      tui.setCommands(commandEntries(skillEntries(), session.model));
+      tui.setModel(modelLabel(session.model));
+      const input = (await tui.next())?.trim();
+      if (input === undefined) break;
       if (!input) continue;
       if (!input.startsWith("/")) {
+        tui.user(input);
         await turn(input);
         continue;
       }
       const [command, ...rest] = input.split(/\s+/);
       const value = rest.join(" ");
+      const reply = (output: string, tone: "info" | "error" = "info") =>
+        tui.command(input, output.split("\n"), tone);
       switch (slashCommand(command?.slice(1) ?? "")) {
         case "exit":
-          stdout.write(`${goodbye()}\n`);
+          farewell = goodbye();
           closing = true;
           break;
         case "help":
-          stdout.write(
-            helpText(session.model, skillHost?.runtime.catalog() ?? []),
-          );
+          tui.showHelp(skillEntries());
           break;
         case "skills":
-          stdout.write(
-            (skillHost?.runtime
-              .catalog()
+          reply(
+            skillEntries()
               .map((skill) => `/${skill.name} ${skill.description}`)
-              .join("\n") || "No local skills available.") + "\n",
+              .join("\n") || "No local skills available.",
           );
           break;
-        case "compact":
-          await compactManually();
+        case "compact": {
+          const result = await compactManually();
+          reply(result.text, result.tone);
           break;
+        }
         case "clear":
           await store.save(session);
           retiredHookHosts.push(activeHooks());
@@ -2028,17 +2064,29 @@ async function main(): Promise<void> {
           } finally {
             active = undefined;
           }
-          stdout.write(`New session ${session.id}\n`);
+          tui.clear();
+          reply(`New session ${session.id}`);
           break;
-        case "model":
-          if (value) session.model = value;
-          stdout.write(`Model: ${safe(session.model)}\n`);
+        case "model": {
+          const previous = session.model;
+          const chosen = value
+            ? value
+            : await tui.pickModel(
+                modelChoices(session.model, defaultModel(process.env)),
+              );
+          if (chosen === undefined) {
+            reply(`Kept model as ${modelLabel(previous)}`);
+            break;
+          }
+          session.model = chosen;
+          reply(`Set model to ${modelLabel(chosen)}`);
           break;
+        }
         case "permissions": {
           if (value) {
             const parsed = permissionModeSchema.safeParse(value);
             if (!parsed.success) {
-              stderr.write("Invalid permission mode\n");
+              reply("Invalid permission mode", "error");
               break;
             }
             if (
@@ -2048,35 +2096,30 @@ async function main(): Promise<void> {
               ))
             )
               break;
-            mode = parsed.data;
-            if (session.planState)
-              session.planState = {
-                ...session.planState,
-                active: mode === "plan",
-              };
+            applyMode(parsed.data);
           }
-          stdout.write(`Permissions: ${mode}\n`);
+          reply(`Permissions: ${mode}`);
           break;
         }
         case "status":
-          stdout.write(
-            JSON.stringify(
-              {
-                session_id: session.id,
-                model: session.model,
-                permissions: mode,
-                tool_policy: policy,
-                messages: session.messages.length,
-                usage: session.usage,
-              },
-              null,
-              2,
-            ) + "\n",
+          tui.showStatus(
+            statusFields({
+              version: TAU_VERSION,
+              sessionId: session.id,
+              cwd,
+              env: process.env,
+              model: session.model,
+              settingSources: launch.snapshot.documents
+                .filter((document) => document.effective !== undefined)
+                .map((document) => document.source),
+              messages: session.messages.length,
+              usage: session.usage,
+            }),
           );
           break;
         case "save":
           await store.save(session);
-          stdout.write(`Saved ${session.id}\n`);
+          reply(`Saved ${session.id}`);
           break;
         case "resume":
           try {
@@ -2102,18 +2145,28 @@ async function main(): Promise<void> {
             } finally {
               active = undefined;
             }
-            stdout.write(`Resumed ${session.id}\n`);
+            reply(`Resumed ${session.id}`);
           } catch (error) {
-            stderr.write(`tau: ${safe(errorMessage(error))}\n`);
+            reply(safe(errorMessage(error)), "error");
           }
           break;
         default:
-          if (command && skillHost?.has(command.slice(1))) await turn(input);
-          else stderr.write(`Unknown command: ${safe(command ?? "")}\n`);
+          if (command && skillHost?.has(command.slice(1))) {
+            tui.user(input);
+            await turn(input);
+          } else reply(`Unknown command: ${safe(command ?? "")}`, "error");
       }
     }
   } finally {
-    terminal?.close();
+    if (tui) {
+      tui.stop();
+      diagnostics = (text) => processStderr.write(text);
+      if (farewell) stdout.write(`${farewell}\n`);
+      if (session.messages.length)
+        stdout.write(
+          `\x1b[2m${resumeHint(session.id, options.modelExplicit ? session.model : undefined)}\x1b[22m`,
+        );
+    }
     process.removeListener("SIGINT", interrupt);
     await shells.close();
     await Promise.all(agentHosts.map((host) => host.close()));

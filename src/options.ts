@@ -13,6 +13,15 @@ export const permissionModeSchema = z.enum([
   "bypassPermissions",
 ]);
 const positiveInteger = z.coerce.number().int().positive().max(1_000_000);
+/** The model a direct API-key launch uses when no --model flag selects one. */
+export function defaultModel(env: NodeJS.ProcessEnv): string {
+  return (
+    (env.ANTHROPIC_MODEL || undefined) ??
+    env.ANTHROPIC_DEFAULT_OPUS_MODEL ??
+    "claude-opus-5-5"
+  );
+}
+
 export function parseOptions(args: string[]) {
   const { values, positionals, tokens } = parseArgs({
     args,
@@ -113,12 +122,7 @@ export function parseOptions(args: string[]) {
   const model = z
     .string()
     .min(1)
-    .parse(
-      values.model ??
-        (process.env.ANTHROPIC_MODEL || undefined) ??
-        process.env.ANTHROPIC_DEFAULT_OPUS_MODEL ??
-        "claude-opus-5-5",
-    );
+    .parse(values.model ?? defaultModel(process.env));
   return {
     toolPolicy,
     ignorePersistedTrust: values["ignore-persisted-trust"] ?? false,

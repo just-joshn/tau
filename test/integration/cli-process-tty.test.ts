@@ -1,12 +1,14 @@
 // The CLI on a real pseudo-terminal: TTY-only option checks, interactive
-// Ctrl-C (INV-11) and REPL exit paths. Bun's PTY is POSIX-only, so these are
+// Ctrl-C (INV-11) and full-screen exit paths. Bun's PTY is POSIX-only, so these are
 // feature-gated rather than assumed portable.
 import assert from "node:assert/strict";
 import { test } from "bun:test";
 import { startMockProvider, turn } from "../helpers/mock-provider.js";
 import { startPty } from "../helpers/pty.js";
 
-const PROMPT = "tau> ";
+/** An empty input box at rest: no turn running and no dialog open. */
+const IDLE = (screen: string) =>
+  /\n❯\n─+\n {2}[⏸⏵]/.test(screen) && !screen.includes("esc to interrupt");
 
 const posixOnly = process.platform === "win32";
 
@@ -45,17 +47,17 @@ test.skipIf(posixOnly)(
       return { kind: "hang" };
     });
     const tty = startPty({ provider });
-    await tty.expect(PROMPT);
+    await tty.until(IDLE);
     tty.write("first question\r");
     await requested;
     tty.write("\u0003");
-    await tty.expect("Cancelling…\n\ntau: Interrupted\n");
-    await tty.expect(PROMPT);
+    await tty.until("Interrupted · What should Claude do instead?");
+    await tty.until(IDLE);
     assert.equal(provider.requests.length, 1);
 
     tty.write("second question\r");
-    await tty.expect("second answer");
-    await tty.expect(PROMPT);
+    await tty.until("⏺ second answer");
+    await tty.until(IDLE);
     tty.write("/exit\r");
     assert.equal((await tty.exited).exitCode, 0);
     assert.equal(provider.requests.length, 2);
@@ -64,12 +66,12 @@ test.skipIf(posixOnly)(
 );
 
 test.skipIf(posixOnly)(
-  "Ctrl-C twice or Ctrl-D at an idle interactive prompt exits 0 without a request",
+  "Ctrl-C or Ctrl-D twice at an idle interactive prompt exits 0 without a request",
   async () => {
     const provider = await startMockProvider([]);
-    for (const keys of ["\u0003\u0003", "\u0004"]) {
+    for (const keys of ["\u0003\u0003", "\u0004\u0004"]) {
       const tty = startPty({ provider });
-      await tty.expect(PROMPT);
+      await tty.until(IDLE);
       tty.write(keys);
       assert.equal((await tty.exited).exitCode, 0);
     }
@@ -78,17 +80,18 @@ test.skipIf(posixOnly)(
 );
 
 test.skipIf(posixOnly)(
-  "interactive /help lists the commands and an unknown command is reported, not sent",
+  "interactive /help opens and closes, and an unknown command is reported, not sent",
   async () => {
     const provider = await startMockProvider([]);
     const tty = startPty({ provider });
-    await tty.expect(PROMPT);
+    await tty.until(IDLE);
     tty.write("/help\r");
-    await tty.expect("Show help and available commands");
-    await tty.expect(PROMPT);
+    await tty.until("Help  General   Commands   Custom commands");
+    tty.write("\x1b");
+    await tty.until(IDLE);
     tty.write("/no-such-command\r");
-    await tty.expect("Unknown command: /no-such-command");
-    await tty.expect(PROMPT);
+    await tty.until("Unknown command: /no-such-command");
+    await tty.until(IDLE);
     tty.write("/exit\r");
     assert.equal((await tty.exited).exitCode, 0);
     assert.equal(provider.requests.length, 0);
