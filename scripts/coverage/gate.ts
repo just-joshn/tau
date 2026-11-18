@@ -35,9 +35,11 @@ export function parseRunArgs(argv: readonly string[]): RunArgs {
     if (token.kind === "positional") args.testArgs.push(token.value);
     else if (token.kind === "option-terminator") continue;
     else if (token.name === "serial") args.serial = true;
-    else if (token.name === "focus" && token.value !== undefined)
+    else if (token.name === "focus") {
+      if (token.value === undefined)
+        throw new Error("--focus needs a src file path");
       args.focus.push(token.value);
-    else if (token.name === "merge") args.mergePath = token.value;
+    } else if (token.name === "merge") args.mergePath = token.value;
     else
       args.testArgs.push(
         token.inlineValue === true
@@ -48,13 +50,21 @@ export function parseRunArgs(argv: readonly string[]): RunArgs {
   return args;
 }
 
-/** Absolute paths of the --focus values, relative to `root`. */
+/**
+ * Absolute paths of the --focus values, relative to `root`. Each must be one
+ * of `sources`, since an unmatched focus would gate nothing and pass.
+ */
 export function resolveFocus(
   root: string,
   focus: readonly string[],
-  _sources: readonly string[],
+  sources: readonly string[],
 ): string[] {
-  return focus.map((value) => resolve(root, value));
+  return focus.map((value) => {
+    const path = resolve(root, value);
+    if (!sources.includes(path))
+      throw new Error(`--focus ${value} is not an instrumented src file`);
+    return path;
+  });
 }
 
 /** The entries of a saved coverage map that merge into `current`. */
