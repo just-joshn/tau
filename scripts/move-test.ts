@@ -55,8 +55,12 @@ function exists(path: string): boolean {
 }
 
 function rewriteSpecifier(specifier: string, from: string, to: string): string {
-  const target = resolve(dirname(from), specifier);
-  if (!exists(target)) return specifier;
+  let target = resolve(dirname(from), specifier);
+  if (!exists(target)) {
+    const helper = join(testRoot, "helpers", basename(target));
+    if (from === to || !exists(helper)) return specifier;
+    target = helper;
+  }
   const next = posix(relative(dirname(to), moved(target)));
   return next.startsWith(".") ? next : `./${next}`;
 }
