@@ -13,6 +13,8 @@
         "zod": "^4.0.0",
       },
       "devDependencies": {
+        "@babel/parser": "7.29.14",
+        "@babel/types": "7.29.14",
         "@types/bun": "^1.4.4",
         "@types/istanbul-lib-coverage": "2.0.6",
         "@types/istanbul-lib-instrument": "1.7.8",
