@@ -4,11 +4,6 @@ import { join } from "node:path";
 import { z } from "zod";
 import { runCli } from "../helpers/cli-harness.js";
 import { startMockProvider } from "../helpers/mock-provider.js";
-import {
-  messageStart,
-  startSseServer,
-  textBlock,
-} from "../helpers/sse-server.js";
 
 setDefaultTimeout(30_000);
 
@@ -205,12 +200,12 @@ describe("results", () => {
   });
 
   test("a stream cut off after a complete block keeps the text and marks the result partial", async () => {
-    const provider = await startSseServer([
-      [
-        messageStart(),
-        textBlock(0, "kept text"),
-        { type: "content_block_stop", index: 0 },
-      ],
+    const provider = await startMockProvider([
+      {
+        kind: "truncate",
+        events: 3,
+        content: [{ type: "text", text: "kept text" }],
+      },
     ]);
     const run = await runCli({
       provider,
@@ -225,7 +220,7 @@ describe("results", () => {
       is_error: false,
       is_partial: true,
     });
-    expect(provider.requests()).toBe(1);
+    expect(provider.requests.length).toBe(1);
   });
 });
 
