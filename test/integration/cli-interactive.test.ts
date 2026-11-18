@@ -1,18 +1,15 @@
-import {
-  describe,
-  expect,
-  onTestFinished,
-  setDefaultTimeout,
-  test,
-} from "bun:test";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { chmodSync, existsSync, readdirSync } from "node:fs";
-import { createServer } from "node:http";
 import { join } from "node:path";
 import { z } from "zod";
 import { runCli } from "../helpers/cli-harness.js";
 import { startMockProvider } from "../helpers/mock-provider.js";
 import { startPty, type PtySession } from "../helpers/pty.js";
-import { fixtureSse } from "../helpers/sse-fixture.js";
+import {
+  messageStart,
+  startSseServer,
+  textBlock,
+} from "../helpers/sse-server.js";
 
 setDefaultTimeout(30_000);
 
@@ -397,6 +394,22 @@ describe("launch errors specific to a terminal", () => {
 });
 
 describe("/compact", () => {
+  test("the summary request says no tools are available when --tools is empty", async () => {
+    const provider = await startMockProvider([
+      said("answer"),
+      said("<summary>Short.</summary>"),
+    ]);
+    const tau = startPty({ provider, args: ["--tools", ""] });
+    await submit(tau, "a question");
+    await tau.expect("answer");
+    await submit(tau, "/compact");
+    await tau.expect("Conversation context compacted.");
+    await exit(tau);
+    expect(JSON.stringify(body(provider.requests[1]).system)).toContain(
+      "Available tools for this session: none.",
+    );
+  });
+
   test("an empty conversation is preserved without a request", async () => {
     const provider = await startMockProvider([]);
     const tau = startPty({ provider });
@@ -482,40 +495,6 @@ describe("/compact", () => {
   });
 });
 
-/**
- * Serves each SSE event list in order and ends the response normally, so a
- * stream cut short before message_stop arrives whole, unlike a dropped socket.
- */
-async function startSseServer(responses: readonly (readonly unknown[])[]) {
-  let served = 0;
-  const server = createServer((request, response) => {
-    request.resume();
-    request.on("end", () => {
-      const events = responses[served++];
-      if (events === undefined) {
-        response.writeHead(500).end();
-        return;
-      }
-      response.writeHead(200, { "content-type": "text/event-stream" });
-      response.end(fixtureSse(events));
-    });
-  });
-  await new Promise<void>((listening) =>
-    server.listen(0, "127.0.0.1", listening),
-  );
-  onTestFinished(
-    () =>
-      new Promise<void>((closed) => {
-        server.closeAllConnections();
-        server.close(() => closed());
-      }),
-  );
-  const address = server.address();
-  if (address === null || typeof address === "string")
-    throw new Error("SSE server has no TCP address");
-  return { url: `http://127.0.0.1:${address.port}`, requests: () => served };
-}
-
 const tooLong = {
   kind: "error" as const,
   status: 400,
@@ -530,30 +509,11 @@ const tooLong = {
 
 describe("turn display", () => {
   test("a retried stream erases its abandoned text from the screen", async () => {
-    const start = {
-      type: "message_start",
-      message: {
-        role: "assistant",
-        content: [],
-        usage: { input_tokens: 1, output_tokens: 0 },
-      },
-    };
     const provider = await startSseServer([
+      [messageStart(), textBlock(0, "abandoned draft")],
       [
-        start,
-        {
-          type: "content_block_start",
-          index: 0,
-          content_block: { type: "text", text: "abandoned draft" },
-        },
-      ],
-      [
-        start,
-        {
-          type: "content_block_start",
-          index: 0,
-          content_block: { type: "text", text: "final answer" },
-        },
+        messageStart(),
+        textBlock(0, "final answer"),
         { type: "content_block_stop", index: 0 },
         {
           type: "message_delta",
@@ -615,10 +575,20 @@ describe("turn display", () => {
 
 describe("session persistence", () => {
   test.skipIf(process.getuid?.() === 0)(
-    "a turn whose session cannot be saved reports the save failure",
+    "a turn whose session cannot be saved reports the save failure after any turn error",
     async () => {
-      const provider = await startMockProvider([said("unsaved answer")]);
-      const tau = startPty({ provider });
+      const provider = await startMockProvider([
+        said("unsaved answer"),
+        {
+          kind: "error",
+          status: 400,
+          body: {
+            type: "error",
+            error: { type: "invalid_request_error", message: "bad turn" },
+          },
+        },
+      ]);
+      const tau = startPty({ provider, args: ["--max-retries", "0"] });
       await tau.expect(PROMPT);
       const sessions = join(tau.state, "sessions");
       const [partition] = readdirSync(sessions);
@@ -626,7 +596,9 @@ describe("session persistence", () => {
       chmodSync(directory, 0o500);
       tau.write("question\r");
       await tau.expect("unsaved answer");
-      await tau.expect(/tau: Session save failed: [^\n]+/);
+      await tau.expect(/\ntau: Session save failed: [^\n]+/);
+      await submit(tau, "again");
+      await tau.expect(/\ntau: [^\n]+; Session save failed: [^\n]+/);
       chmodSync(directory, 0o700);
       await exit(tau);
     },
