@@ -264,6 +264,10 @@ export function manifestProblems(dir = SCENARIO_DIR): string[] {
   }
   for (const name of listed.keys())
     if (!actual.has(name)) problems.push(`${MANIFEST} lists missing ${name}`);
+  if (problems.length > 0)
+    problems.push(
+      `after reviewing the fixture change, a reviewer regenerates the manifest: cd test/fixtures/scenarios && shasum -a 256 *.json > ${MANIFEST}`,
+    );
   return problems;
 }
 

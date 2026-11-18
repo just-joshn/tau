@@ -2,6 +2,10 @@
 // replayed through the real CLI against the strict mock provider.
 import assert from "node:assert/strict";
 import { describe, test } from "bun:test";
+import { createHash } from "node:crypto";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import {
   evaluate,
@@ -20,6 +24,20 @@ const report = (failures: readonly OracleFailure[]) =>
 
 test("every scenario fixture matches its reviewed MANIFEST.sha256 digest", () => {
   assert.deepEqual(manifestProblems(), []);
+});
+
+test("a manifest mismatch names the reviewer's regeneration command", () => {
+  const dir = mkdtempSync(join(tmpdir(), "tau-manifest-"));
+  try {
+    writeFileSync(join(dir, "a.json"), "{}");
+    writeFileSync(join(dir, "MANIFEST.sha256"), `${"0".repeat(64)}  a.json\n`);
+    assert.deepEqual(manifestProblems(dir), [
+      `a.json changed since review (sha256 ${createHash("sha256").update("{}").digest("hex")})`,
+      "after reviewing the fixture change, a reviewer regenerates the manifest: cd test/fixtures/scenarios && shasum -a 256 *.json > MANIFEST.sha256",
+    ]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 for (const scenario of corpus) {
