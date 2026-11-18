@@ -100,8 +100,12 @@ import { createBackgroundTaskTools } from "./background-task-tools.js";
 import { createWebTools } from "./web-tools.js";
 import { bindGuardedTool, wrapGuardedTools } from "./guarded-tool.js";
 import { createCronTools, cronToolsEnabled } from "./cron-tools.js";
+import { listAgentsTool } from "./list-agents-tool.js";
 import { monitorTool } from "./monitor-tool.js";
+import { reportFindingsTool } from "./report-findings-tool.js";
+import { scheduleWakeupTool } from "./schedule-wakeup-tool.js";
 import { sendMessageTool } from "./send-message.js";
+import { workflowTool } from "./workflow-tool.js";
 import { createWorktreeTools, worktreeBaseRef } from "./worktree-tools.js";
 import { webFetchModel } from "./web-fetch.js";
 import { resolveDirectModelAlias } from "./direct-model-alias.js";
@@ -1527,6 +1531,10 @@ async function main(): Promise<void> {
     ),
     bindGuardedTool(worktrees.enter, guardedHost),
     bindGuardedTool(worktrees.exit, guardedHost),
+    bindGuardedTool(listAgentsTool(), guardedHost),
+    bindGuardedTool(reportFindingsTool(), guardedHost),
+    bindGuardedTool(scheduleWakeupTool(), guardedHost),
+    bindGuardedTool(workflowTool(), guardedHost),
   ];
   const createSessionTools = async () => {
     await mcp?.refreshTools();
