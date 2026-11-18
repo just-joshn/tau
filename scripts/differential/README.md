@@ -127,6 +127,14 @@ through NODE_EXTRA_CA_CERTS, because both CLIs upgrade http:// to https://.
 `web` sets skipWebFetchPreflight; `web-preflight` leaves the api.anthropic.com
 domain check on so the profile records how a denied preflight surfaces.
 
+`run_memory_auto.py original|tau` runs scenarios_memory_auto.py: a `save` print run
+writes a topic file and MEMORY.md into the auto memory folder with absolute paths and
+no permission flags, then a `recall` run in the same root must receive MEMORY.md.
+The summary's `checks` name each observable outcome (init `memory_paths`, the
+`# auto memory` section, both writes allowed, the index loaded, the topic not loaded).
+`compare_prompt.py` normalizes the root's `-`-spelled project folder name, so the
+save run's first request compares section by section with either capture.
+
 ## Interactive PTY runs
 
 `run_pty.py` drives the original or tau under a 100x30 pseudo-terminal
