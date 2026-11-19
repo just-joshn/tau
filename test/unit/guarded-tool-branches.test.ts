@@ -48,7 +48,7 @@ function host(
     hooks: () => undefined,
     approve: async () => true,
     ...rest,
-  } as GuardedToolHost;
+  };
 }
 const use = (input: unknown): ToolUse => ({
   type: "tool_use",
@@ -93,9 +93,13 @@ test("a tool absent from the allow list or denied is refused by policy", async (
 test("a pre-aborted signal throws instead of returning a result", async () => {
   const aborted = new AbortController();
   aborted.abort();
-  await expect(
-    runGuardedTool(tool(), host(), use({ n: 1 }), aborted.signal),
-  ).rejects.toBeDefined();
+  let thrown: unknown;
+  try {
+    await runGuardedTool(tool(), host(), use({ n: 1 }), aborted.signal);
+  } catch (error) {
+    thrown = error;
+  }
+  expect(thrown).toBeDefined();
 });
 
 test("a thrown non-Error becomes a generic failure message", async () => {
@@ -143,7 +147,7 @@ test("ask check prompts; a throwing approver counts as a refusal", async () => {
 
 test("an allow rule or bypass mode skips the prompt; an ask rule forces it", async () => {
   let asked = 0;
-  const approve = async (_: string) => {
+  const approve = async () => {
     asked++;
     return false;
   };
@@ -271,12 +275,12 @@ test("wrapGuardedTools lists enabled tools and routes calls", async () => {
     definitions: [
       { name: "Base", description: "", input_schema: { type: "object" } },
     ],
-    execute: async (call: { id: string }) => ({
+    execute: async (call) => ({
       type: "tool_result",
       tool_use_id: call.id,
       content: "base",
     }),
-  } as unknown as ToolExecutor;
+  };
   const runner = bindGuardedTool(tool(), host());
   const wrapped = wrapGuardedTools(base, [runner], host());
   expect(wrapped.definitions.map((d) => d.name)).toEqual(["Base", "Monitor"]);

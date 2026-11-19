@@ -4,7 +4,7 @@ import path from "node:path";
 import { expect, test } from "bun:test";
 import { goodbye, slashCommand } from "../../src/slash-commands.js";
 import { stampNewMemoryContent } from "../../src/memory-stamp.js";
-import { workflowTool } from "../../src/workflow-tool.js";
+import { workflowTool, type WorkflowInput } from "../../src/workflow-tool.js";
 
 test("slashCommand resolves names and aliases and rejects unknown input", () => {
   expect(slashCommand("definitely-not-a-command")).toBeUndefined();
@@ -63,7 +63,7 @@ test("stamp handles missing name/description, node_type override and empty origi
 
 test("workflow validate covers script limits, files and sources", async () => {
   const t = workflowTool();
-  const v = (input: object) => t.validate!(input as never);
+  const v = (input: WorkflowInput) => t.validate?.(input);
   expect(await v({})).toBe("Must provide script, name, or scriptPath");
   expect(await v({ script: "x" })).toBeUndefined();
   const dir = await mkdtemp(path.join(os.tmpdir(), "wf-"));
