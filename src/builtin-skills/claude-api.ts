@@ -47,7 +47,7 @@ function truthy(value: string | undefined): boolean {
 }
 
 function subcommand(args: string): string {
-  const first = args.trim().toLowerCase().split(/\s+/)[0] ?? "";
+  const first = args.trim().toLowerCase().split(/\s+/)[0];
   return SUBCOMMANDS.find((name) => name === first) ?? "none";
 }
 
