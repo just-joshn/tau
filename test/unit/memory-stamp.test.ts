@@ -1,4 +1,11 @@
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  mkdtemp,
+  mkdir,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test, onTestFinished } from "bun:test";
@@ -76,7 +83,11 @@ test("memory names are kebab-slugged", () => {
 
 function memoryRewrite(memory: string) {
   const root = memory.endsWith(path.sep) ? memory : memory + path.sep;
-  return (request: { path: string; content: string; previous: string | null }) => {
+  return (request: {
+    path: string;
+    content: string;
+    previous: string | null;
+  }) => {
     if (request.previous !== null) return request.content;
     if (!request.path.endsWith(".md") || !request.path.startsWith(root))
       return request.content;
@@ -91,7 +102,9 @@ function memoryRewrite(memory: string) {
 async function memoryEditor() {
   const base = await mkdtemp(path.join(os.tmpdir(), "tau-memory-stamp-"));
   onTestFinished(() => rm(base, { recursive: true, force: true }));
-  const cwd = path.join(base, "root");
+  const root = path.join(base, "root");
+  await mkdir(root, { recursive: true });
+  const cwd = await realpath(root);
   const memory = path.join(cwd, "memory");
   await mkdir(memory, { recursive: true });
   const tools = createTools({
@@ -106,51 +119,48 @@ async function memoryEditor() {
       { type: "tool_use", id: "test", name, input },
       new AbortController().signal,
     );
-  return { cwd, memory, run };
+  return { memory, run };
 }
 
 test("Edit stamps a new auto-memory file when Write would", async () => {
-  const { cwd, memory, run } = await memoryEditor();
+  const { memory, run } = await memoryEditor();
   const created = await run("Edit", {
-    file_path: path.join(memory, "user-role.md"),
+    file_path: "memory/user-role.md",
     old_string: "",
     new_string: TOPIC,
   });
   assert.equal(created.is_error, undefined);
   assert.equal(created.content, "File edited");
-  assert.equal(
-    await readFile(path.join(memory, "user-role.md"), "utf8"),
-    STAMPED,
-  );
+  assert.equal(await readFile(path.join(memory, "user-role.md"), "utf8"), STAMPED);
 
   const outside = await run("Edit", {
-    file_path: path.join(cwd, "notes.md"),
+    file_path: "notes.md",
     old_string: "",
     new_string: TOPIC,
   });
   assert.equal(outside.is_error, undefined);
-  assert.equal(await readFile(path.join(cwd, "notes.md"), "utf8"), TOPIC);
+  assert.equal(await readFile(path.join(memory, "..", "notes.md"), "utf8"), TOPIC);
 
   const index = "- [User role](user_role.md) \u2014 TAU_AUTO_MEMORY_INDEX_LINE\n";
   const memoryIndex = await run("Edit", {
-    file_path: path.join(memory, "MEMORY.md"),
+    file_path: "memory/MEMORY.md",
     old_string: "",
     new_string: index,
   });
   assert.equal(memoryIndex.is_error, undefined);
-  assert.equal(
-    await readFile(path.join(memory, "MEMORY.md"), "utf8"),
-    index,
-  );
+  assert.equal(await readFile(path.join(memory, "MEMORY.md"), "utf8"), index);
 });
 
 test("Edit of an existing auto-memory file stays unstamped when Write would", async () => {
   const { memory, run } = await memoryEditor();
   const file = path.join(memory, "user-role.md");
   await writeFile(file, TOPIC);
-  assert.equal((await run("Read", { file_path: file })).is_error, undefined);
+  assert.equal(
+    (await run("Read", { file_path: "memory/user-role.md" })).is_error,
+    undefined,
+  );
   const edited = await run("Edit", {
-    file_path: file,
+    file_path: "memory/user-role.md",
     old_string: "TAU_AUTO_MEMORY_TOPIC_BODY",
     new_string: "UPDATED_BODY",
   });
@@ -163,12 +173,9 @@ test("Edit of an existing auto-memory file stays unstamped when Write would", as
 test("Write still stamps a new auto-memory file", async () => {
   const { memory, run } = await memoryEditor();
   const written = await run("Write", {
-    file_path: path.join(memory, "user-role.md"),
+    file_path: "memory/user-role.md",
     content: TOPIC,
   });
   assert.equal(written.is_error, undefined);
-  assert.equal(
-    await readFile(path.join(memory, "user-role.md"), "utf8"),
-    STAMPED,
-  );
+  assert.equal(await readFile(path.join(memory, "user-role.md"), "utf8"), STAMPED);
 });
