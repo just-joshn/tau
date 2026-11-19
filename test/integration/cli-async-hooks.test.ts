@@ -152,13 +152,18 @@ async function run(
 
 describe("async command hooks in a print run", () => {
   test("an async PostToolUse answer reaches the next model request as reminders", async () => {
+    // Delay the hook so request 1 is sealed before async output is ready;
+    // otherwise a zero-delay finish races into that same tool_result on CI.
     const { provider, result } = await run(
       { async: true },
-      hookScript({
-        stdout:
-          '{"async":true}\n{"systemMessage":"ASYNC_SYSTEM","hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"ASYNC_CONTEXT"}}\n',
-        code: 0,
-      }),
+      hookScript(
+        {
+          stdout:
+            '{"async":true}\n{"systemMessage":"ASYNC_SYSTEM","hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"ASYNC_CONTEXT"}}\n',
+          code: 0,
+        },
+        200,
+      ),
       (path) => async (_body, index) =>
         index === 0
           ? read("r1")
@@ -199,9 +204,10 @@ describe("async command hooks in a print run", () => {
   });
 
   test("async plus asyncRewake exiting 2 wakes the model with the task notification", async () => {
+    // Finish after request 1 is built so rewake lands on a third turn, not a race.
     const { provider, result } = await run(
       { async: true, asyncRewake: true },
-      hookScript({ stderr: "REWAKE_FEEDBACK", code: 2 }),
+      hookScript({ stderr: "REWAKE_FEEDBACK", code: 2 }, 200),
       (path) => async (_body, index) =>
         index === 0
           ? read("r1")

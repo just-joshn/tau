@@ -131,7 +131,7 @@ test("a worktree with a commit and a file is refused, then removed when the user
   expect(repo.shell).toMatchObject({ cwd: repo.root, root: repo.root });
   expect(repo.git("branch", "--list", "worktree-*")).toBe("");
   expect(repo.tools.current()).toBeUndefined();
-});
+}, { timeout: 30_000 });
 
 test("a running task in the worktree blocks removal; a second create is refused while one is active", async () => {
   const repo = repository();

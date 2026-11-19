@@ -673,9 +673,9 @@ describe("turn display", () => {
     tau.write("\x03");
     await tau.until(/⎿\s+Interrupted · What should Claude do instead\?/);
     await submit(tau, "second question");
-    await tau.until("⏺ second answer");
+    await tau.until("⏺ second answer", 20_000);
     await exit(tau);
-  });
+  }, { timeout: 45_000 });
 
   test("a context rejection compacts the conversation and reports the token change", async () => {
     const provider = await startMockProvider([

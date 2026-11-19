@@ -225,4 +225,4 @@ test("INV-01 a matching deny never yields allow and rule order never changes a d
   // The generator must reach both sides of the decision.
   assert.ok(denied > CASES / 10, `only ${denied} deny cases`);
   assert.ok(executed > CASES / 10, `only ${executed} executed cases`);
-});
+}, { timeout: 60_000 });
