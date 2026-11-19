@@ -10,6 +10,7 @@ import { z } from "zod";
 import { WORKFLOW_DESCRIPTION } from "./eager-catalog-text.js";
 import type { GuardedTool } from "./guarded-tool.js";
 import type { ToolDefinition } from "./types.js";
+import { runWorkflowBody } from "./workflow-runtime.js";
 
 export const WORKFLOW_TOOL = "Workflow";
 export const WORKFLOW_SEARCH_HINT =
@@ -403,8 +404,15 @@ export function workflowTool(
     async check() {
       return { behavior: "ask", prompt: WORKFLOW_REVIEW_PROMPT };
     },
-    async run() {
-      throw new WorkflowInputError(WORKFLOW_NOT_LAUNCHED);
+    async run(input) {
+      const resolved = await resolveWorkflowSource(input, options);
+      if ("error" in resolved) throw new WorkflowInputError(resolved.error);
+      const execution = await runWorkflowBody(resolved.text, {
+        args: input.args,
+      });
+      if (execution.kind === "failed")
+        throw new WorkflowInputError(`Workflow failed: ${execution.error}`);
+      return JSON.stringify(execution);
     },
   };
 }
