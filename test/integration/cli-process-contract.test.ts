@@ -5,7 +5,11 @@
 // Pinned exit codes: success 0; usage error, runtime failure, request time
 // limit and SIGINT all 1.
 import assert from "node:assert/strict";
-import { onTestFinished, test } from "bun:test";
+import { onTestFinished, setDefaultTimeout, test } from "bun:test";
+
+// Coverage instrumentation makes each CLI spawn several times slower; the
+// default 5s budget flakes under the parallel coverage job.
+setDefaultTimeout(30_000);
 import type { ChildProcess } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { createServer } from "node:http";
@@ -304,46 +308,62 @@ test("arguments after -- are prompt text, not options", async () => {
   assert.equal(promptSent(provider.requests[0]?.body), "--version --bogus");
 });
 
-test("a piped stdin prompt is trimmed and appended after the argument prompt", async () => {
-  const provider = await startMockProvider([answer("one"), answer("two")]);
-  const piped = await runCli({ args: ["-p"], provider, stdin: "from stdin\n" });
-  assert.equal(piped.exitCode, 0, piped.stderr);
-  assert.equal(promptSent(provider.requests[0]?.body), "from stdin");
-  const both = await runCli({
-    args: ["-p", "from", "args"],
-    provider,
-    stdin: "from stdin\n",
-  });
-  assert.equal(both.exitCode, 0, both.stderr);
-  assert.equal(
-    promptSent(provider.requests[1]?.body),
-    "from args\n\nfrom stdin",
-  );
-});
-
-test("empty stdin without a prompt exits 1 and sends nothing", async () => {
-  const provider = await startMockProvider([]);
-  for (const stdin of ["", "  \n\t\n"]) {
-    assertUsageError(
-      await runCli({ args: ["-p"], provider, stdin }),
-      "Provide a prompt with -p or on stdin",
-    );
-  }
-  assert.equal(provider.requests.length, 0);
-});
-
-test("piped stdin over 1 MiB exits 1 and sends nothing", async () => {
-  const provider = await startMockProvider([]);
-  assertUsageError(
-    await runCli({
+test(
+  "a piped stdin prompt is trimmed and appended after the argument prompt",
+  async () => {
+    const provider = await startMockProvider([answer("one"), answer("two")]);
+    const piped = await runCli({
       args: ["-p"],
       provider,
-      stdin: "y".repeat(1024 * 1024 + 1),
-    }),
-    "Piped input exceeds 1 MiB",
-  );
-  assert.equal(provider.requests.length, 0);
-});
+      stdin: "from stdin\n",
+    });
+    assert.equal(piped.exitCode, 0, piped.stderr);
+    assert.equal(promptSent(provider.requests[0]?.body), "from stdin");
+    const both = await runCli({
+      args: ["-p", "from", "args"],
+      provider,
+      stdin: "from stdin\n",
+    });
+    assert.equal(both.exitCode, 0, both.stderr);
+    assert.equal(
+      promptSent(provider.requests[1]?.body),
+      "from args\n\nfrom stdin",
+    );
+  },
+  { timeout: 30_000 },
+);
+
+test(
+  "empty stdin without a prompt exits 1 and sends nothing",
+  async () => {
+    const provider = await startMockProvider([]);
+    for (const stdin of ["", "  \n\t\n"]) {
+      assertUsageError(
+        await runCli({ args: ["-p"], provider, stdin }),
+        "Provide a prompt with -p or on stdin",
+      );
+    }
+    assert.equal(provider.requests.length, 0);
+  },
+  { timeout: 30_000 },
+);
+
+test(
+  "piped stdin over 1 MiB exits 1 and sends nothing",
+  async () => {
+    const provider = await startMockProvider([]);
+    assertUsageError(
+      await runCli({
+        args: ["-p"],
+        provider,
+        stdin: "y".repeat(1024 * 1024 + 1),
+      }),
+      "Piped input exceeds 1 MiB",
+    );
+    assert.equal(provider.requests.length, 0);
+  },
+  { timeout: 30_000 },
+);
 
 test(
   "Unicode, quoted, newline and 100 KB prompt arguments reach the provider byte-exactly",
