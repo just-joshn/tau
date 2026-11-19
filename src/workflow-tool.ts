@@ -5,13 +5,7 @@
  */
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
-import {
-  type AnyNode,
-  type ExportNamedDeclaration,
-  type ObjectExpression,
-  parse,
-  type VariableDeclaration,
-} from "acorn";
+import { type AnyNode, type ObjectExpression, parse } from "acorn";
 import { z } from "zod";
 import { WORKFLOW_DESCRIPTION } from "./eager-catalog-text.js";
 import type { GuardedTool } from "./guarded-tool.js";
@@ -167,17 +161,20 @@ const RESERVED_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 const PLAIN_JS_HINT =
   "Workflow scripts must be plain JavaScript \u2014 common causes are TypeScript syntax (type annotations, interfaces, generics) and broken string quoting or escaping.";
 
-function isMetaDeclaration(node: AnyNode): node is ExportNamedDeclaration {
-  if (node.type !== "ExportNamedDeclaration") return false;
+/** First statement is `export const meta = {…}` → its object literal. */
+function metaObjectExpr(node: AnyNode): ObjectExpression | undefined {
+  if (node.type !== "ExportNamedDeclaration") return undefined;
   const decl = node.declaration;
-  if (decl?.type !== "VariableDeclaration") return false;
-  if (decl.kind !== "const" || decl.declarations.length !== 1) return false;
+  if (decl?.type !== "VariableDeclaration") return undefined;
+  if (decl.kind !== "const" || decl.declarations.length !== 1) return undefined;
   const first = decl.declarations[0];
-  return (
-    first?.id.type === "Identifier" &&
-    first.id.name === "meta" &&
-    first.init?.type === "ObjectExpression"
-  );
+  if (
+    first?.id.type !== "Identifier" ||
+    first.id.name !== "meta" ||
+    first.init?.type !== "ObjectExpression"
+  )
+    return undefined;
+  return first.init;
 }
 
 function literalValue(node: AnyNode): unknown {
@@ -211,7 +208,7 @@ function literalValue(node: AnyNode): unknown {
 }
 
 function objectValue(node: ObjectExpression): Record<string, unknown> {
-  const out: Record<string, unknown> = Object.create(null);
+  const out: Record<string, unknown> = {};
   for (const prop of node.properties) {
     if (prop.type !== "Property")
       throw new Error("only plain properties allowed in meta");
@@ -232,11 +229,12 @@ function objectValue(node: ObjectExpression): Record<string, unknown> {
 function metaPhases(value: unknown): WorkflowMeta["phases"] {
   if (!Array.isArray(value)) return undefined;
   const phases: NonNullable<WorkflowMeta["phases"]> = [];
-  for (const item of value as unknown[]) {
-    if (typeof item !== "object" || item === null || !("title" in item))
-      continue;
-    const { title, detail, model } = item as Record<string, unknown>;
+  for (const item of value) {
+    if (typeof item !== "object" || item === null) continue;
+    const title: unknown = Reflect.get(item, "title");
     if (typeof title !== "string") continue;
+    const detail: unknown = Reflect.get(item, "detail");
+    const model: unknown = Reflect.get(item, "model");
     phases.push({
       title,
       ...(typeof detail === "string" ? { detail } : {}),
@@ -283,15 +281,15 @@ export function parseWorkflowScript(text: string): ParsedWorkflow {
     return { error: `Script parse error: ${message}. ${PLAIN_JS_HINT}` };
   }
   const first = program.body[0];
-  if (!first || !isMetaDeclaration(first))
+  const init = first ? metaObjectExpr(first) : undefined;
+  if (!first || !init)
     return {
       error:
         "`export const meta = { name, description, phases }` must be the FIRST statement in the script",
     };
-  const init = (first.declaration as VariableDeclaration).declarations[0]?.init;
   let raw: Record<string, unknown>;
   try {
-    raw = objectValue(init as ObjectExpression);
+    raw = objectValue(init);
   } catch (error) {
     return {
       error: `meta must be a pure literal: ${error instanceof Error ? error.message : String(error)}`,

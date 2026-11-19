@@ -43,6 +43,56 @@ test("meta validation and purity errors", () => {
   assert.match(err(`export const meta = { name: "n" };`), /meta.description must be/);
   assert.match(err(`export const meta = { name: x, description: "d" };`), /pure literal: non-literal node type in meta: Identifier/);
   assert.match(err(`export const meta = { ["a"]: 1 };`), /computed keys/);
+  assert.match(err(`export const meta = { name: "n", description: "d", get x() { return 1; } };`), /methods\/accessors/);
+  assert.match(err(`export const meta = { name: "n", description: "d", ...{} };`), /only plain properties|spread/);
+  assert.match(err(`export const meta = { name: "n", description: "d", "__proto__": "x" };`), /reserved key/);
+  assert.match(err(`export const meta = { name: "n", description: "d", tags: [,] };`), /sparse arrays/);
+  assert.match(err(`export const meta = { name: "n", description: "d", tags: [...[]] };`), /spread not allowed/);
+  assert.match(err(`export const meta = { name: "n", description: "d", note: \`x\${1}\` };`), /template interpolation/);
+  assert.match(err(`export const meta = { name: "n", description: "d", n: +1 };`), /negative-number unary/);
+  assert.match(err(`export let meta = { name: "n", description: "d" };`), /must be the FIRST/);
+  assert.match(err(`export const meta = { name: "n", description: "d" }, other = 1;`), /must be the FIRST/);
+  assert.match(err("x".repeat(524289)), /Script exceeds/);
+});
+
+test("meta accepts string keys, templates, negatives, and optional fields", () => {
+  const text = `export const meta = {
+  "name": "n",
+  description: \`plain\`,
+  title: "t",
+  whenToUse: "when",
+  depth: -2,
+  phases: [
+    { title: "a", detail: "d" },
+    { title: 1 },
+    null,
+    "skip",
+    { detail: "no-title" }
+  ]
+};
+return 1;`;
+  const parsed = parseWorkflowScript(text);
+  assert.ok("meta" in parsed);
+  assert.equal(parsed.meta.name, "n");
+  assert.equal(parsed.meta.description, "plain");
+  assert.equal(parsed.meta.title, "t");
+  assert.equal(parsed.meta.whenToUse, "when");
+  assert.deepEqual(parsed.meta.phases, [{ title: "a", detail: "d" }]);
+  assert.equal(parsed.scriptBody, "return 1;");
+  assert.equal(compileWorkflowBody(text), undefined);
+});
+
+test("non-array phases and empty phase titles are omitted", () => {
+  const parsed = parseWorkflowScript(
+    `export const meta = { name: "n", description: "d", phases: "nope" };\n`,
+  );
+  assert.ok("meta" in parsed);
+  assert.equal(parsed.meta.phases, undefined);
+  const empty = parseWorkflowScript(
+    `export const meta = { name: "n", description: "d", phases: [{ title: 1 }] };\n`,
+  );
+  assert.ok("meta" in empty);
+  assert.equal(empty.meta.phases, undefined);
 });
 
 test("validate fails broken inline script", async () => {
