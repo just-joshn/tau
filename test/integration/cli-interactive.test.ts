@@ -753,6 +753,10 @@ describe("session persistence", () => {
       const tau = startPty({ provider, args: ["--max-retries", "0"] });
       await tau.until(IDLE);
       const sessions = join(tau.state, "sessions");
+      // Under coverage load the sessions tree can land after the first idle frame.
+      await until(
+        () => existsSync(sessions) && readdirSync(sessions).length > 0,
+      );
       const [partition] = readdirSync(sessions);
       const directory = join(sessions, partition ?? "");
       chmodSync(directory, 0o500);

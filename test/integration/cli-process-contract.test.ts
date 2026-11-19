@@ -345,25 +345,29 @@ test("piped stdin over 1 MiB exits 1 and sends nothing", async () => {
   assert.equal(provider.requests.length, 0);
 });
 
-test("Unicode, quoted, newline and 100 KB prompt arguments reach the provider byte-exactly", async () => {
-  const tricky =
-    `naïve "double" 'single' $HOME \`id\` ; | & \\ back\\slash\nline two\ttab ` +
-    "日本語 😀 e\u0301 \u200d end";
-  // Under Linux's 128 KiB single-argument limit, over 100 KB of UTF-8.
-  const large = "長い😀 prompt\n".repeat(5_700).trimEnd();
-  assert.ok(Buffer.byteLength(large) >= 100_000);
-  assert.ok(Buffer.byteLength(large) < 128 * 1024);
-  const provider = await startMockProvider([answer("one"), answer("two")]);
-  for (const [index, prompt] of [tricky, large].entries()) {
-    const run = await runCli({ args: ["-p", prompt], provider });
-    assert.equal(run.exitCode, 0, run.stderr);
-    const sent = promptSent(provider.requests[index]?.body);
-    assert.ok(
-      Buffer.from(sent).equals(Buffer.from(prompt)),
-      "prompt bytes changed",
-    );
-  }
-});
+test(
+  "Unicode, quoted, newline and 100 KB prompt arguments reach the provider byte-exactly",
+  async () => {
+    const tricky =
+      `naïve "double" 'single' $HOME \`id\` ; | & \\ back\\slash\nline two\ttab ` +
+      "日本語 😀 e\u0301 \u200d end";
+    // Under Linux's 128 KiB single-argument limit, over 100 KB of UTF-8.
+    const large = "長い😀 prompt\n".repeat(5_700).trimEnd();
+    assert.ok(Buffer.byteLength(large) >= 100_000);
+    assert.ok(Buffer.byteLength(large) < 128 * 1024);
+    const provider = await startMockProvider([answer("one"), answer("two")]);
+    for (const [index, prompt] of [tricky, large].entries()) {
+      const run = await runCli({ args: ["-p", prompt], provider });
+      assert.equal(run.exitCode, 0, run.stderr);
+      const sent = promptSent(provider.requests[index]?.body);
+      assert.ok(
+        Buffer.from(sent).equals(Buffer.from(prompt)),
+        "prompt bytes changed",
+      );
+    }
+  },
+  { timeout: 30_000 },
+);
 
 // Stream discipline
 

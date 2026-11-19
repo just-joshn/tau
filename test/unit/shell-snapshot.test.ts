@@ -130,17 +130,31 @@ test("/bin/sh uses .profile and names the snapshot shellKind sh", async () => {
   assert.match(await readFile(file, "utf8"), /# Snapshot file/);
 });
 
-test("an empty PATH and DONT_INHERIT_ENV still produce a usable snapshot", async () => {
+test("omitted PATH/HOME/CLAUDE_CONFIG_DIR with DONT_INHERIT_ENV still produce a usable snapshot", async () => {
   const shell = SHELLS[0];
   assert.ok(shell);
   const { env } = await home();
+  // Omit PATH so `??` falls back; omit CLAUDE_CONFIG_DIR so it derives from HOME;
+  // keep HOME under the temp tree so snapshots never touch the real home.
   const stripped: NodeJS.ProcessEnv = {
     HOME: env.HOME,
-    CLAUDE_CONFIG_DIR: env.CLAUDE_CONFIG_DIR,
-    PATH: "",
     CLAUDE_CODE_DONT_INHERIT_ENV: "1",
   };
+  const withConfig = await usableSnapshot(shell, {
+    CLAUDE_CONFIG_DIR: env.CLAUDE_CONFIG_DIR,
+    CLAUDE_CODE_DONT_INHERIT_ENV: "1",
+  });
+  assert.ok(withConfig);
   const file = await usableSnapshot(shell, stripped);
   assert.ok(file);
   assert.equal(runSourced(shell, file, "echo ok"), "ok\n");
+});
+
+test("zsh without a .zshrc still writes a snapshot", async () => {
+  if (!existsSync("/bin/zsh")) return;
+  const { env } = await home();
+  const file = await usableSnapshot("/bin/zsh", env);
+  assert.ok(file);
+  assert.match(file, /snapshot-zsh-/);
+  assert.equal(runSourced("/bin/zsh", file, "echo ok"), "ok\n");
 });
