@@ -1,0 +1,120 @@
+# PR and main-branch gates (STRATEGY.md §2 T0-T4, §8, §9). Deterministic only:
+# no job here talks to a live model; see live-eval.yml for that.
+name: verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  static:
+    name: static checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # gitleaks scans every commit, not just the tip
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+      - run: bun ci
+      - run: bun run typecheck
+      - run: bun run lint
+      - run: bun fmt --check
+      # GHSA-fc5q-39xc-vjpf (picomatch <=4.0.7 ReDoS) has no fixed release; it is
+      # waived until 2027-02-17 under the exception in docs/TEST-STRATEGY.md.
+      - run: bun audit --ignore=GHSA-fc5q-39xc-vjpf
+      - name: Secrets scan (gitleaks, full history)
+        env:
+          GITLEAKS_VERSION: 8.30.1
+          GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+        run: |
+          archive="$RUNNER_TEMP/gitleaks.tar.gz"
+          curl -sSfL -o "$archive" "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  ${archive}" | sha256sum --check -
+          tar -xzf "$archive" -C "$RUNNER_TEMP" gitleaks
+          "$RUNNER_TEMP/gitleaks" git --redact --no-banner .
+
+  portable:
+    name: portable (${{ matrix.os }})
+    # tau supports macOS and Linux. Its README claims nothing for Windows and
+    # nothing here verifies Windows, so Windows is deliberately not in the matrix.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "26"
+      - run: bun ci
+      - name: Install ripgrep, which the Grep tool requires
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then HOMEBREW_NO_AUTO_UPDATE=1 brew install ripgrep
+          else sudo apt-get update -q && sudo apt-get install -y -q ripgrep; fi
+      - name: Record runtimes
+        run: |
+          bun --version
+          node --version
+          uname -a
+      # Type-checks the test files and everything they import, then runs the suite.
+      - name: Typecheck tests and run the suite
+        run: bun test --check --parallel
+      - name: Node bundle smoke
+        run: bun run test:node
+
+  evidence:
+    name: coverage and JUnit (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+      - run: bun ci
+      - name: Install ripgrep, which the Grep tool requires
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then HOMEBREW_NO_AUTO_UPDATE=1 brew install ripgrep
+          else sudo apt-get update -q && sudo apt-get install -y -q ripgrep; fi
+      # Bun 1.4.4 silently skips the JUnit file when its directory is missing.
+      - run: mkdir -p test-results
+      - name: Branch coverage gate (80%) with JUnit
+        run: bun run test:coverage -- --reporter=junit --reporter-outfile=test-results/junit.xml
+      - name: Scan artifacts for secrets
+        id: scan
+        if: always()
+        run: bun scripts/scan-artifacts.ts coverage test-results
+      # Uploads after a test failure too, but never artifacts the scan flagged.
+      - uses: actions/upload-artifact@v7
+        if: always() && steps.scan.outcome == 'success'
+        with:
+          name: verify-evidence
+          path: |
+            coverage/lcov.info
+            coverage/coverage-final.json
+            coverage/coverage-summary.json
+            test-results/
+          if-no-files-found: warn
+          retention-days: 14

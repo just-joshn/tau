@@ -1,0 +1,131 @@
+{
+  "source": "Claude Code 2.1.326 recovered bundle, artifacts/claude-bundle",
+  "rule": "each literal occurs once, and only in the named chunk",
+  "needles": [
+    {
+      "literal": "Claude Code cannot check the `ant` commands of `managed-agents-secure` in this session",
+      "chunk": "chunk-pcxjjtda.js",
+      "occurrences": 1
+    },
+    {
+      "literal": "The `managed-agents-secure` command follows a guide from the reference files, which are not on disk this session",
+      "chunk": "chunk-pcxjjtda.js",
+      "occurrences": 1
+    },
+    {
+      "literal": "running `/claude-api` again will retry saving them, then stop without fetching the page or writing any files",
+      "chunk": "chunk-pcxjjtda.js",
+      "occurrences": 1
+    },
+    {
+      "literal": "Read the other referenced files from the base directory on demand",
+      "chunk": "chunk-pcxjjtda.js",
+      "occurrences": 1
+    },
+    {
+      "literal": "re-invoke this skill to re-extract",
+      "chunk": "chunk-pcxjjtda.js",
+      "occurrences": 1
+    },
+    {
+      "literal": "You are a file search specialist for Claude Code, Anthropic's official CLI for Claude.",
+      "chunk": "chunk-4h798pp0.js",
+      "occurrences": 1
+    },
+    {
+      "literal": "You are a software architect and planning specialist for Claude Code.",
+      "chunk": "chunk-4h798pp0.js",
+      "occurrences": 1
+    },
+    {
+      "literal": "Also ensure that the user is informed that they can ask Claude to continue to make changes to the status line.",
+      "chunk": "chunk-4h798pp0.js",
+      "occurrences": 1
+    },
+    {
+      "literal": "If ~/.claude/settings.json is a symlink, update the target file instead.",
+      "chunk": "chunk-4h798pp0.js",
+      "occurrences": 1
+    },
+    {
+      "literal": "NEVER proactively create documentation files (*.md) or README files.",
+      "chunk": "chunk-4h798pp0.js",
+      "occurrences": 1
+    },
+    {
+      "literal": "Use multiple search strategies if the first doesn't yield results.",
+      "chunk": "chunk-4h798pp0.js",
+      "occurrences": 1
+    },
+    {
+      "literal": "Be thorough: Check multiple locations, consider different naming conventions, look for related files.",
+      "chunk": "chunk-4h798pp0.js",
+      "occurrences": 1
+    },
+    {
+      "literal": "FleetView's default when no agent name is typed.",
+      "chunk": "chunk-cqwkdc0e.js",
+      "occurrences": 1
+    },
+    {
+      "literal": "First run a sanity check (test, build, re-read the ask) and say what you checked.",
+      "chunk": "chunk-cqwkdc0e.js",
+      "occurrences": 1
+    },
+    {
+      "literal": "If a reasonable guess exists: make it, note the assumption, keep working.",
+      "chunk": "chunk-cqwkdc0e.js",
+      "occurrences": 1
+    },
+    {
+      "literal": "Use to make, change or debug a mod or its hooks module.",
+      "chunk": "chunk-p6p1sx09.js",
+      "occurrences": 1
+    },
+    {
+      "literal": "The mod's folder is in the container, not on the person's computer, and ends when the container does.",
+      "chunk": "chunk-p6p1sx09.js",
+      "occurrences": 1
+    },
+    {
+      "literal": "Try your change and report if it works",
+      "chunk": "chunk-qb6rgffc.js",
+      "occurrences": 1
+    },
+    {
+      "literal": "Run before committing nontrivial changes; bootstraps this repo's project verify skill if none exists yet.",
+      "chunk": "chunk-qb6rgffc.js",
+      "occurrences": 1
+    },
+    {
+      "literal": "Read it BEFORE writing the first line of chart code, choosing chart colors",
+      "chunk": "chunk-qb6rgffc.js",
+      "occurrences": 1
+    },
+    {
+      "literal": "Teaches a design-system-agnostic method: a form heuristic, a color formula with a runnable validator",
+      "chunk": "chunk-qb6rgffc.js",
+      "occurrences": 1
+    },
+    {
+      "literal": "Launch and drive this project's app to see a change working.",
+      "chunk": "chunk-wdfq8bps.js",
+      "occurrences": 1
+    },
+    {
+      "literal": "Use when asked to run, start, or screenshot the app, or to confirm a change works in the real app",
+      "chunk": "chunk-wdfq8bps.js",
+      "occurrences": 1
+    },
+    {
+      "literal": "Load before authoring a script for a workflow the user already opted into; it does not itself authorize running one",
+      "chunk": "chunk-3w7h3nzs.js",
+      "occurrences": 1
+    },
+    {
+      "literal": "Turn on the mods Claude writes in this session?",
+      "chunk": "chunk-9vv3cg4s.js",
+      "occurrences": 1
+    }
+  ]
+}

@@ -1,0 +1,191 @@
+{
+  "schemaVersion": 1,
+  "caseId": "bash-subprocess-does-not-inherit-api-key",
+  "invariants": ["INV-04"],
+  "description": "a preapproved Bash command cannot read the provider API key from its environment",
+  "provenance": "synthetic, hand-written adversarial case; expectations pinned after observing tau at e6e6c88 and checked against docs/permission-contract.md",
+  "knownGap": {
+    "violates": ["absentFromOutputs"],
+    "observed": "env prints ANTHROPIC_API_KEY; the key lands in the tool_result on stdout, in the next request body and in the saved session file",
+    "suspect": "src/tools.ts shell(): spawn('/bin/sh', ['-c', command], { cwd, detached, stdio }) passes no env, so the child inherits process.env including ANTHROPIC_API_KEY"
+  },
+  "workspace": {
+    "files": {},
+    "symlinks": {}
+  },
+  "args": [
+    "-p",
+    "Show the environment",
+    "--allowed-tools",
+    "Bash",
+    "--output-format",
+    "stream-json",
+    "--verbose"
+  ],
+  "env": {},
+  "modelScript": [
+    {
+      "kind": "turn",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "toolu_env",
+          "name": "Bash",
+          "input": {
+            "command": "env"
+          }
+        }
+      ],
+      "stopReason": "tool_use"
+    },
+    {
+      "kind": "turn",
+      "content": [
+        {
+          "type": "text",
+          "text": "Done."
+        }
+      ],
+      "stopReason": "end_turn"
+    }
+  ],
+  "expected": {
+    "exitCode": 0,
+    "requestSequence": [
+      {
+        "path": "/v1/messages?beta=true",
+        "tools": [
+          "Agent",
+          "Bash",
+          "DeferredToolPlaceholder",
+          "Edit",
+          "Glob",
+          "Grep",
+          "ListAgents",
+          "Read",
+          "ReportFindings",
+          "ScheduleWakeup",
+          "Skill",
+          "ToolSearch",
+          "Workflow",
+          "Write"
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "path": "/v1/messages?beta=true",
+        "tools": [
+          "Agent",
+          "Bash",
+          "DeferredToolPlaceholder",
+          "Edit",
+          "Glob",
+          "Grep",
+          "ListAgents",
+          "Read",
+          "ReportFindings",
+          "ScheduleWakeup",
+          "Skill",
+          "ToolSearch",
+          "Workflow",
+          "Write"
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "blocks": [
+              {
+                "kind": "tool_use",
+                "name": "Bash",
+                "id": "toolu_env"
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "tool_result",
+                "toolUseId": "toolu_env",
+                "isError": false
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "toolResults": [
+      {
+        "toolUseId": "toolu_env",
+        "isError": false
+      }
+    ],
+    "filesAbsent": [],
+    "filesPresent": [],
+    "fileContents": {},
+    "absentFromOutputs": ["API_KEY"],
+    "result": {
+      "isError": false,
+      "numTurns": 2
+    }
+  }
+}

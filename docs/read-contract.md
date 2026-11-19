@@ -1,0 +1,42 @@
+# Regular-text Read contract
+
+Read now scans supported regular files for explicit line ranges, uses the recovered whole-file byte/token budgets and returns a partial page when a whole-file request exceeds its token allowance. This replaces the earlier64KiB input-prefix and output truncation implementation. It does not add an unchanged-file suppression shortcut. The later [large-read admission pass](large-read-contract.md) adds allow_large and shared per-model-round room; the current suite passes455 tests.
+
+## Source and Ghidra evidence
+
+The pinned2.1.326 executable contains the c$/nJt limit helpers, ivs/Gno/bRt Read path, UHo token checks, lWe/Yjo/streaming line readers, result mapper and Uqt/ucs retained-path classifier. Twelve bounded spans are verified against the original file and module hashes: source ev_ab39be7f755cdcb674c728221926496731b6e3b788f6e5e2bcfa466cad7159da; verifier ev_1eea5c07eaaf9e41b4774beb42e544f895085dad27756539ccd1e39187e022d8. Actual Ghidra12.1.4 reads and matches12/12 selected nonexecutable __bun spans: ev_7d809557da959bc42bf1e2d928bb072e5d8153da0f50dd42bb7a6e0027e861bc. These establish static source behavior and byte provenance, not original runtime behavior or JavaScript decompilation. Reproduction files are ignored under artifacts/read-budget-pass.
+
+The source default whole-file byte limit is262144 and default token limit25000. A positive CLAUDE_CODE_FILE_READ_MAX_OUTPUT_TOKENS integer setting overrides the latter; the original caches resolved defaults in its session state. The active function has no implicit2000-line limit despite its prompt description mentioning2000.
+
+UHo estimates rounded UTF-16 length divided by4, or2 for JSON/JSONL/JSONC. Above one quarter of the token cap it can count through the model API, falling back to the estimate on failure. A selected non-whole text longer than maxTokens*128 can fail before counting. Explicit line ranges also have that selected UTF-8 byte budget. Without an explicit limit, the whole-file byte bound still applies even when offset is later than1.
+
+Whole reads (offset0/1, no limit/pages) that exceed tokens can return an adaptive partial page. The source initially selects85% of the line fraction implied by the token ratio, with up to six reductions by0.7. Oversized/blank line selections can use a character prefix instead, with surrogate-boundary handling. The result is marked partial and cannot count as a complete cached view. Explicit-limit or later-offset token overflows fail rather than use this whole-file paging branch.
+
+Hyp26's proposed active unchanged-Read optimization was refuted for the covered local regular-text handlers. ivs observes prior cache for telemetry; bRt rereads and returns text, and the output mapper has no omitted-text result branch. Uqt recognizes existing/older omitted-content notices for ucs restoration exclusions. A classifier alone does not prove an active producer. Other wrappers/remote paths were not exhaustively ruled out. Tau continues returning actual text on repeated local Reads.
+
+## Independent TypeScript behavior
+
+file-read.ts implements regular-file scanning, budgets, token measurement and independently worded page notices. tools.ts opens checked canonical paths, obtains current data and records complete or partial read state. The CLI supplies the current main-model auxiliary count callback. Count requests retain their separate one-retry allowance and do not spend --max-api-attempts; see [file restoration](file-restoration-contract.md).
+
+- Inputs are file_path, optional offset(default1,0 selects the first line with label0), optional positive limit and optional boolean allow_large. Bounds are strict integers. Unknown keys, including pages/_host, remain unsupported.
+- An ordinary Read without limit refuses a file over262144 raw bytes; an admitted allow_large Read can lift that bound. An explicit limit can scan a much larger regular file, retaining only selected normalized lines, and can reach past the old64KiB prefix. The scanner continues through EOF to establish line counts and decoding validity; it does not silently claim absence from an unscanned suffix.
+- Supported encodings remain strict UTF-8 and BOM-marked UTF-16LE. Leading BOM is removed, CRLF becomes LF and a final CR is trimmed for display. Blank lines/trailing LF, offset0 labeling, empty-file and known-EOF results are preserved. Incremental decoding handles chunk/short-read boundaries. Binary/media signatures and decoded NUL fail; malformed text outside the requested range also fails the scan.
+- Whole-file over-token text returns an explicit partial notice plus numbered content. A line page includes a next offset/limit; a long-line/whitespace character page recommends narrower reads/search. A token-limited offset0 request starts its partial display at1, matching the observed source branch. Partial pages cannot collectively establish a complete edit baseline.
+- Read's model-visible numbered output no longer uses the shared64KiB output truncator. Byte/token/selected-range constraints bound its data instead. Other tool-output limits are unchanged. Complete numbered text over64KiB can therefore establish a valid baseline when the underlying editable file remains within tau's separate write bound.
+- A successful partial Read replaces a previous complete baseline with partial state. A failed Read leaves previous cache state intact, as in the covered source path; it never creates a new baseline. Existing-file writes still compare current content, so retained old state cannot authorize changed contents. Cancellation during counting leaves no newly committed baseline.
+
+ReadState retains normalized SHA256,512 canonical paths and stricter existing-file guards. Clear/resume reset process-local state. Compaction rereads candidates and rebuilds it; only complete restored model-visible text authorizes changes. See [read state](read-state-contract.md) and [restoration](file-restoration-contract.md).
+
+## Remaining differences
+
+Tau's uniform regular-file scanner differs from the source's small-file fast path/large-file streaming split. Strict encoding support is narrower than original encoding detection. Media/PDF/notebooks, pipes/devices, remote/landing/connector rules, artifact handover, tool envelopes, at-mentions, full account/provider room gating, deferred-tool claims, extra permissions and full original read-cache/hash/baseline behavior remain open. Tau does not implement the original default-limit session cache service. Embeddings can supply fileReadMaxTokens/readTokenCounter; the CLI uses the verified environment setting and provider route. Existing Write/Edit and search prefixes remain64KiB and must not be confused with Read's expanded range support. Original model/permission guard exceptions and stale-match recovery remain unported.
+
+## Verification
+
+The base-budget checkpoint passed438 tests (ev_fe3fbcf6be5743921e2212e5d6ff46b6aa31a308a75314e4f91aface5f85f819), and typecheck passed (ev_87450804e3fc2f75945c60739f1f2a5478a153f1f4b796d78e811b678efe382f). Seventeen new tests cover environment grammar, quarter-cap counting/failure, expanded output, line/character pages, explicit-range rejection, selected bytes, large-file scanning, actual decoder boundaries including one-byte OS reads, CRLF/EOF, invalid suffixes, cache retention, page aggregation and abort. Earlier prefix tests were replaced with the newly verified behavior rather than preserving their obsolete limit.
+
+A compiled five-request CLI fixture observes whole Read -> auxiliary count -> line-page result -> later Read -> auxiliary count -> full-range result -> answer across three generation requests (five HTTP requests total). A real12-column terminal fixture passes ten HTTP requests, seven generation and three auxiliary counts, under a four-generation-attempt limit per prompt. It verifies a configured500-token page, actionable next offset, later range, Edit rejection after partial pages, a later complete counted Read permitting Edit, saved tool history, changed file and clean exit (ev_5789b6fd7b8daca2a6343273ae50e7f185e05f795ef2d7e2860aeb55353c618c).
+
+Full reconstruction remains active. Hyp27 is supported; findings48–50 record the bounded conclusions.
+
+The subsequent [large-read contract](large-read-contract.md) records the current455-test result,23 additional Ghidra spans and11-request terminal verification of admitted large reads.

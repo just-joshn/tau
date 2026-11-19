@@ -1,0 +1,84 @@
+# Live evaluation against the real Anthropic API (LIVE-EVALS.md). Spends money:
+# runs only on dispatch or the weekly schedule, inside the protected `live-eval`
+# environment (configure required reviewers there). Without the key the runner
+# reports "unavailable" and exits 2, so the job fails; it never passes vacuously.
+name: live-eval
+
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: Model under evaluation
+        type: choice
+        options: [claude-opus-5-5, claude-sonnet-5-5, claude-haiku-5-5]
+        default: claude-opus-5-5
+      subsets:
+        description: Space-separated subsets (development regression holdout adversarial)
+        default: development regression holdout adversarial
+      trials:
+        description: Trials per case (1-10)
+        default: "1"
+      max_total_usd:
+        description: Total spend cap in USD for the whole run
+        default: "5"
+      max_case_usd:
+        description: Spend cap in USD per case run (cases may set a lower one)
+        default: "1"
+      max_turns:
+        description: Model turn cap per case (cases may set a lower one)
+        default: "8"
+  schedule:
+    - cron: "23 6 * * 1" # weekly, Monday 06:23 UTC
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-eval
+  cancel-in-progress: false # never abandon a run that is already spending
+
+jobs:
+  live-eval:
+    name: live eval (${{ inputs.model || 'claude-opus-5-5' }})
+    runs-on: ubuntu-latest
+    environment: live-eval
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+      - run: bun ci
+      - name: Install ripgrep, which the Grep tool requires
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then HOMEBREW_NO_AUTO_UPDATE=1 brew install ripgrep
+          else sudo apt-get update -q && sudo apt-get install -y -q ripgrep; fi
+      - name: Run live evaluation
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          MODEL: ${{ inputs.model || 'claude-opus-5-5' }}
+          SUBSETS: ${{ inputs.subsets || 'development regression holdout adversarial' }}
+          TRIALS: ${{ inputs.trials || '1' }}
+          MAX_TOTAL_USD: ${{ inputs.max_total_usd || '5' }}
+          MAX_CASE_USD: ${{ inputs.max_case_usd || '1' }}
+          MAX_TURNS: ${{ inputs.max_turns || '8' }}
+        run: |
+          args=()
+          for subset in $SUBSETS; do args+=(--subset "$subset"); done
+          bun run eval:live "${args[@]}" \
+            --model "$MODEL" --trials "$TRIALS" \
+            --max-total-usd "$MAX_TOTAL_USD" --max-case-usd "$MAX_CASE_USD" --max-turns "$MAX_TURNS" \
+            --out eval-results
+      - name: Scan results for secrets
+        id: scan
+        if: always()
+        run: bun scripts/scan-artifacts.ts eval-results
+      - uses: actions/upload-artifact@v7
+        if: always() && steps.scan.outcome == 'success'
+        with:
+          name: eval-results-${{ github.run_id }}
+          path: eval-results/
+          if-no-files-found: warn
+          retention-days: 90

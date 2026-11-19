@@ -1,0 +1,589 @@
+{
+  "schemaVersion": 1,
+  "caseId": "plan-mode-blocks-write-edit-and-bash",
+  "invariants": ["INV-01"],
+  "description": "plan mode refuses Write, Edit and Bash despite exact allow rules",
+  "provenance": "synthetic, hand-written adversarial case; expectations pinned after observing tau at e6e6c88 and checked against docs/permission-contract.md",
+  "workspace": {
+    "files": {
+      "app.txt": "original\n"
+    },
+    "symlinks": {}
+  },
+  "args": [
+    "-p",
+    "Plan the refactor",
+    "--permission-mode",
+    "plan",
+    "--allowed-tools",
+    "Write,Edit,Bash"
+  ],
+  "env": {},
+  "modelScript": [
+    {
+      "kind": "turn",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "toolu_write",
+          "name": "Write",
+          "input": {
+            "file_path": "new.txt",
+            "content": "x"
+          }
+        }
+      ],
+      "stopReason": "tool_use"
+    },
+    {
+      "kind": "turn",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "toolu_read",
+          "name": "Read",
+          "input": {
+            "file_path": "app.txt"
+          }
+        }
+      ],
+      "stopReason": "tool_use"
+    },
+    {
+      "kind": "turn",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "toolu_edit",
+          "name": "Edit",
+          "input": {
+            "file_path": "app.txt",
+            "old_string": "original",
+            "new_string": "edited"
+          }
+        }
+      ],
+      "stopReason": "tool_use"
+    },
+    {
+      "kind": "turn",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "toolu_bash",
+          "name": "Bash",
+          "input": {
+            "command": "touch bash-ran.marker"
+          }
+        }
+      ],
+      "stopReason": "tool_use"
+    },
+    {
+      "kind": "turn",
+      "content": [
+        {
+          "type": "text",
+          "text": "Done."
+        }
+      ],
+      "stopReason": "end_turn"
+    }
+  ],
+  "expected": {
+    "exitCode": 0,
+    "requestSequence": [
+      {
+        "path": "/v1/messages?beta=true",
+        "tools": [
+          "Agent",
+          "Bash",
+          "DeferredToolPlaceholder",
+          "Edit",
+          "Glob",
+          "Grep",
+          "ListAgents",
+          "Read",
+          "ReportFindings",
+          "ScheduleWakeup",
+          "Skill",
+          "ToolSearch",
+          "Workflow",
+          "Write"
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "path": "/v1/messages?beta=true",
+        "tools": [
+          "Agent",
+          "Bash",
+          "DeferredToolPlaceholder",
+          "Edit",
+          "Glob",
+          "Grep",
+          "ListAgents",
+          "Read",
+          "ReportFindings",
+          "ScheduleWakeup",
+          "Skill",
+          "ToolSearch",
+          "Workflow",
+          "Write"
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "blocks": [
+              {
+                "kind": "tool_use",
+                "name": "Write",
+                "id": "toolu_write"
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "tool_result",
+                "toolUseId": "toolu_write",
+                "isError": true
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "path": "/v1/messages?beta=true",
+        "tools": [
+          "Agent",
+          "Bash",
+          "DeferredToolPlaceholder",
+          "Edit",
+          "Glob",
+          "Grep",
+          "ListAgents",
+          "Read",
+          "ReportFindings",
+          "ScheduleWakeup",
+          "Skill",
+          "ToolSearch",
+          "Workflow",
+          "Write"
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "blocks": [
+              {
+                "kind": "tool_use",
+                "name": "Write",
+                "id": "toolu_write"
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "tool_result",
+                "toolUseId": "toolu_write",
+                "isError": true
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "blocks": [
+              {
+                "kind": "tool_use",
+                "name": "Read",
+                "id": "toolu_read"
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "tool_result",
+                "toolUseId": "toolu_read",
+                "isError": false
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "path": "/v1/messages?beta=true",
+        "tools": [
+          "Agent",
+          "Bash",
+          "DeferredToolPlaceholder",
+          "Edit",
+          "Glob",
+          "Grep",
+          "ListAgents",
+          "Read",
+          "ReportFindings",
+          "ScheduleWakeup",
+          "Skill",
+          "ToolSearch",
+          "Workflow",
+          "Write"
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "blocks": [
+              {
+                "kind": "tool_use",
+                "name": "Write",
+                "id": "toolu_write"
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "tool_result",
+                "toolUseId": "toolu_write",
+                "isError": true
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "blocks": [
+              {
+                "kind": "tool_use",
+                "name": "Read",
+                "id": "toolu_read"
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "tool_result",
+                "toolUseId": "toolu_read",
+                "isError": false
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "blocks": [
+              {
+                "kind": "tool_use",
+                "name": "Edit",
+                "id": "toolu_edit"
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "tool_result",
+                "toolUseId": "toolu_edit",
+                "isError": true
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "path": "/v1/messages?beta=true",
+        "tools": [
+          "Agent",
+          "Bash",
+          "DeferredToolPlaceholder",
+          "Edit",
+          "Glob",
+          "Grep",
+          "ListAgents",
+          "Read",
+          "ReportFindings",
+          "ScheduleWakeup",
+          "Skill",
+          "ToolSearch",
+          "Workflow",
+          "Write"
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "blocks": [
+              {
+                "kind": "tool_use",
+                "name": "Write",
+                "id": "toolu_write"
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "tool_result",
+                "toolUseId": "toolu_write",
+                "isError": true
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "blocks": [
+              {
+                "kind": "tool_use",
+                "name": "Read",
+                "id": "toolu_read"
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "tool_result",
+                "toolUseId": "toolu_read",
+                "isError": false
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "blocks": [
+              {
+                "kind": "tool_use",
+                "name": "Edit",
+                "id": "toolu_edit"
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "tool_result",
+                "toolUseId": "toolu_edit",
+                "isError": true
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "blocks": [
+              {
+                "kind": "tool_use",
+                "name": "Bash",
+                "id": "toolu_bash"
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "tool_result",
+                "toolUseId": "toolu_bash",
+                "isError": true
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "toolResults": [
+      {
+        "toolUseId": "toolu_write",
+        "isError": true,
+        "contentIncludes": "Plan mode is read only"
+      },
+      {
+        "toolUseId": "toolu_read",
+        "isError": false
+      },
+      {
+        "toolUseId": "toolu_edit",
+        "isError": true,
+        "contentIncludes": "Plan mode is read only"
+      },
+      {
+        "toolUseId": "toolu_bash",
+        "isError": true
+      }
+    ],
+    "filesAbsent": ["new.txt", "bash-ran.marker"],
+    "filesPresent": [],
+    "fileContents": {
+      "app.txt": "original\n"
+    },
+    "absentFromOutputs": []
+  }
+}

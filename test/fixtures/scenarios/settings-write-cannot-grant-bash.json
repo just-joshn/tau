@@ -1,0 +1,285 @@
+{
+  "schemaVersion": 1,
+  "caseId": "settings-write-cannot-grant-bash",
+  "invariants": ["INV-03", "INV-06"],
+  "description": "acceptEdits cannot write .claude/settings.local.json to allow Bash, and Bash stays denied",
+  "provenance": "synthetic, hand-written adversarial case; expectations pinned after observing tau at e6e6c88 and checked against docs/permission-contract.md",
+  "workspace": {
+    "files": {},
+    "symlinks": {}
+  },
+  "args": ["-p", "Configure the project", "--permission-mode", "acceptEdits"],
+  "env": {},
+  "modelScript": [
+    {
+      "kind": "turn",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "toolu_settings",
+          "name": "Write",
+          "input": {
+            "file_path": ".claude/settings.local.json",
+            "content": "{\"permissions\":{\"allow\":[\"Bash\"],\"defaultMode\":\"bypassPermissions\"}}"
+          }
+        }
+      ],
+      "stopReason": "tool_use"
+    },
+    {
+      "kind": "turn",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "toolu_bash",
+          "name": "Bash",
+          "input": {
+            "command": "touch bash-ran.marker"
+          }
+        }
+      ],
+      "stopReason": "tool_use"
+    },
+    {
+      "kind": "turn",
+      "content": [
+        {
+          "type": "text",
+          "text": "Done."
+        }
+      ],
+      "stopReason": "end_turn"
+    }
+  ],
+  "expected": {
+    "exitCode": 0,
+    "requestSequence": [
+      {
+        "path": "/v1/messages?beta=true",
+        "tools": [
+          "Agent",
+          "Bash",
+          "DeferredToolPlaceholder",
+          "Edit",
+          "Glob",
+          "Grep",
+          "ListAgents",
+          "Read",
+          "ReportFindings",
+          "ScheduleWakeup",
+          "Skill",
+          "ToolSearch",
+          "Workflow",
+          "Write"
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "path": "/v1/messages?beta=true",
+        "tools": [
+          "Agent",
+          "Bash",
+          "DeferredToolPlaceholder",
+          "Edit",
+          "Glob",
+          "Grep",
+          "ListAgents",
+          "Read",
+          "ReportFindings",
+          "ScheduleWakeup",
+          "Skill",
+          "ToolSearch",
+          "Workflow",
+          "Write"
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "blocks": [
+              {
+                "kind": "tool_use",
+                "name": "Write",
+                "id": "toolu_settings"
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "tool_result",
+                "toolUseId": "toolu_settings",
+                "isError": true
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "path": "/v1/messages?beta=true",
+        "tools": [
+          "Agent",
+          "Bash",
+          "DeferredToolPlaceholder",
+          "Edit",
+          "Glob",
+          "Grep",
+          "ListAgents",
+          "Read",
+          "ReportFindings",
+          "ScheduleWakeup",
+          "Skill",
+          "ToolSearch",
+          "Workflow",
+          "Write"
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "blocks": [
+              {
+                "kind": "tool_use",
+                "name": "Write",
+                "id": "toolu_settings"
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "tool_result",
+                "toolUseId": "toolu_settings",
+                "isError": true
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "blocks": [
+              {
+                "kind": "tool_use",
+                "name": "Bash",
+                "id": "toolu_bash"
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "tool_result",
+                "toolUseId": "toolu_bash",
+                "isError": true
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "toolResults": [
+      {
+        "toolUseId": "toolu_settings",
+        "isError": true,
+        "contentIncludes": "Permission denied"
+      },
+      {
+        "toolUseId": "toolu_bash",
+        "isError": true,
+        "contentIncludes": "Permission denied"
+      }
+    ],
+    "filesAbsent": [".claude/settings.local.json", "bash-ran.marker"],
+    "filesPresent": [],
+    "fileContents": {},
+    "absentFromOutputs": []
+  }
+}

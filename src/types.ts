@@ -1,0 +1,394 @@
+import { z } from "zod";
+import { attachmentSchema } from "./attachments.js";
+import type { ApiAttemptBudget } from "./attempt-ledger.js";
+import type { StreamFailureCause } from "./recovery.js";
+import type { ThinkingOptions } from "./reasoning.js";
+import type { ThinkingStrip } from "./thinking-history.js";
+import type { ContextWindow } from "./context-window.js";
+import type { ReadToolContext } from "./context-room.js";
+import type { QueryEffort } from "./query-model-effort.js";
+import {
+  nativeResponseRecordingSchema,
+  type NativeResponseRecording,
+  type NativeResponseRecordingHost,
+} from "./native-response-recording.js";
+
+export const textBlockSchema = z.object({
+  type: z.literal("text"),
+  text: z.string(),
+});
+const imageSourceSchema = z.object({
+  type: z.literal("base64"),
+  media_type: z.enum(["image/jpeg", "image/png", "image/gif", "image/webp"]),
+  data: z.string(),
+});
+const documentSourceSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("base64"),
+    media_type: z.literal("application/pdf"),
+    data: z.string(),
+  }),
+  z.object({
+    type: z.literal("text"),
+    media_type: z.literal("text/plain"),
+    data: z.string(),
+  }),
+]);
+/** Model-visible MCP projections retained alongside the terminal's textual summary. */
+export const apiToolContentSchema = z.discriminatedUnion("type", [
+  textBlockSchema,
+  z.object({ type: z.literal("image"), source: imageSourceSchema }),
+  z.object({
+    type: z.literal("document"),
+    source: documentSourceSchema,
+    title: z.string().optional(),
+  }),
+  /** A ToolSearch match; the API expands it to the named defer_loading tool. */
+  z.object({ type: z.literal("tool_reference"), tool_name: z.string() }),
+]);
+export type ApiToolContent = z.infer<typeof apiToolContentSchema>;
+export const instructionRecordSchema = z.object({
+  path: z.string(),
+  kind: z.enum(["Managed", "User", "Project", "Local", "AutoMem"]),
+  contentHash: z.string(),
+  partial: z.boolean(),
+  removed: z.boolean().optional(),
+});
+export type InstructionRecord = z.infer<typeof instructionRecordSchema>;
+export const thinkingBlockSchema = z.object({
+  type: z.literal("thinking"),
+  thinking: z.string(),
+  signature: z.string(),
+});
+export const redactedThinkingSchema = z.object({
+  type: z.literal("redacted_thinking"),
+  data: z.string(),
+});
+export const toolUseSchema = z.object({
+  type: z.literal("tool_use"),
+  id: z.string().min(1),
+  name: z.string().min(1),
+  input: z.unknown(),
+});
+const hookPhaseSchema = z.object({
+  /** Transcript side of the tool result the attachment belongs to. */
+  phase: z.enum(["pre", "post", "failure"]),
+});
+/** Sessions saved before typed attachments kept only additional context. */
+const legacyHookAttachmentSchema = z
+  .object({
+    phase: z.enum(["pre", "post", "failure"]),
+    event: z.enum(["PreToolUse", "PostToolUse", "PostToolUseFailure"]),
+    toolName: z.string(),
+    content: z.array(z.string()),
+  })
+  .transform(({ phase, event, toolName, content }) => ({
+    phase,
+    type: "hook_additional_context" as const,
+    hookName: `${event}:${toolName}`,
+    content,
+  }));
+export const hookAttachmentSchema = z.union([
+  z.intersection(hookPhaseSchema, attachmentSchema),
+  legacyHookAttachmentSchema,
+]);
+export type HookAttachment = z.infer<typeof hookAttachmentSchema>;
+export const toolResultSchema = z.object({
+  type: z.literal("tool_result"),
+  tool_use_id: z.string(),
+  content: z.string(),
+  is_error: z.boolean().optional(),
+  /** Local metadata for a future unchanged-content Read notice; never sent to the API. */
+  readContentOmitted: z.boolean().optional(),
+  apiContent: z.array(apiToolContentSchema).optional(),
+  /** Raw MCP result, including structuredContent and _meta; local persistence only. */
+  mcpResult: z.unknown().optional(),
+  permissionDenied: z.boolean().optional(),
+  /** Recovered `decideLocation:"pre-ask"`: denied where an approval prompt would have been asked. */
+  permissionDecideLocation: z.literal("pre-ask").optional(),
+  inputRejected: z.boolean().optional(),
+  hookStop: z.object({ reason: z.string() }).optional(),
+  /** Effective hook input and raw execution data; original assistant input stays unchanged. */
+  effectiveToolInput: z.unknown().optional(),
+  hookResponse: z.unknown().optional(),
+  hookRewrittenOutput: z.unknown().optional(),
+  /** Hook output in hook order; projection renders it around the result, never inferred from text. */
+  hookAttachments: z.array(hookAttachmentSchema).optional(),
+  instructionFiles: z.array(instructionRecordSchema).optional(),
+});
+export const assistantBlockSchema = z.discriminatedUnion("type", [
+  textBlockSchema,
+  toolUseSchema,
+  thinkingBlockSchema,
+  redactedThinkingSchema,
+]);
+export type AssistantBlock = z.infer<typeof assistantBlockSchema>;
+export const blockSchema = z.discriminatedUnion("type", [
+  textBlockSchema,
+  toolUseSchema,
+  toolResultSchema,
+  thinkingBlockSchema,
+  redactedThinkingSchema,
+]);
+export const usageSchema = z.object({
+  input_tokens: z.number().nonnegative(),
+  output_tokens: z.number().nonnegative(),
+  cache_creation_input_tokens: z.number().nonnegative().optional(),
+  cache_read_input_tokens: z.number().nonnegative().optional(),
+  iterations: z.array(z.unknown()).optional(),
+});
+/** Local attachment identity used to compute subsequent catalog deltas; never an API field. */
+export const catalogAttachmentSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("agent_listing_delta"),
+    addedTypes: z.array(z.string()),
+    addedLines: z.array(z.string()),
+    builtInTypes: z.array(z.string()),
+    builtInPluginTypes: z.array(z.string()),
+    removedTypes: z.array(z.string()),
+    isInitial: z.boolean(),
+    showConcurrencyNote: z.boolean(),
+  }),
+  z.object({
+    type: z.literal("skill_listing"),
+    content: z.string(),
+    skillCount: z.number().int().nonnegative(),
+    isInitial: z.boolean(),
+    names: z.array(z.string()),
+    digests: z.array(z.string()),
+    shortened: z.literal(true).optional(),
+    addsToEarlier: z.literal(true).optional(),
+    callsSkillToolDirectly: z.literal(true).optional(),
+  }),
+  z.object({
+    type: z.literal("deferred_tools_delta"),
+    addedNames: z.array(z.string()),
+    removedNames: z.array(z.string()),
+  }),
+]);
+/** Model-visible order of a user round's leading reminders. */
+export const REMINDER_IDS = [
+  "environment",
+  "model",
+  "deferred_tools",
+  "agent_listing",
+  "skill_listing",
+  "total_tokens",
+  "date",
+  "git_attribution",
+] as const;
+export type ReminderId = (typeof REMINDER_IDS)[number];
+export const messageSchema = z.object({
+  role: z.enum(["user", "assistant"]),
+  content: z.array(blockSchema),
+  instructionFiles: z.array(instructionRecordSchema).optional(),
+  catalogAttachments: z.array(catalogAttachmentSchema).optional(),
+  /** Retained lifecycle order differs from RPi's model-visible user-round placement. */
+  contextPlacement: z.literal("subagent-start").optional(),
+  /** This row is an attachment; content holds its rendering for local readers, projection folds it. */
+  attachment: attachmentSchema.optional(),
+  /** A task-notification turn; projection wraps it as a system notification (source `A3s`). */
+  origin: z.literal("task-notification").optional(),
+  /** Ids of this row's leading reminder blocks; projection folds them ahead of the user round. */
+  reminders: z.array(z.enum(REMINDER_IDS)).optional(),
+  partial: z.object({ cause: z.string() }).optional(),
+  model: z.string().optional(),
+  responseModel: z.string().optional(),
+  responseId: z.string().optional(),
+  /** Physical API block provenance; never part of the model-facing message envelope. */
+  nativeResponse: nativeResponseRecordingSchema.optional(),
+  requestedModel: z.string().optional(),
+  resumable: z.boolean().optional(),
+  resumedFromIncompleteThinking: z.boolean().optional(),
+  abandonedByStreamRetry: z.boolean().optional(),
+  thinkingStripFrom: z.number().int().nonnegative().optional(),
+  usage: usageSchema.optional(),
+  contextClearedInputTokens: z.number().nonnegative().optional(),
+  contextUsageDiscarded: z.boolean().optional(),
+  contextTruncated: z.boolean().optional(),
+  toolDenialKind: z.string().optional(),
+  restoredFile: z
+    .object({
+      path: z.string(),
+      kind: z.enum(["text", "reference"]),
+      timestamp: z.number(),
+    })
+    .optional(),
+  contextBoundary: z
+    .object({
+      beforeTokens: z.number().nonnegative(),
+      afterTokens: z.number().nonnegative(),
+      reason: z.enum(["automatic", "manual", "reactive"]),
+      groupsPreserved: z.number().int().nonnegative().optional(),
+      totalGroups: z.number().int().nonnegative().optional(),
+      headTruncations: z.number().int().nonnegative().optional(),
+      omissionPasses: z.number().int().nonnegative().optional(),
+      omittedToolResults: z.number().int().nonnegative().optional(),
+      formatRepairs: z.number().int().nonnegative().optional(),
+      secondarySummary: z.boolean().optional(),
+      openingRescue: z.boolean().optional(),
+      freshRequests: z.number().int().nonnegative().optional(),
+      summaryModel: z.string().optional(),
+    })
+    .optional(),
+});
+export type Message = z.infer<typeof messageSchema>;
+export type ToolUse = z.infer<typeof toolUseSchema>;
+export type ToolResult = z.infer<typeof toolResultSchema>;
+export type WireBlock =
+  | Exclude<Message["content"][number], ToolResult>
+  | {
+      type: "tool_result";
+      tool_use_id: string;
+      content: string | ApiToolContent[];
+      is_error?: boolean | undefined;
+    };
+export interface WireMessage {
+  role: Message["role"];
+  content: WireBlock[];
+}
+export interface ToolDefinition {
+  name: string;
+  description: string;
+  input_schema: {
+    type: "object";
+    properties?: Record<string, unknown>;
+    required?: string[];
+    [key: string]: unknown;
+  };
+  /** Set only on a discovered deferred tool; the API loads it through a tool_reference. */
+  defer_loading?: true;
+}
+export interface Usage {
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_input_tokens?: number;
+  cache_read_input_tokens?: number;
+  iterations?: unknown[];
+}
+export interface Completion {
+  content: Array<z.infer<typeof assistantBlockSchema>>;
+  stop_reason: string;
+  usage: Usage;
+  partial?: { cause: StreamFailureCause };
+  model?: string;
+  responseModel?: string;
+  responseId?: string;
+  nativeResponse?: NativeResponseRecording;
+  resumable?: boolean;
+  contextClearedInputTokens?: number;
+}
+export interface CompletionRequest {
+  model: string;
+  system: import("./system-prompt.js").SystemPrompt;
+  messages: Message[];
+  tools: ToolDefinition[];
+  maxTokens: number;
+  useModelTokenDefaults?: boolean;
+  thinking?: ThinkingOptions;
+  /** Current query effort layer; request-only metadata, never a transcript field. */
+  queryEffort?: QueryEffort;
+  resumeIncompleteThinking?: boolean;
+  signal: AbortSignal;
+  onText: (text: string) => void;
+  /** Attempt-local stream observations, before later usage reconciliation mutates retained rows. */
+  onStreamProgress?: (event: ProviderStreamProgress) => void;
+  /** Owns stable identities at actual API row creation, separately from progress sampling. */
+  nativeRecording?: NativeResponseRecordingHost;
+  /** Actual immutable serialized request, observed before transport and attempt accounting. */
+  nativeRequestPrepared?: import("./native-request-capture.js").NativePreparedRequestHost;
+  /** Actual source-stage replay and declaration capture before provider serialization. */
+  nativePromptPreparation?: import("./native-prompt-transport.js").NativePromptTransportHost;
+  /** Replace provisional text for this model round, preserving previous completed rounds. */
+  onTextReset?: (text: string) => void;
+  onThinkingStrip?: (strip: ThinkingStrip) => void;
+  /** Every accepted SSE event, parsed and raw; content_block_stop carries its committed block. */
+  onStreamEvent?: (
+    event: import("./message-stream.js").StreamEvent,
+    raw: unknown,
+    block: AssistantBlock | undefined,
+  ) => void;
+  attemptBudget?: ApiAttemptBudget;
+  disablePromptCaching?: boolean;
+  /** Side queries (WebFetch prompt step) send an explicit sampling temperature; main turns omit it. */
+  temperature?: number;
+}
+export type ProviderStreamProgress =
+  | { type: "response_start" }
+  | { type: "block_start" }
+  | { type: "length"; chars: number }
+  | { type: "thinking_progress"; estimatedTokensDelta: number }
+  | { type: "thinking_signature"; chars: number }
+  | { type: "assistant"; responseId?: string; usage: Usage }
+  | { type: "response_end" };
+export interface Provider {
+  countFileTokens?(request: {
+    model: string;
+    text: string;
+    signal: AbortSignal;
+  }): Promise<number | undefined>;
+  readonly thinkingResumption?: boolean;
+  contextWindowTokens?(model: string): number;
+  contextWindow?(model: string): ContextWindow;
+  outputTokenLimit?(model: string): number;
+  resetRequestLimits?(): void;
+  canUseModel?(model: string): boolean;
+  complete(request: CompletionRequest): Promise<Completion>;
+}
+export type PermissionMode =
+  "default" | "acceptEdits" | "plan" | "bypassPermissions";
+export interface ToolExecutor {
+  definitions: ToolDefinition[];
+  execute(call: ToolUse, signal: AbortSignal): Promise<ToolResult>;
+  beforeModelRequest?(signal: AbortSignal): Promise<void>;
+  prepareCompaction?: PrepareCompaction;
+  setReadContext?(context: ReadToolContext | undefined): void;
+  /** Enabled tools withheld behind ToolSearch; prompt gates see them as available. */
+  deferredToolNames?(): string[];
+}
+
+export type PrepareCompaction = (options: {
+  keptMessages: Message[];
+  signal: AbortSignal;
+  countTokens?: (text: string) => Promise<number | undefined>;
+}) => Promise<{ messages: Message[]; commit(): void }>;
+export type AgentEvent =
+  | { type: "usage"; usage: Usage }
+  | { type: "text"; text: string }
+  | { type: "text_reset"; text: string }
+  | { type: "warning"; message: string }
+  | { type: "thinking_stripped"; strip: ThinkingStrip }
+  | {
+      type: "compaction";
+      stage: "start" | "complete" | "failed" | "skipped";
+      beforeTokens?: number;
+      afterTokens?: number;
+      reason?: string;
+      groupsPreserved?: number;
+      totalGroups?: number;
+      headTruncations?: number;
+      omissionPasses?: number;
+      omittedToolResults?: number;
+      formatRepairs?: number;
+      secondarySummary?: boolean;
+      openingRescue?: boolean;
+      freshRequests?: number;
+      summaryModel?: string;
+    }
+  /** A Messages API request is about to be sent; emitted only when runAgent asks for it. */
+  | { type: "model_request" }
+  /**
+   * One accepted SSE event, as parsed and as received. A content_block_stop
+   * carries the block it committed. Emitted only when runAgent asks for it.
+   */
+  | {
+      type: "stream_event";
+      event: import("./message-stream.js").StreamEvent;
+      raw: unknown;
+      block?: AssistantBlock;
+    }
+  | { type: "assistant"; message: Message; stopReason: string }
+  /** The model request failed for good; emitted only when runAgent asks for it. */
+  | { type: "api_error"; status: number | null }
+  | { type: "tool_start"; tool: ToolUse }
+  | { type: "tool_result"; result: ToolResult };

@@ -1,0 +1,9 @@
+{
+  "list-agents-hint": "list agents you can SendMessage to",
+  "report-findings-hint": "report code-review findings as a structured list",
+  "schedule-wakeup-hint": "self-pace the dynamic /loop: pick a delay before the next tick",
+  "workflow-hint": "orchestrate subagents with deterministic JavaScript workflow",
+  "list-agents-empty": "No reachable agents.",
+  "report-findings-none": "No findings reported.",
+  "wakeup-required": "`delaySeconds` and `reason` are required when `stop` is not true."
+}

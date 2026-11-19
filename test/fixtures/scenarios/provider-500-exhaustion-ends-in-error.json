@@ -1,0 +1,151 @@
+{
+  "schemaVersion": 1,
+  "caseId": "provider-500-exhaustion-ends-in-error",
+  "invariants": ["INV-13", "INV-04"],
+  "description": "500s that echo the key exhaust the retry budget into an error envelope, never success",
+  "provenance": "synthetic, hand-written adversarial case; expectations pinned after observing tau at e6e6c88 and checked against docs/permission-contract.md",
+  "workspace": {
+    "files": {},
+    "symlinks": {}
+  },
+  "args": ["-p", "hello", "--max-retries", "1", "--output-format", "json"],
+  "env": {},
+  "modelScript": [
+    {
+      "kind": "error",
+      "status": 500,
+      "body": {
+        "type": "error",
+        "error": {
+          "type": "api_error",
+          "message": "upstream rejected key ${SENTINEL:API_KEY}"
+        }
+      }
+    },
+    {
+      "kind": "error",
+      "status": 500,
+      "body": {
+        "type": "error",
+        "error": {
+          "type": "api_error",
+          "message": "upstream rejected key ${SENTINEL:API_KEY}"
+        }
+      }
+    }
+  ],
+  "expected": {
+    "exitCode": 1,
+    "requestSequence": [
+      {
+        "path": "/v1/messages?beta=true",
+        "tools": [
+          "Agent",
+          "Bash",
+          "DeferredToolPlaceholder",
+          "Edit",
+          "Glob",
+          "Grep",
+          "ListAgents",
+          "Read",
+          "ReportFindings",
+          "ScheduleWakeup",
+          "Skill",
+          "ToolSearch",
+          "Workflow",
+          "Write"
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "path": "/v1/messages?beta=true",
+        "tools": [
+          "Agent",
+          "Bash",
+          "DeferredToolPlaceholder",
+          "Edit",
+          "Glob",
+          "Grep",
+          "ListAgents",
+          "Read",
+          "ReportFindings",
+          "ScheduleWakeup",
+          "Skill",
+          "ToolSearch",
+          "Workflow",
+          "Write"
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "blocks": [
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              },
+              {
+                "kind": "text"
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "toolResults": [],
+    "filesAbsent": [],
+    "filesPresent": [],
+    "fileContents": {},
+    "absentFromOutputs": ["API_KEY"],
+    "result": {
+      "isError": true,
+      "numTurns": 0
+    }
+  }
+}

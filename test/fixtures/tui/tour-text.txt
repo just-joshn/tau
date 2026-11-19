@@ -1,0 +1,30 @@
+
+ ▐▛███▛█   Claude Code v2.1.326
+▝▜██████▀  Sonnet 4.5 · API Usage Billing
+ ▝▝   ▝▝   /private/tmp/tau-differential-x0fuy9gs/work
+
+
+❯ TAU_PTY_TEXT
+
+⏺ TAU_PTY_TEXT_REPLY mock done
+
+✻ Cooked for 0s · done 9:15 PM
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏸ manual mode on · ? for shortcuts · ← for agents

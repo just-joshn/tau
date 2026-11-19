@@ -1,0 +1,135 @@
+# Nightly determinism, runtime canary and benchmark (STRATEGY.md §2 T5, T7, §9).
+# This is an offline sweep, not a live model evaluation; see live-eval.yml.
+name: nightly
+
+on:
+  schedule:
+    - cron: "17 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sweep:
+    name: seeded sweep (seed ${{ matrix.seed }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        seed: [17, 101, 419]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+      - run: bun ci
+      - name: Install ripgrep, which the Grep tool requires
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then HOMEBREW_NO_AUTO_UPDATE=1 brew install ripgrep
+          else sudo apt-get update -q && sudo apt-get install -y -q ripgrep; fi
+      - name: Random order, five reruns per file
+        env:
+          SEED: ${{ matrix.seed }}
+        run: |
+          echo "Reproduce locally with: bun test --randomize --seed ${SEED} --rerun-each 5"
+          bun test --randomize --seed "${SEED}" --rerun-each 5
+
+  parallel:
+    name: parallel isolated run
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+      - run: bun ci
+      - name: Install ripgrep, which the Grep tool requires
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then HOMEBREW_NO_AUTO_UPDATE=1 brew install ripgrep
+          else sudo apt-get update -q && sudo apt-get install -y -q ripgrep; fi
+      - run: bun test --parallel
+
+  mutation:
+    name: permission guard mutation check
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+      - run: bun ci
+      - name: Install ripgrep, which the Grep tool requires
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then HOMEBREW_NO_AUTO_UPDATE=1 brew install ripgrep
+          else sudo apt-get update -q && sudo apt-get install -y -q ripgrep; fi
+      # STRATEGY.md section 8: every surviving permission guard mutant is
+      # either killed by test/security or recorded in equivalent.ts.
+      - run: bun run test:mutation -- --concurrency 4
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: mutation-results
+          path: mutation-results/
+          if-no-files-found: warn
+          retention-days: 30
+
+  canary:
+    name: Bun canary (latest; NON-BLOCKING until validated)
+    # A red canary is a signal to evaluate before advancing .bun-version, not a
+    # failed nightly. Remove continue-on-error only after the canary is validated.
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Record canary runtime
+        run: echo "pinned $(cat .bun-version), canary $(bun --version)"
+      - run: bun ci
+      - name: Install ripgrep, which the Grep tool requires
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then HOMEBREW_NO_AUTO_UPDATE=1 brew install ripgrep
+          else sudo apt-get update -q && sudo apt-get install -y -q ripgrep; fi
+      - run: bun run typecheck
+      - run: bun test --parallel
+
+  bench:
+    name: CLI benchmark
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+      - run: bun ci
+      # Hosted runners differ run to run, so results are recorded, not gated.
+      # Gate with --baseline only against a baseline from the same runner.
+      - run: bun run bench --runs 20 --warmup 3 --out bench-results/cli.json
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: bench-results
+          path: bench-results/
+          if-no-files-found: warn
+          retention-days: 30

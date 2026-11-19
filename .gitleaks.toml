@@ -1,0 +1,9 @@
+title = "tau"
+
+# Full-history scans trip on intentional fixtures and recovered bundle names.
+[allowlist]
+description = "TLS test keys and recovered Claude Code chunk filenames"
+paths = [
+  '''test/fixtures/web-tls/.*''',
+  '''scripts/builtin-skills/generate-assets\.ts''',
+]

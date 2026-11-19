@@ -1,0 +1,69 @@
+#!/usr/bin/env python3
+"""Controlled original smoke runs. Requires live passing isolation canaries."""
+import argparse
+import json
+from pathlib import Path
+import subprocess
+from isolation import REPO, TARGET_SHA256, verified_isolation
+from mock_api import MODEL, SCENARIOS, RECOVERY_SCENARIO, MockState
+from scenarios_catalog import CATALOG_SCENARIO, setup as setup_catalog
+
+PINNED_TARGET = Path("/Users/josh-desktop/.local/share/claude/versions/2.1.326")
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("scenario", choices=["version", "help", *SCENARIOS, RECOVERY_SCENARIO, CATALOG_SCENARIO])
+    parser.add_argument("--artifacts", type=Path, default=REPO / "artifacts/differential-pass")
+    parser.add_argument("--ordinary", action="store_true", help="Exercise ordinary startup with empty disposable settings instead of --bare")
+    parser.add_argument("--sse-framing", choices=["named", "data-only"], default="named")
+    parser.add_argument("--output-format", choices=["json", "stream-json", "text"], default="json")
+    parser.add_argument("--verbose", action="store_true", help="Pass --verbose (required by the original for stream-json print output)")
+    parser.add_argument("--all-tools", action="store_true", help="Omit --tools so the request advertises the full default catalog")
+    parser.add_argument("--label", default="", help="Suffix for artifact file names")
+    parser.add_argument("--stream-input", type=Path, help="NDJSON file fed on stdin with --input-format stream-json; replaces the prompt")
+    parser.add_argument("--extra", action="append", default=[], help="Additional original CLI argument (repeatable)")
+    args = parser.parse_args()
+    artifact_dir = args.artifacts.resolve()
+    application = args.scenario if args.scenario not in ["version", "help"] else "text"
+    state = MockState(application, args.sse_framing)
+    with verified_isolation(artifact_dir, state.handler()) as isolation:
+        target = isolation.copy_target(PINNED_TARGET)
+        if args.scenario == "version": arguments = ["--version"]
+        elif args.scenario == "help": arguments = ["--help"]
+        elif args.scenario == RECOVERY_SCENARIO:
+            (isolation.root / "work" / "a.txt").write_text("alpha\n")
+            arguments = ["--print", "OWNED_TRANSPORT_RECOVERY_PROMPT", "--model", MODEL,
+                         "--output-format", "json", "--no-session-persistence", "--dangerously-skip-permissions",
+                         "--tools", "Read,Edit,Write"]
+        elif args.scenario == CATALOG_SCENARIO:
+            # Ordinary startup, full default catalog: discovery must go through ToolSearch.
+            state.work = isolation.root / "work"; setup_catalog(state.work)
+            arguments = ["--print", "TAU_DIFFERENTIAL_CATALOG", "--model", MODEL, "--output-format", "stream-json", "--verbose",
+                         "--no-session-persistence", "--dangerously-skip-permissions"]
+        else:
+            (isolation.root / "work" / "a.txt").write_text("alpha\n")
+            arguments = ([] if args.ordinary else ["--bare"]) + ["--print", "TAU_DIFFERENTIAL_"+args.scenario.upper(), "--model", MODEL,
+                         "--output-format", args.output_format, "--no-session-persistence", "--dangerously-skip-permissions"] + \
+                        ([] if args.all_tools else ["--tools", "Read,Edit,Write"]) + (["--verbose"] if args.verbose else [])
+        arguments += args.extra
+        command = [str(target), *arguments]
+        if args.stream_input:
+            arguments[arguments.index("--print") + 1:arguments.index("--print") + 2] = []
+            arguments += ["--input-format", "stream-json"]
+            feed = isolation.root / "work" / "stream-input.ndjson"
+            feed.write_bytes(args.stream_input.read_bytes())
+            command = ["/bin/sh", "-c", 'exec "$0" "$@" < "' + str(feed) + '"', str(target), *arguments]
+        result = isolation.sandbox(command, timeout=20)
+        record = {"scenario": args.scenario, "sse_framing": args.sse_framing, "mode": "ordinary" if args.ordinary else "bare", "target_sha256": TARGET_SHA256, "original_executed": True,
+                  "isolation": isolation.report, "arguments": arguments, "result": result, "requests": state.requests,
+                  "final_file": (isolation.root / "work" / ("nb.ipynb" if args.scenario == CATALOG_SCENARIO else "a.txt")).read_text() if args.scenario not in ["version", "help"] else None}
+        (artifact_dir / ("original-" + args.scenario + args.label + ".json")).write_text(json.dumps(record, indent=2) + "\n")
+        (artifact_dir / ("original-" + args.scenario + args.label + ".stdout.txt")).write_text(result["stdout"])
+        (artifact_dir / ("original-" + args.scenario + args.label + ".stderr.txt")).write_text(result["stderr"])
+        logs = subprocess.run(["/usr/bin/log", "show", "--last", "2m", "--style", "compact", "--predicate",
+                               'eventMessage CONTAINS "' + isolation.tag + '"'], capture_output=True, text=True, timeout=10)
+        (artifact_dir / ("original-" + args.scenario + args.label + ".denials.txt")).write_text(logs.stdout)
+        print(json.dumps({"scenario": args.scenario, "isolation_passed": isolation.verified, "exit_code": result["exit_code"], "requests": len(state.requests), "timed_out": result["timed_out"], "stdout_tail": result["stdout"][-800:], "stderr_tail": result["stderr"][-800:]}))
+
+if __name__ == "__main__": main()
