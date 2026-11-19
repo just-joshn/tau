@@ -186,7 +186,7 @@ test("line editing keys cover every branch", () => {
 const dialog = {
   options: [
     { label: "Yes", choice: { kind: "accept-once" } },
-    { label: "Session", choice: { kind: "accept-session" } },
+    { label: "Session", choice: { kind: "accept-session", updates: [] } },
     { label: "No", choice: { kind: "reject" } },
   ],
 } as unknown as PermissionDialog;
@@ -199,7 +199,7 @@ const perm = (
 
 test("permission dialog: digits, enter, escape, shift-tab, arrows and others", () => {
   expect(update(perm(), k("text", "2"), 0).effects).toEqual([
-    { kind: "permission", choice: { kind: "accept-session" } },
+    { kind: "permission", choice: { kind: "accept-session", updates: [] } },
   ]);
   expect(update(perm(), k("text", "9"), 0).effects).toEqual([]);
   expect(update(perm(), k("text", "x"), 0).effects).toEqual([]);
@@ -212,7 +212,7 @@ test("permission dialog: digits, enter, escape, shift-tab, arrows and others", (
   ]);
   expect(update(perm(), k("ctrl-c"), 0).effects).toHaveLength(1);
   expect(update(perm(), k("shift-tab"), 0).effects).toEqual([
-    { kind: "permission", choice: { kind: "accept-session" } },
+    { kind: "permission", choice: { kind: "accept-session", updates: [] } },
   ]);
   const noSession = {
     ...perm(),
@@ -221,7 +221,7 @@ test("permission dialog: digits, enter, escape, shift-tab, arrows and others", (
       dialog: { options: [dialog.options[0]!] },
       focus: 0,
     },
-  } as AppState;
+  } as unknown as AppState;
   expect(update(noSession, k("shift-tab"), 0).effects).toEqual([]);
   const wrap = update(perm(), k("up"), 0).state.view;
   expect(wrap).toMatchObject({ focus: 2 });
