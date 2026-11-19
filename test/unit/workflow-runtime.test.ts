@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "bun:test";
 import { runWorkflowBody } from "../../src/workflow-runtime.js";
 
 const meta = "export const meta = { name: 'x', description: 'x' }\n";

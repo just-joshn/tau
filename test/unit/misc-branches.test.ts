@@ -65,7 +65,9 @@ test("workflow validate covers script limits, files and sources", async () => {
   const t = workflowTool();
   const v = (input: WorkflowInput) => t.validate?.(input);
   expect(await v({})).toBe("Must provide script, name, or scriptPath");
-  expect(await v({ script: "x" })).toBeUndefined();
+  expect(await v({ script: "x" })).toContain(
+    "must be the FIRST statement",
+  );
   const dir = await mkdtemp(path.join(os.tmpdir(), "wf-"));
   try {
     const missing = path.join(dir, "missing.js");
@@ -85,7 +87,10 @@ test("workflow validate covers script limits, files and sources", async () => {
     await writeFile(bad, "x\u001b[0m");
     expect(await v({ scriptPath: bad })).toContain("control character");
     const ok = path.join(dir, "ok.js");
-    await writeFile(ok, "export const meta = {}\n");
+    await writeFile(
+      ok,
+      "export const meta = { name: 'ok', description: 'ok' }\nreturn 1\n",
+    );
     expect(await v({ scriptPath: ok })).toBeUndefined();
     const unreadable = path.join(dir, "locked.js");
     await writeFile(unreadable, "x", { mode: 0o000 });

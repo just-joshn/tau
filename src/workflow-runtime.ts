@@ -1,7 +1,7 @@
 /**
  * Return-only Workflow executor. Compiles the meta-stripped body as an async
- * function (chunk-9fnnyw59.js `es()`); agent/parallel/pipeline/phase/log are
- * stubs that throw, so scripts needing them fail instead of faking success.
+ * function (chunk-9fnnyw59.js `es()`). agent/parallel/pipeline/phase/log throw
+ * so scripts that need them fail instead of succeeding silently.
  */
 import { parseWorkflowScript } from "./workflow-tool.js";
 
@@ -13,16 +13,25 @@ export interface WorkflowRunOptions {
   args?: unknown;
 }
 
-const HOST_FUNCTIONS = ["agent", "parallel", "pipeline", "phase", "log"];
+const HOST_FUNCTIONS = ["agent", "parallel", "pipeline", "phase", "log"] as const;
 
-function unavailable(name: string) {
+type HostFn = () => never;
+type BodyFactory = (args: unknown, ...hosts: HostFn[]) => unknown;
+
+function unavailable(name: string): HostFn {
   return () => {
     throw new Error(`${name}() is not available in this build`);
   };
 }
 
+function isBodyFactory(value: unknown): value is BodyFactory {
+  return typeof value === "function";
+}
+
 function message(error: unknown): string {
-  return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  return error instanceof Error
+    ? `${error.name}: ${error.message}`
+    : String(error);
 }
 
 export async function runWorkflowBody(
@@ -35,16 +44,26 @@ export async function runWorkflowBody(
   if ("error" in parsed)
     return { kind: "failed", error: parsed.error, durationMs: elapsed() };
   try {
-    const args =
-      options.args === undefined
-        ? undefined
-        : JSON.parse(JSON.stringify(options.args));
-    const body = new Function(
+    let args: unknown;
+    if (options.args === undefined) {
+      args = undefined;
+    } else {
+      const cloned: unknown = JSON.parse(JSON.stringify(options.args));
+      args = cloned;
+    }
+    const compiled: unknown = new Function(
       "args",
       ...HOST_FUNCTIONS,
       `return (async () => {'use strict';\n${parsed.scriptBody}\n})();`,
     );
-    const result = await body(args, ...HOST_FUNCTIONS.map(unavailable));
+    if (!isBodyFactory(compiled))
+      return {
+        kind: "failed",
+        error: "Failed to compile workflow body",
+        durationMs: elapsed(),
+      };
+    const hosts = HOST_FUNCTIONS.map((name) => unavailable(name));
+    const result: unknown = await Promise.resolve(compiled(args, ...hosts));
     return { kind: "completed", result, durationMs: elapsed() };
   } catch (error) {
     return { kind: "failed", error: message(error), durationMs: elapsed() };
