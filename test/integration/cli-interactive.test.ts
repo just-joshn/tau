@@ -662,20 +662,35 @@ describe("turn display", () => {
     expect(provider.requests.length).toBe(2);
   });
 
-  test("Ctrl-C during a turn interrupts it and the next prompt still works", async () => {
-    const provider = await startMockProvider([
-      { kind: "hang" },
-      said("second answer"),
-    ]);
-    const tau = startPty({ provider });
-    await submit(tau, "first question");
-    await tau.until("esc to interrupt");
-    tau.write("\x03");
-    await tau.until(/⎿\s+Interrupted · What should Claude do instead\?/);
-    await submit(tau, "second question");
-    await tau.until("⏺ second answer", 20_000);
-    await exit(tau);
-  }, { timeout: 45_000 });
+  test(
+    "Ctrl-C during a turn interrupts it and the next prompt still works",
+    async () => {
+      // Match INV-11: wait until the hang is live, interrupt, return to IDLE,
+      // then assert the script still has the second answer for the next turn.
+      let firstRequest!: () => void;
+      const requested = new Promise<void>((resolve) => {
+        firstRequest = resolve;
+      });
+      const provider = await startMockProvider((_body, index) => {
+        if (index > 0) return said("second answer");
+        firstRequest();
+        return { kind: "hang" };
+      });
+      const tau = startPty({ provider });
+      await submit(tau, "first question");
+      await requested;
+      await tau.until("esc to interrupt");
+      tau.write("\x03");
+      await tau.until(/⎿\s+Interrupted · What should Claude do instead\?/);
+      await tau.until(IDLE);
+      expect(provider.requests.length).toBe(1);
+      await submit(tau, "second question");
+      await tau.until("⏺ second answer");
+      await exit(tau);
+      expect(provider.requests.length).toBe(2);
+    },
+    { timeout: 45_000 },
+  );
 
   test("a context rejection compacts the conversation and reports the token change", async () => {
     const provider = await startMockProvider([

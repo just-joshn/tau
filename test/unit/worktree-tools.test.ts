@@ -97,41 +97,45 @@ function repository() {
   };
 }
 
-test("a worktree with a commit and a file is refused, then removed when the user confirms", async () => {
-  const repo = repository();
-  expect(await repo.enter({})).toStartWith(
-    `Created worktree at “${repo.root}/.claude/worktrees/random-name” on branch “worktree-random-name”.`,
-  );
-  const tree = repo.shell.cwd;
-  execFileSync(
-    "git",
-    [
-      "-c",
-      "user.email=t@t",
-      "-c",
-      "user.name=t",
-      "commit",
-      "-q",
-      "--allow-empty",
-      "-m",
-      "work",
-    ],
-    { cwd: tree },
-  );
-  writeFileSync(path.join(tree, "scratch.txt"), "x");
-  expect(await repo.validateExit({ action: "remove" })).toBe(
-    'Worktree has 1 uncommitted file and 1 commit on “worktree-random-name”. Removing will discard this work permanently. Confirm with the user, then re-invoke with discard_changes: true — or use action: "keep" to preserve the worktree.',
-  );
-  expect(
-    await repo.validateExit({ action: "remove", discard_changes: true }),
-  ).toBeUndefined();
-  expect(await repo.exit({ action: "remove", discard_changes: true })).toBe(
-    `Exited and removed worktree at “${tree}”. Discarded 1 commit and 1 uncommitted file. Session is now back in “${repo.root}”.`,
-  );
-  expect(repo.shell).toMatchObject({ cwd: repo.root, root: repo.root });
-  expect(repo.git("branch", "--list", "worktree-*")).toBe("");
-  expect(repo.tools.current()).toBeUndefined();
-}, { timeout: 30_000 });
+test(
+  "a worktree with a commit and a file is refused, then removed when the user confirms",
+  async () => {
+    const repo = repository();
+    expect(await repo.enter({})).toStartWith(
+      `Created worktree at “${repo.root}/.claude/worktrees/random-name” on branch “worktree-random-name”.`,
+    );
+    const tree = repo.shell.cwd;
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.email=t@t",
+        "-c",
+        "user.name=t",
+        "commit",
+        "-q",
+        "--allow-empty",
+        "-m",
+        "work",
+      ],
+      { cwd: tree },
+    );
+    writeFileSync(path.join(tree, "scratch.txt"), "x");
+    expect(await repo.validateExit({ action: "remove" })).toBe(
+      'Worktree has 1 uncommitted file and 1 commit on “worktree-random-name”. Removing will discard this work permanently. Confirm with the user, then re-invoke with discard_changes: true — or use action: "keep" to preserve the worktree.',
+    );
+    expect(
+      await repo.validateExit({ action: "remove", discard_changes: true }),
+    ).toBeUndefined();
+    expect(await repo.exit({ action: "remove", discard_changes: true })).toBe(
+      `Exited and removed worktree at “${tree}”. Discarded 1 commit and 1 uncommitted file. Session is now back in “${repo.root}”.`,
+    );
+    expect(repo.shell).toMatchObject({ cwd: repo.root, root: repo.root });
+    expect(repo.git("branch", "--list", "worktree-*")).toBe("");
+    expect(repo.tools.current()).toBeUndefined();
+  },
+  { timeout: 30_000 },
+);
 
 test("a running task in the worktree blocks removal; a second create is refused while one is active", async () => {
   const repo = repository();

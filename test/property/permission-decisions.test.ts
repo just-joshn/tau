@@ -177,52 +177,60 @@ async function decide(
   };
 }
 
-test("INV-01 a matching deny never yields allow and rule order never changes a decision", async () => {
-  const space = await workspace();
-  let denied = 0;
-  let executed = 0;
-  await forAll(
-    "permission decisions",
-    CASES,
-    (rng) => {
-      const input = generate(rng);
-      return { input, permuted: permute(rng, input) };
-    },
-    async ({ input, permuted }, index) => {
-      const outcome = await decide(space, input, `c${index}`);
-      const deny =
-        input.disallowedTools.includes(input.call) ||
-        input.sourcedRules.some(
-          (rule) =>
-            rule.behavior === "deny" && namesTool(rule.rule, input.call),
+test(
+  "INV-01 a matching deny never yields allow and rule order never changes a decision",
+  async () => {
+    const space = await workspace();
+    let denied = 0;
+    let executed = 0;
+    await forAll(
+      "permission decisions",
+      CASES,
+      (rng) => {
+        const input = generate(rng);
+        return { input, permuted: permute(rng, input) };
+      },
+      async ({ input, permuted }, index) => {
+        const outcome = await decide(space, input, `c${index}`);
+        const deny =
+          input.disallowedTools.includes(input.call) ||
+          input.sourcedRules.some(
+            (rule) =>
+              rule.behavior === "deny" && namesTool(rule.rule, input.call),
+          );
+        if (deny) {
+          denied++;
+          assert.deepEqual(outcome, {
+            asked: false,
+            executed: false,
+            isError: true,
+            permissionDenied: true,
+          });
+        }
+        if (
+          input.mode === "plan" &&
+          input.call !== "Read" &&
+          input.call !== "Glob"
+        )
+          assert.equal(
+            outcome.executed,
+            false,
+            "plan mode ran a mutating tool",
+          );
+        if (outcome.executed) executed++;
+        // An approval prompt answered "no" can never run the tool.
+        if (outcome.asked && !input.approves)
+          assert.equal(outcome.executed, false);
+        assert.deepEqual(
+          await decide(space, permuted, `p${index}`),
+          outcome,
+          "permuting the rule lists changed the decision",
         );
-      if (deny) {
-        denied++;
-        assert.deepEqual(outcome, {
-          asked: false,
-          executed: false,
-          isError: true,
-          permissionDenied: true,
-        });
-      }
-      if (
-        input.mode === "plan" &&
-        input.call !== "Read" &&
-        input.call !== "Glob"
-      )
-        assert.equal(outcome.executed, false, "plan mode ran a mutating tool");
-      if (outcome.executed) executed++;
-      // An approval prompt answered "no" can never run the tool.
-      if (outcome.asked && !input.approves)
-        assert.equal(outcome.executed, false);
-      assert.deepEqual(
-        await decide(space, permuted, `p${index}`),
-        outcome,
-        "permuting the rule lists changed the decision",
-      );
-    },
-  );
-  // The generator must reach both sides of the decision.
-  assert.ok(denied > CASES / 10, `only ${denied} deny cases`);
-  assert.ok(executed > CASES / 10, `only ${executed} executed cases`);
-}, { timeout: 60_000 });
+      },
+    );
+    // The generator must reach both sides of the decision.
+    assert.ok(denied > CASES / 10, `only ${denied} deny cases`);
+    assert.ok(executed > CASES / 10, `only ${executed} executed cases`);
+  },
+  { timeout: 60_000 },
+);
