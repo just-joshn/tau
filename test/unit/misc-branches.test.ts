@@ -11,8 +11,16 @@ test("slashCommand resolves names and aliases and rejects unknown input", () => 
   expect(slashCommand("clear")).toBe("clear");
 });
 
-test("goodbye falls back to a farewell string", () => {
-  expect(goodbye().length).toBeGreaterThan(0);
+test("goodbye falls back when the random index lands outside the list", () => {
+  const original = Math.random;
+  try {
+    Math.random = () => 0.999999;
+    expect(goodbye()).toBe("Catch you later!");
+    Math.random = () => 1;
+    expect(goodbye()).toBe("Goodbye!");
+  } finally {
+    Math.random = original;
+  }
 });
 
 const stamp = (content: string) =>
