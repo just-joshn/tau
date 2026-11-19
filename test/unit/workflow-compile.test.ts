@@ -27,11 +27,6 @@ test("script without meta is checked as-is", () => {
 test("validate fails broken inline script", async () => {
   const tool = workflowTool();
   const input = { script: `${meta}let = = 1` };
-  assert.ok(
-    (await tool.validate?.(input, {} as never))?.startsWith("SyntaxError: "),
-  );
-  assert.equal(
-    await tool.validate?.({ script: `${meta}await 1;` }, {} as never),
-    undefined,
-  );
+  assert.ok((await tool.validate?.(input))?.startsWith("SyntaxError: "));
+  assert.equal(await tool.validate?.({ script: `${meta}await 1;` }), undefined);
 });
