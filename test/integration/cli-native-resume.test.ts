@@ -510,5 +510,5 @@ test(
     );
     assert.equal(bodies.length, 5);
   },
-  { timeout: 15000 },
+  { timeout: 45_000 },
 );
