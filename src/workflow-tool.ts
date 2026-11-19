@@ -170,9 +170,12 @@ function parseMeta(text: string): { name: string } | undefined {
     .replace(/\b(?:true|false|null)\b/g, "");
   if (/[A-Za-z_$]|\(|`/.test(bare)) return undefined;
   const field = (key: string): string | undefined =>
-    new RegExp(`(?:^|[{,\\s])${key}\\s*:\\s*(?:"((?:[^"\\\\]|\\\\.)*)"|'((?:[^'\\\\]|\\\\.)*)')`).exec(
-      literal,
-    )?.slice(1, 3).find((part) => part !== undefined);
+    new RegExp(
+      `(?:^|[{,\\s])${key}\\s*:\\s*(?:"((?:[^"\\\\]|\\\\.)*)"|'((?:[^'\\\\]|\\\\.)*)')`,
+    )
+      .exec(literal)
+      ?.slice(1, 3)
+      .find((part) => part !== undefined);
   const name = field("name");
   if (!name || field("description") === undefined) return undefined;
   return { name };
@@ -233,8 +236,7 @@ export async function resolveWorkflowSource(
     }
     return { kind: "named", text: input.script ?? hit.text, path: hit.path };
   }
-  if (input.script !== undefined)
-    return { kind: "inline", text: input.script };
+  if (input.script !== undefined) return { kind: "inline", text: input.script };
   return { error: "Must provide script, name, or scriptPath" };
 }
 
