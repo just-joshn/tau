@@ -347,7 +347,7 @@ export function createTools(options: {
     canonicalPath: string;
     signal: AbortSignal;
   }) => Promise<boolean>;
-  /** Source stampNewMemoryContent: rewrite auto-memory .md bodies before Write. */
+  /** Source stampNewMemoryContent: rewrite auto-memory .md bodies before Write and Edit. */
   rewriteMemoryContent?: (request: {
     path: string;
     content: string;
@@ -1309,10 +1309,14 @@ export function createTools(options: {
             if (previous !== null) readState.assertCurrent(file, previous);
             const original =
               previous === null ? undefined : decodeTextFile(previous);
-            const updated = encodeTextFile(
-              applyEdit(original?.text ?? "", input),
-              original,
-            );
+            const edited = applyEdit(original?.text ?? "", input);
+            const writtenContent =
+              options.rewriteMemoryContent?.({
+                path: file,
+                content: edited,
+                previous: original?.text ?? null,
+              }) ?? edited;
+            const updated = encodeTextFile(writtenContent, original);
             await mkdir(path.dirname(file), { recursive: true });
             const mtimeMs = await writeAtomic(
               file,

@@ -102,6 +102,6 @@ Each summary's `checks` must be all true. The index block's wrapper differs by d
 - The working-copy key (`canonicalWcRoot`) and the retry read after a failed sync (`Fvn`).
 - `CLAUDE_CODE_IGNORE_PERSISTED_TRUST` is not tied to non-interactive runs, as `pre()` ties it.
 
-## Write stamp
+## Provenance stamp
 
-New `.md` Writes into the memory folder run `stampNewMemoryContent` (`src/memory-stamp.ts`): `node_type: memory`, `originSessionId`, and `modified` are added when frontmatter is present and `originSessionId` is absent. Index files without frontmatter are unchanged.
+Write and Edit both send new auto-memory `.md` text through `rewriteMemoryContent` before they store the file. `stampNewMemoryContent` (`src/memory-stamp.ts`) adds `node_type: memory`, `originSessionId`, and `modified` when frontmatter is present and `originSessionId` is absent. Edit passes the previous text, or null when `old_string` is empty and the file is missing. Index files without frontmatter are unchanged.
