@@ -28,6 +28,7 @@
     "eval:compare": "bun scripts/live-eval/compare.ts"
   },
   "dependencies": {
+    "acorn": "8.19.0",
     "ignore": "7.0.16",
     "marked": "18.2.1",
     "picomatch": "4.0.7",

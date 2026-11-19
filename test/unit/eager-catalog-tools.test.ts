@@ -43,7 +43,6 @@ import {
 } from "../../src/tool-search.js";
 import type { ToolDefinition, ToolUse } from "../../src/types.js";
 import {
-  WORKFLOW_NOT_LAUNCHED,
   WORKFLOW_REVIEW_PROMPT,
   WORKFLOW_SEARCH_HINT,
   WORKFLOW_TOOL,
@@ -273,7 +272,7 @@ test("Workflow rejects a missing source and does not launch a script", async () 
     },
   );
   assert.equal(prompt, WORKFLOW_REVIEW_PROMPT);
-  assert.equal(reviewed.content, WORKFLOW_NOT_LAUNCHED);
+  assert.match(String(reviewed.content), /"kind":"completed"/);
 
   const named = await call(bindGuardedTool(workflowTool(), host()), {
     name: "review-changes",
@@ -293,8 +292,8 @@ test("Workflow rejects a missing source and does not launch a script", async () 
     script:
       "export const meta = { name: 'review', description: 'Review' }\nreturn { ok: true }",
   });
-  assert.equal(launched.is_error, true);
-  assert.equal(launched.content, WORKFLOW_NOT_LAUNCHED);
+  assert.notEqual(launched.is_error, true);
+  assert.match(String(launched.content), /"result":\{"ok":true\}/);
 
   const scriptPath = join(directory, "flow.js");
   await writeFile(
@@ -305,7 +304,7 @@ test("Workflow rejects a missing source and does not launch a script", async () 
     scriptPath,
     name: "ignored-because-path-wins",
   });
-  assert.equal(fromFile.content, WORKFLOW_NOT_LAUNCHED);
+  assert.match(String(fromFile.content), /"kind":"completed"/);
 });
 
 test("Workflow resolves named files under the workflows dir", async () => {
@@ -327,14 +326,21 @@ test("Workflow resolves named files under the workflows dir", async () => {
   const tool = () =>
     bindGuardedTool(workflowTool({ workflowsDir: dir }), host());
   const ok = await call(tool(), { name: "alpha" });
-  assert.equal(ok.content, WORKFLOW_NOT_LAUNCHED);
+  assert.match(String(ok.content), /"kind":"completed"/);
   const wrong = await call(tool(), { name: "zeta" });
   assert.match(
     String(wrong.content),
     /Workflow "zeta" not found\. Available: alpha, beta/,
   );
   const direct = join(root, "direct.js");
-  await writeFile(direct, "return 2");
+  await writeFile(
+    direct,
+    "export const meta = { name: 'direct', description: 'd' }\nreturn 2",
+  );
+  const bare = join(root, "bare.js");
+  await writeFile(bare, "return 2");
+  const bareResult = await call(tool(), { scriptPath: bare });
+  assert.match(String(bareResult.content), /must be the FIRST statement/);
   const winner = await call(tool(), { name: "zeta", scriptPath: direct });
-  assert.equal(winner.content, WORKFLOW_NOT_LAUNCHED);
+  assert.match(String(winner.content), /"kind":"completed"/);
 });
