@@ -16,8 +16,8 @@ const base = (bypass = false): AppState =>
       ],
     },
   );
-const k = (kind: string, text?: string): Key =>
-  (text === undefined ? { kind } : { kind, text }) as Key;
+const k = (kind: Key["kind"], text = ""): Key =>
+  kind === "text" || kind === "paste" ? { kind, text } : { kind };
 const withText = (text: string, cursor = text.length): AppState => ({
   ...base(),
   editor: { text, cursor },
@@ -183,13 +183,15 @@ test("line editing keys cover every branch", () => {
   expect(update(withText("abc"), k("ctrl-d"), 0).state.editor.text).toBe("abc");
 });
 
-const dialog = {
+const dialog: PermissionDialog = {
+  body: "b",
+  question: "q",
   options: [
     { label: "Yes", choice: { kind: "accept-once" } },
     { label: "Session", choice: { kind: "accept-session", updates: [] } },
     { label: "No", choice: { kind: "reject" } },
   ],
-} as unknown as PermissionDialog;
+};
 const perm = (
   extra: Partial<Extract<View, { kind: "permission" }>> = {},
 ): AppState => ({
@@ -214,14 +216,16 @@ test("permission dialog: digits, enter, escape, shift-tab, arrows and others", (
   expect(update(perm(), k("shift-tab"), 0).effects).toEqual([
     { kind: "permission", choice: { kind: "accept-session", updates: [] } },
   ]);
-  const noSession = {
+  const first = dialog.options[0];
+  if (first === undefined) throw new Error("no option");
+  const noSession: AppState = {
     ...perm(),
     view: {
       kind: "permission",
-      dialog: { options: [dialog.options[0]!] },
+      dialog: { ...dialog, options: [first] },
       focus: 0,
     },
-  } as unknown as AppState;
+  };
   expect(update(noSession, k("shift-tab"), 0).effects).toEqual([]);
   const wrap = update(perm(), k("up"), 0).state.view;
   expect(wrap).toMatchObject({ focus: 2 });
@@ -251,7 +255,8 @@ test("permission amend mode types feedback, folds newline, rejects with it", () 
   expect(update(perm({ amend: "a" }), k("ctrl-c"), 0).effects).toEqual([
     { kind: "permission", choice: { kind: "reject" } },
   ]);
-  for (const kind of ["escape", "tab"])
+  const dismissing: Key["kind"][] = ["escape", "tab"];
+  for (const kind of dismissing)
     expect(update(perm({ amend: "a" }), k(kind), 0).state.view).toMatchObject({
       amend: undefined,
     });
@@ -278,7 +283,8 @@ const modelView = (focus = 0): AppState => ({
 });
 
 test("help and status panes close or cycle tabs", () => {
-  for (const key of ["escape", "ctrl-c"]) {
+  const closers: Key["kind"][] = ["escape", "ctrl-c"];
+  for (const key of closers) {
     expect(update(help, k(key), 0).effects).toEqual([{ kind: "dismiss" }]);
     expect(update(status, k(key), 0).effects).toEqual([{ kind: "dismiss" }]);
   }

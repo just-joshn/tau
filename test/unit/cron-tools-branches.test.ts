@@ -15,8 +15,19 @@ import {
   createCronTools,
   formatCronCreateResult,
   formatCronList,
+  type CronCreateInput,
   type CronJob,
 } from "../../src/cron-tools.js";
+import type { ToolUse } from "../../src/types.js";
+
+async function rejection(promise: Promise<unknown>): Promise<string> {
+  try {
+    await promise;
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  return "";
+}
 
 let root = "";
 beforeEach(async () => {
@@ -120,18 +131,21 @@ test("disk tasks keep every optional field and drop invalid rows", async () => {
   // Removing one rewrites the file with the full record preserved.
   const s = store();
   expect(await s.remove("min")).toEqual({ ok: true });
-  const rewritten = JSON.parse(await readFile(tasksPath(), "utf8"));
-  expect(rewritten.tasks).toHaveLength(1);
-  expect(rewritten.tasks[0]).toMatchObject({
-    id: "full",
-    lastFiredAt: 2,
-    permanent: true,
-    createdByPid: 9,
-    createdByProcStart: "ps",
-    createdInProject: "/x",
-    plugin: "pl",
-    createdBySessionId: "s",
-    recurring: true,
+  const rewritten: unknown = JSON.parse(await readFile(tasksPath(), "utf8"));
+  expect(rewritten).toMatchObject({
+    tasks: [
+      {
+        id: "full",
+        lastFiredAt: 2,
+        permanent: true,
+        createdByPid: 9,
+        createdByProcStart: "ps",
+        createdInProject: "/x",
+        plugin: "pl",
+        createdBySessionId: "s",
+        recurring: true,
+      },
+    ],
   });
 });
 
@@ -179,7 +193,7 @@ test("a symlinked tasks file or directory is unreadable and never written throug
   await mkdir(join(root, "elsewhere"));
   await rm(join(root, ".claude"), { recursive: true });
   await symlink(join(root, "elsewhere"), join(root, ".claude"));
-  await expect(store().create({ ...base, durable: true })).rejects.toThrow(
+  expect(await rejection(store().create({ ...base, durable: true }))).toMatch(
     /symlink/,
   );
   await rm(join(root, ".claude"));
@@ -187,13 +201,15 @@ test("a symlinked tasks file or directory is unreadable and never written throug
   await symlink(join(root, "real.json"), tasksPath());
   // Reading a symlink makes the list unreadable, so a durable create has no
   // existing jobs and replaces nothing; writing refuses to replace the link.
-  await expect(store().create({ ...base, durable: true })).rejects.toThrow(
+  expect(await rejection(store().create({ ...base, durable: true }))).toMatch(
     /symlinked scheduled tasks file/,
   );
   // A non-ENOENT lstat failure (ENOTDIR) is rethrown.
   await rm(join(root, ".claude"), { recursive: true });
   await writeFile(join(root, ".claude"), "file");
-  await expect(store().create({ ...base, durable: true })).rejects.toThrow();
+  expect(await rejection(store().create({ ...base, durable: true }))).not.toBe(
+    "",
+  );
 });
 
 test("durable create stamps provenance and enforces limits", async () => {
@@ -305,19 +321,17 @@ test("teammates are scoped to their own jobs and cannot persist", async () => {
 
 test("tool validate and run report refusals, unreadable files and caps", async () => {
   const tools = createCronTools({ projectDir: () => root, now: () => NOW });
-  const v = tools.create.validate!;
+  const v = (input: CronCreateInput) => tools.create.validate?.(input);
+  const removeCheck = (id: string) => tools.remove.validate?.({ id });
+  const call: ToolUse = { type: "tool_use", id: "c1", name: "Cron", input: {} };
   expect(await v({ cron: "bad", prompt: "p" })).toContain("Invalid cron");
   expect(await v({ cron: "0 0 30 2 *", prompt: "p" })).toContain(
     "does not match",
   );
   expect(await v({ cron: "15 15 * * *", prompt: "p" })).toBeUndefined();
-  expect(await tools.remove.validate!({ id: "none" })).toContain(
-    "No scheduled job",
-  );
+  expect(await removeCheck("none")).toContain("No scheduled job");
   await writeTasks("{bad");
-  expect(await tools.remove.validate!({ id: "none" })).toContain(
-    "could not be read",
-  );
+  expect(await removeCheck("none")).toContain("could not be read");
   await rm(join(root, ".claude"), { recursive: true });
   await writeTasks(
     JSON.stringify({
@@ -331,21 +345,25 @@ test("tool validate and run report refusals, unreadable files and caps", async (
   );
   expect(await v({ cron: "15 15 * * *", prompt: "p" })).toContain("Too many");
   const signal = new AbortController().signal;
-  await expect(
-    tools.create.run({ cron: "15 15 * * *", prompt: "p" }, {} as never, signal),
-  ).rejects.toThrow(/Too many/);
-  await expect(
-    tools.remove.run({ id: "ghost" }, {} as never, signal),
-  ).rejects.toThrow(/No scheduled job/);
-  expect(await tools.remove.run({ id: "d1" }, {} as never, signal)).toContain(
+  expect(
+    await rejection(
+      tools.create.run({ cron: "15 15 * * *", prompt: "p" }, call, signal),
+    ),
+  ).toMatch(/Too many/);
+  expect(
+    await rejection(tools.remove.run({ id: "ghost" }, call, signal)),
+  ).toMatch(/No scheduled job/);
+  expect(await tools.remove.run({ id: "d1" }, call, signal)).toContain(
     "Cancelled",
   );
-  expect(await tools.list.run({}, {} as never, signal)).toContain("d0");
+  expect(await tools.list.run({}, call, signal)).toContain("d0");
   expect(tools.create.definition().name).toBe("CronCreate");
   expect(tools.remove.definition().name).toBe("CronDelete");
   expect(tools.list.definition().name).toBe("CronList");
-  expect(await tools.create.check({} as never)).toEqual({ behavior: "allow" });
-  expect(await tools.remove.check({} as never)).toEqual({ behavior: "allow" });
+  expect(
+    await tools.create.check({ cron: "15 15 * * *", prompt: "p" }),
+  ).toEqual({ behavior: "allow" });
+  expect(await tools.remove.check({ id: "x" })).toEqual({ behavior: "allow" });
   expect(await tools.list.check({})).toEqual({ behavior: "allow" });
 });
 

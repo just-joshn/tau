@@ -4,10 +4,35 @@ import type { PermissionDialog } from "../../src/permission-dialog.js";
 import { Tui, type TuiOptions } from "../../src/tui/app.js";
 import type { PermissionMode } from "../../src/types.js";
 
+function isReadStream(value: unknown): value is NodeJS.ReadStream {
+  return value instanceof EventEmitter;
+}
+function isWriteStream(value: unknown): value is NodeJS.WriteStream {
+  return value instanceof EventEmitter;
+}
+function readStream(value: EventEmitter): NodeJS.ReadStream {
+  if (!isReadStream(value)) throw new Error("not a stream");
+  return value;
+}
+function writeStream(value: EventEmitter): NodeJS.WriteStream {
+  if (!isWriteStream(value)) throw new Error("not a stream");
+  return value;
+}
+async function rejection(promise: Promise<unknown>): Promise<unknown> {
+  try {
+    await promise;
+  } catch (error) {
+    return error;
+  }
+  return undefined;
+}
+
 function harness(overrides: { columns?: number; rows?: number } = {}) {
   const writes: string[] = [];
   const raw: boolean[] = [];
-  const input = Object.assign(new EventEmitter(), {
+  const input: EventEmitter & {
+    setRawMode?: ((on: boolean) => void) | undefined;
+  } = Object.assign(new EventEmitter(), {
     setRawMode: (on: boolean) => void raw.push(on),
     setEncoding: () => undefined,
     resume: () => undefined,
@@ -24,8 +49,8 @@ function harness(overrides: { columns?: number; rows?: number } = {}) {
   let mode: PermissionMode = "default";
   const interrupts: number[] = [];
   const options: TuiOptions = {
-    input: input as unknown as NodeJS.ReadStream,
-    output: output as unknown as NodeJS.WriteStream,
+    input: readStream(input),
+    output: writeStream(output),
     welcome: { product: "tau", version: "0", model: "m", cwd: "/w" },
     cwd: "/w",
     bypassAvailable: false,
@@ -53,7 +78,7 @@ function harness(overrides: { columns?: number; rows?: number } = {}) {
 
 test("zero-sized terminals fall back to 80x24 and raw mode is optional", async () => {
   const h = harness({ columns: 0, rows: 0 });
-  (h.input as { setRawMode?: unknown }).setRawMode = undefined;
+  h.input.setRawMode = undefined;
   h.tui.start();
   h.tui.notice("hello");
   await h.flush();
@@ -228,12 +253,15 @@ const dialog: PermissionDialog = {
 test("permission dialogs resolve from keys, aborts, and pre-aborted signals", async () => {
   const h = harness();
   h.tui.start();
-  const yes = h.tui.choosePermission(dialog, { tool: "Bash" } as never);
+  const yes = h.tui.choosePermission(dialog, { tool: "Bash" });
   h.input.emit("data", "1");
   expect(await yes).toEqual({ kind: "accept-once" });
-  const titled = h.tui.choosePermission({ ...dialog, title: "Custom" }, {
-    tool: "Write",
-  } as never);
+  const titled = h.tui.choosePermission(
+    { ...dialog, title: "Custom" },
+    {
+      tool: "Write",
+    },
+  );
   h.input.emit("data", "\x1b");
   expect(await titled).toEqual({ kind: "reject" });
   h.tui.event({
@@ -245,22 +273,27 @@ test("permission dialogs resolve from keys, aborts, and pre-aborted signals", as
       input: { file_path: "/nonexistent/x", content: "a\nb" },
     },
   });
-  const patched = h.tui.choosePermission({ ...dialog, subtitle: "s" }, {
-    tool: "Write",
-  } as never);
+  const patched = h.tui.choosePermission(
+    { ...dialog, subtitle: "s" },
+    {
+      tool: "Write",
+    },
+  );
   h.input.emit("data", "2");
   expect(await patched).toEqual({ kind: "reject" });
   const abort = new AbortController();
   const aborted = h.tui.choosePermission(
     dialog,
-    { tool: "Bash" } as never,
+    { tool: "Bash" },
     abort.signal,
   );
   abort.abort(new Error("stop"));
-  await expect(aborted).rejects.toThrow("stop");
+  expect(await rejection(aborted)).toEqual(new Error("stop"));
   const pre = new AbortController();
   pre.abort(new Error("early"));
-  await expect(h.tui.confirm("sure?", pre.signal)).rejects.toThrow("early");
+  expect(await rejection(h.tui.confirm("sure?", pre.signal))).toEqual(
+    new Error("early"),
+  );
   const ok = h.tui.confirm("sure?");
   h.input.emit("data", "1");
   expect(await ok).toBe(true);
@@ -280,7 +313,9 @@ test("model picker, help and status views", async () => {
   const picked = h.tui.pickModel(choices);
   h.input.emit("data", "\r");
   expect(await picked).toBe("b");
-  const none = h.tui.pickModel([choices[0]!]);
+  const [first] = choices;
+  if (first === undefined) throw new Error("no choices");
+  const none = h.tui.pickModel([first]);
   h.input.emit("data", "\x1b");
   expect(await none).toBeUndefined();
   h.tui.showHelp([]);

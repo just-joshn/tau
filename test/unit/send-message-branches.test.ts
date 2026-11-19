@@ -19,7 +19,7 @@ const v = (
       to,
       message,
       ...(notify === undefined ? {} : { notify_when_idle: notify }),
-    } as never,
+    },
     caller,
   );
 
@@ -74,10 +74,10 @@ function directory(
 
 test("routeSendMessage covers main delivery, notify and empty text", () => {
   const d = directory(sub, []);
-  expect(
-    routeSendMessage(d, { to: "main", message: "" } as never),
-  ).toMatchObject({ success: false });
-  const plain = routeSendMessage(d, { to: "main", message: "hi" } as never);
+  expect(routeSendMessage(d, { to: "main", message: "" })).toMatchObject({
+    success: false,
+  });
+  const plain = routeSendMessage(d, { to: "main", message: "hi" });
   expect(plain.message).toBe(
     "Message queued for the main conversation's next turn.",
   );
@@ -85,7 +85,7 @@ test("routeSendMessage covers main delivery, notify and empty text", () => {
     to: "main",
     message: "hi",
     notify_when_idle: true,
-  } as never);
+  });
   expect(notified.message).toContain("no idle subscription was made");
   expect(d.sent).toEqual(["main:hi", "main:hi"]);
 });
@@ -97,30 +97,28 @@ test("routeSendMessage resolves by id, name and reports misses", () => {
     { agentId: "a-3", name: "beta", status: "running" as const },
   ];
   const d = directory(main, agents, { listAgents: true });
-  expect(
-    routeSendMessage(d, { to: "a-2", message: "x" } as never).success,
-  ).toBe(true);
-  expect(
-    routeSendMessage(d, { to: "alpha", message: "x" } as never).message,
-  ).toContain("2 agents are named");
-  const miss = routeSendMessage(d, { to: "ghost", message: "x" } as never);
+  expect(routeSendMessage(d, { to: "a-2", message: "x" }).success).toBe(true);
+  expect(routeSendMessage(d, { to: "alpha", message: "x" }).message).toContain(
+    "2 agents are named",
+  );
+  const miss = routeSendMessage(d, { to: "ghost", message: "x" });
   expect(miss.message).toContain("Use ListAgents");
   const d2 = directory(main, agents);
-  expect(
-    routeSendMessage(d2, { to: "ghost", message: "x" } as never).message,
-  ).toContain("Check the spelling");
+  expect(routeSendMessage(d2, { to: "ghost", message: "x" }).message).toContain(
+    "Check the spelling",
+  );
   const d3 = directory(main, agents, { listAgents: false });
-  expect(
-    routeSendMessage(d3, { to: "ghost", message: "x" } as never).message,
-  ).toContain("Check the spelling");
-  expect(
-    routeSendMessage(d3, { to: "beta", message: " " } as never).message,
-  ).toContain("Nothing was subscribed");
+  expect(routeSendMessage(d3, { to: "ghost", message: "x" }).message).toContain(
+    "Check the spelling",
+  );
+  expect(routeSendMessage(d3, { to: "beta", message: " " }).message).toContain(
+    "Nothing was subscribed",
+  );
   const notified = routeSendMessage(d3, {
     to: "beta",
     message: "x",
     notify_when_idle: true,
-  } as never);
+  });
   expect(notified.message).toContain("no idle subscription");
 });
 
@@ -133,14 +131,13 @@ test("routeSendMessage reports stopped agents and failed delivery", () => {
     ],
     { deliver: false },
   );
+  expect(routeSendMessage(d, { to: "old", message: "x" }).message).toContain(
+    "was stopped",
+  );
+  expect(routeSendMessage(d, { to: "live", message: "x" }).message).toContain(
+    "Failed to write",
+  );
   expect(
-    routeSendMessage(d, { to: "old", message: "x" } as never).message,
-  ).toContain("was stopped");
-  expect(
-    routeSendMessage(d, { to: "live", message: "x" } as never).message,
-  ).toContain("Failed to write");
-  expect(
-    routeSendMessage(directory(main, []), { to: "main", message: "x" } as never)
-      .message,
+    routeSendMessage(directory(main, []), { to: "main", message: "x" }).message,
   ).toContain("You are the main conversation");
 });
