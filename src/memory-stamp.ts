@@ -84,7 +84,7 @@ function yamlScalar(value: unknown): string {
   if (typeof value !== "string") return String(value);
   if (
     value.length === 0 ||
-    /[\n\r]|^[ \t]|[ \t]$|['"#{}\[\],&*!|>%@`]|[^\x20-\x7e]/.test(value) ||
+    /[\n\r]|^[ \t]|[ \t]$|['"#{}[\],&*!|>%@`]|[^\x20-\x7e]/.test(value) ||
     /^(?:true|false|null|~|y|n|yes|no|on|off)$/i.test(value)
   )
     return JSON.stringify(value);
