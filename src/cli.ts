@@ -3,7 +3,7 @@ import { admitSessionPersistence, isInteractiveLaunch } from "./launch-mode.js";
 import { existsSync } from "node:fs";
 import { mkdir, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { stdin, stdout, stderr as processStderr } from "node:process";
 import { terminalText as safe } from "./terminal.js";
 import {
@@ -1560,7 +1560,10 @@ async function main(): Promise<void> {
     ),
     bindGuardedTool(reportFindingsTool(), guardedHost),
     bindGuardedTool(scheduleWakeupTool({ jobs: cronStore }), guardedHost),
-    bindGuardedTool(workflowTool(), guardedHost),
+    bindGuardedTool(
+      workflowTool({ workflowsDir: join(cwd, ".claude", "workflows") }),
+      guardedHost,
+    ),
   ];
   const createSessionTools = async () => {
     await mcp?.refreshTools();

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "bun:test";
@@ -306,4 +306,35 @@ test("Workflow rejects a missing source and does not launch a script", async () 
     name: "ignored-because-path-wins",
   });
   assert.equal(fromFile.content, WORKFLOW_NOT_LAUNCHED);
+});
+
+test("Workflow resolves named files under the workflows dir", async () => {
+  const root = await mkdtemp(join(tmpdir(), "tau-workflow-named-"));
+  const dir = join(root, "workflows");
+  const script = (name: string) =>
+    `export const meta = { name: '${name}', description: 'd' }\nreturn 1`;
+  const empty = await call(
+    bindGuardedTool(workflowTool({ workflowsDir: dir }), host()),
+    { name: "alpha" },
+  );
+  assert.match(String(empty.content), /Available: \(none\)/);
+
+  await mkdir(dir, { recursive: true });
+  await writeFile(join(dir, "a.js"), script("alpha"));
+  await writeFile(join(dir, "b.js"), script("beta"));
+  await writeFile(join(dir, "bad.js"), "return 1");
+  await writeFile(join(dir, "c.mjs"), script("gamma"));
+  const tool = () =>
+    bindGuardedTool(workflowTool({ workflowsDir: dir }), host());
+  const ok = await call(tool(), { name: "alpha" });
+  assert.equal(ok.content, WORKFLOW_NOT_LAUNCHED);
+  const wrong = await call(tool(), { name: "zeta" });
+  assert.match(
+    String(wrong.content),
+    /Workflow "zeta" not found\. Available: alpha, beta/,
+  );
+  const direct = join(root, "direct.js");
+  await writeFile(direct, "return 2");
+  const winner = await call(tool(), { name: "zeta", scriptPath: direct });
+  assert.equal(winner.content, WORKFLOW_NOT_LAUNCHED);
 });

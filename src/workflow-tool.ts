@@ -3,7 +3,8 @@
  * original resolve order. There is no script executor, so a script that
  * passes those checks is refused instead of launched.
  */
-import { readFile, stat } from "node:fs/promises";
+import { readdir, readFile, stat } from "node:fs/promises";
+import { join } from "node:path";
 import { z } from "zod";
 import { WORKFLOW_DESCRIPTION } from "./eager-catalog-text.js";
 import type { GuardedTool } from "./guarded-tool.js";
@@ -133,19 +134,120 @@ export function workflowDefinition(): ToolDefinition {
   };
 }
 
-export function workflowTool(): GuardedTool<WorkflowInput> {
+export interface WorkflowSource {
+  kind: "inline" | "path" | "named";
+  text: string;
+  path?: string;
+}
+
+export interface WorkflowToolOptions {
+  /** Directory holding named `.js` workflows, e.g. `<project>/.claude/workflows`. */
+  workflowsDir?: string;
+}
+
+/** Pure-literal object after `export const meta =`; computed values are refused. */
+function parseMeta(text: string): { name: string } | undefined {
+  const match = /export\s+const\s+meta\s*=\s*\{/.exec(text);
+  if (!match) return undefined;
+  const start = match.index + match[0].length - 1;
+  let depth = 0;
+  let quote = "";
+  let end = -1;
+  for (let i = start; i < text.length && end < 0; i++) {
+    const ch = text.charAt(i);
+    if (quote) {
+      if (ch === "\\") i++;
+      else if (ch === quote) quote = "";
+    } else if (ch === '"' || ch === "'" || ch === "`") quote = ch;
+    else if (ch === "{") depth++;
+    else if (ch === "}" && --depth === 0) end = i;
+  }
+  if (end < 0) return undefined;
+  const literal = text.slice(start, end + 1);
+  const bare = literal
+    .replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g, '""')
+    .replace(/[A-Za-z_$][\w$]*(?=\s*:)/g, "")
+    .replace(/\b(?:true|false|null)\b/g, "");
+  if (/[A-Za-z_$]|\(|`/.test(bare)) return undefined;
+  const field = (key: string): string | undefined =>
+    new RegExp(`(?:^|[{,\\s])${key}\\s*:\\s*(?:"((?:[^"\\\\]|\\\\.)*)"|'((?:[^'\\\\]|\\\\.)*)')`).exec(
+      literal,
+    )?.slice(1, 3).find((part) => part !== undefined);
+  const name = field("name");
+  if (!name || field("description") === undefined) return undefined;
+  return { name };
+}
+
+/** Named workflows: `*.js` files whose `meta.name` is declared, sorted by name. */
+export async function listNamedWorkflows(
+  dir: string | undefined,
+): Promise<Array<{ name: string; text: string; path: string }>> {
+  if (dir === undefined) return [];
+  let entries: string[];
+  try {
+    entries = await readdir(dir);
+  } catch {
+    return [];
+  }
+  const found = new Map<string, { name: string; text: string; path: string }>();
+  for (const entry of entries.sort()) {
+    if (!entry.endsWith(".js")) continue;
+    const path = join(dir, entry);
+    try {
+      const info = await stat(path);
+      if (!info.isFile() || info.size > SCRIPT_BYTES) continue;
+      const text = await readFile(path, "utf8");
+      const meta = parseMeta(text);
+      if (meta) found.set(meta.name, { name: meta.name, text, path });
+    } catch {
+      continue;
+    }
+  }
+  return [...found.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** scriptPath wins, then name, then inline script (original resolve order). */
+export async function resolveWorkflowSource(
+  input: WorkflowInput,
+  options: WorkflowToolOptions = {},
+): Promise<WorkflowSource | { error: string }> {
+  if (input.scriptPath !== undefined) {
+    const error = await scriptFileError(input.scriptPath);
+    if (error) return { error };
+    return input.script !== undefined
+      ? { kind: "inline", text: input.script, path: input.scriptPath }
+      : {
+          kind: "path",
+          text: await readFile(input.scriptPath, "utf8"),
+          path: input.scriptPath,
+        };
+  }
+  if (input.name !== undefined) {
+    const all = await listNamedWorkflows(options.workflowsDir);
+    const hit = all.find((workflow) => workflow.name === input.name);
+    if (!hit) {
+      const list = all.map((workflow) => workflow.name).join(", ");
+      return {
+        error: `Workflow "${input.name}" not found. Available: ${list || "(none)"}`,
+      };
+    }
+    return { kind: "named", text: input.script ?? hit.text, path: hit.path };
+  }
+  if (input.script !== undefined)
+    return { kind: "inline", text: input.script };
+  return { error: "Must provide script, name, or scriptPath" };
+}
+
+export function workflowTool(
+  options: WorkflowToolOptions = {},
+): GuardedTool<WorkflowInput> {
   return {
     name: WORKFLOW_TOOL,
     definition: workflowDefinition,
     schema: () => workflowSchema,
     async validate(input) {
-      if (input.scriptPath !== undefined)
-        return scriptFileError(input.scriptPath);
-      if (input.name !== undefined)
-        return `Workflow "${input.name}" not found. Available: (none)`;
-      if (input.script === undefined)
-        return "Must provide script, name, or scriptPath";
-      return undefined;
+      const resolved = await resolveWorkflowSource(input, options);
+      return "error" in resolved ? resolved.error : undefined;
     },
     async check() {
       return { behavior: "ask", prompt: WORKFLOW_REVIEW_PROMPT };
