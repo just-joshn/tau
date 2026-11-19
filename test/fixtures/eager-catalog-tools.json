@@ -30,13 +30,7 @@
         "level": {
           "description": "Effort level the review ran at",
           "type": "string",
-          "enum": [
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max"
-          ]
+          "enum": ["low", "medium", "high", "xhigh", "max"]
         },
         "findings": {
           "description": "Verified findings, most-severe first; empty if none survived",
@@ -76,33 +70,20 @@
               "verdict": {
                 "description": "Set when a verify pass ran; absent on inline-only reviews",
                 "type": "string",
-                "enum": [
-                  "CONFIRMED",
-                  "PLAUSIBLE"
-                ]
+                "enum": ["CONFIRMED", "PLAUSIBLE"]
               },
               "outcome": {
                 "description": "Set ONLY when re-reporting after applying fixes: what happened to this finding",
                 "type": "string",
-                "enum": [
-                  "fixed",
-                  "skipped",
-                  "no_change_needed"
-                ]
+                "enum": ["fixed", "skipped", "no_change_needed"]
               }
             },
-            "required": [
-              "file",
-              "summary",
-              "failure_scenario"
-            ],
+            "required": ["file", "summary", "failure_scenario"],
             "additionalProperties": false
           }
         }
       },
-      "required": [
-        "findings"
-      ],
+      "required": ["findings"],
       "additionalProperties": false
     }
   },

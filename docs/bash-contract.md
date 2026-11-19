@@ -6,14 +6,14 @@ in `docs/bash-needles.json` each occur once, in one chunk.
 
 ## Data shapes
 
-| Shape | tau | Original |
-| --- | --- | --- |
-| Input `{command, timeout?, description?, run_in_background?, dangerouslyDisableSandbox?}`, strict; `timeout` accepts numeric strings, booleans accept `"true"`/`"false"`, control characters other than tab/newline refused | `src/bash-tool.ts` `parseBashInput` | 4h798pp0 `Lxi`, `mWo` (`Mj`, `CC`, `pA`) |
-| Prompt facts (gates) | `src/bash-description.ts` `BashPromptFacts` | 4h798pp0 `bPn`, `kPn`, `M2r` |
-| Shell session: start folder, current cwd, background registry | `createShellHost` | session `ts(e).cwd`, `Te()` |
-| Outcome: `completed` · `failed` · `background` · `refused` | `BashOutcome`, `renderBashOutcome` | `mapToolResultToToolResultBlockParam`, `Eq`/`HLr` |
-| Background task `{id, command, description, outputFile, toolUseId, status}` | `src/background-shells.ts` | `Vit`, `HE("local_bash")`, `kc` |
-| Shell snapshot: absent → `creating` → `ready(file)` \| `failed(reason)`, one per process and shell | `src/shell-snapshot.ts` `SnapshotState` | `Feo` (`y`, `a`), `OZn`, `sM().markSnapshotAvailable` |
+| Shape                                                                                                                                                                                                                       | tau                                         | Original                                              |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- | ----------------------------------------------------- |
+| Input `{command, timeout?, description?, run_in_background?, dangerouslyDisableSandbox?}`, strict; `timeout` accepts numeric strings, booleans accept `"true"`/`"false"`, control characters other than tab/newline refused | `src/bash-tool.ts` `parseBashInput`         | 4h798pp0 `Lxi`, `mWo` (`Mj`, `CC`, `pA`)              |
+| Prompt facts (gates)                                                                                                                                                                                                        | `src/bash-description.ts` `BashPromptFacts` | 4h798pp0 `bPn`, `kPn`, `M2r`                          |
+| Shell session: start folder, current cwd, background registry                                                                                                                                                               | `createShellHost`                           | session `ts(e).cwd`, `Te()`                           |
+| Outcome: `completed` · `failed` · `background` · `refused`                                                                                                                                                                  | `BashOutcome`, `renderBashOutcome`          | `mapToolResultToToolResultBlockParam`, `Eq`/`HLr`     |
+| Background task `{id, command, description, outputFile, toolUseId, status}`                                                                                                                                                 | `src/background-shells.ts`                  | `Vit`, `HE("local_bash")`, `kc`                       |
+| Shell snapshot: absent → `creating` → `ready(file)` \| `failed(reason)`, one per process and shell                                                                                                                          | `src/shell-snapshot.ts` `SnapshotState`     | `Feo` (`y`, `a`), `OZn`, `sM().markSnapshotAvailable` |
 
 ## Schema and description
 
@@ -116,7 +116,7 @@ Needles: `docs/shell-snapshot-needles.json`.
 
 - Success: `jun` drops blank edge lines; leading blank lines stripped and the
   end trimmed; cwd note on its own line. Empty → `(Bash completed with no
-  output)` (6dkbe81p `Ie`/`uqs`).
+output)` (6dkbe81p `Ie`/`uqs`).
 - Failure: `eHt`/`KEi` read the last simple command (grep/rg/egrep/fgrep/find/
   diff/test/`[`, `git diff`/`git grep`: exit 1 is not an error). A failure is
   `Exit code N\n<output>`, trimmed, `is_error: true` (`HLr`, `Eq`); text over
@@ -129,7 +129,7 @@ Needles: `docs/shell-snapshot-needles.json`.
   (`Hxi`) moves to the background with `h0o`'s timeout text and the output so
   far; otherwise, or with background disabled, the group gets SIGTERM, then
   SIGKILL after 1.5 s, and the result is `Exit code 143\nCommand timed out
-  after <bn(ms)>\n<output>`.
+after <bn(ms)>\n<output>`.
 - `sleep N` (N ≥ 25) first in a foreground command is refused before running
   (`Uxi`, validateInput) as `<tool_use_error>Blocked: …</tool_use_error>`.
 
@@ -140,14 +140,14 @@ Needles: `docs/shell-snapshot-needles.json`.
   use Read on that file path." Interactive adds the do-not-poll variant.
 - Exit: `Mke`/`sHt`/`FVn`/`ji`: `<task-notification>` with task-id,
   tool-use-id, output-file, status, summary `Background command "<description
-  or command>" completed (exit code N)` / `failed with exit code N`, inside the
+or command>" completed (exit code N)` / `failed with exit code N`, inside the
   `[SYSTEM NOTIFICATION - NOT USER INPUT]` system-reminder (9vn1dyjv `KVt`).
   The output file gains `\n[exited with code N]\n` (x2fk4g86 `lqt`).
 - Deadline (`a$o`, `e$o`): notification `status killed`, summary "… was
   stopped after reaching its background time limit" and the `IEa` note; then
   SIGTERM/SIGKILL and `\n[killed]\n`.
 - TaskStop (fkkma3m4): `{"message":"Successfully stopped task: <id>
-  (<command>)","task_id","task_type":"local_bash","command"}`. No notification
+(<command>)","task_id","task_type":"local_bash","command"}`. No notification
   follows a stop (`bV` sets `notified`).
 - Reading output: no TaskOutput/BashOutput tool in 2.1.326; the model uses
   Read on the output file (tau admits Read of live task output files).

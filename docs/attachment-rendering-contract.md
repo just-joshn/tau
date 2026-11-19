@@ -13,14 +13,14 @@ jq -r '.[]' docs/attachment-rendering-needles.json | while IFS= read -r n; do
 
 ## Data shape
 
-| Original | tau |
-| --- | --- |
-| Transcript `attachment` rows, typed by `attachment.type` | `Attachment` union in `src/attachments.ts` |
-| Renderer table `BGo` (chunk-4h798pp0) | `renderAttachment` switch in `src/attachments.ts` |
-| Attachment row in the transcript | `Message.attachment`, built by `attachmentMessage`; `content` keeps the rendering for local readers |
-| Hook messages yielded next to a tool result (`GGn`, `Sfn`) | `ToolResult.hookAttachments`: `{ phase } & Attachment` in hook order |
-| `origin.kind === "task-notification"` on a user row | `Message.origin: "task-notification"` |
-| API normalizer (the large function that calls `Vke`) | `projectMessages` in `src/thinking-history.ts`, then `projectHookAttachmentHistory` |
+| Original                                                   | tau                                                                                                 |
+| ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| Transcript `attachment` rows, typed by `attachment.type`   | `Attachment` union in `src/attachments.ts`                                                          |
+| Renderer table `BGo` (chunk-4h798pp0)                      | `renderAttachment` switch in `src/attachments.ts`                                                   |
+| Attachment row in the transcript                           | `Message.attachment`, built by `attachmentMessage`; `content` keeps the rendering for local readers |
+| Hook messages yielded next to a tool result (`GGn`, `Sfn`) | `ToolResult.hookAttachments`: `{ phase } & Attachment` in hook order                                |
+| `origin.kind === "task-notification"` on a user row        | `Message.origin: "task-notification"`                                                               |
+| API normalizer (the large function that calls `Vke`)       | `projectMessages` in `src/thinking-history.ts`, then `projectHookAttachmentHistory`                 |
 
 Saved sessions keep tau's message model. Folding and wrapping happen only in
 `projectMessages`, so a resumed session renders the same request. A saved
@@ -43,13 +43,13 @@ content}`) parses as `hook_additional_context` with `hookName`
 
 ## Renderers (chunk-4h798pp0, `BGo` table)
 
-| Kind | Rendered messages |
-| --- | --- |
-| `hook_blocking_error` | `Yke(`${hookName} hook blocking error from command: "${command}": ${blockingError}`)` |
-| `hook_additional_context` | `Yke(`${hookName} hook additional context: ${content.join("\n")}`)`, none when empty |
-| `async_hook_response` | one `qs(tD(text))` per `systemMessage`, then `additionalContext` (`_9` order) |
-| `total_tokens_reminder` | `qs(text)` |
-| `hook_system_message`, `hook_non_blocking_error`, `async_hook_response_batch` | none |
+| Kind                                                                          | Rendered messages                                                                     |
+| ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `hook_blocking_error`                                                         | `Yke(`${hookName} hook blocking error from command: "${command}": ${blockingError}`)` |
+| `hook_additional_context`                                                     | `Yke(`${hookName} hook additional context: ${content.join("\n")}`)`, none when empty  |
+| `async_hook_response`                                                         | one `qs(tD(text))` per `systemMessage`, then `additionalContext` (`_9` order)         |
+| `total_tokens_reminder`                                                       | `qs(text)`                                                                            |
+| `hook_system_message`, `hook_non_blocking_error`, `async_hook_response_batch` | none                                                                                  |
 
 `hookName` is `${event}:${toolName}` for tool events (`GGn` builds
 `PostToolUse:${tool.name}`). The command hook runner sets `blockingError` per
@@ -110,7 +110,7 @@ notification in `commitNotifications` (`src/cli.ts`).
 - tau does not add compaction rollover to the ledger (`rollOverContext`).
   Subagent budgets are also not ported (`h6t`, `excludeStartContext`).
 - tau does not append the plugin suffix `\nThis hook comes from the ${plugin}
-  plugin.` to exit 2 feedback.
+plugin.` to exit 2 feedback.
 - Stop hook feedback in `runAgent` is still a plain user text row, not a
   `hook_blocking_error` attachment.
 - Background agent notifications lack the original's `<note>` field. That

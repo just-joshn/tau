@@ -131,7 +131,10 @@ test("Edit stamps a new auto-memory file when Write would", async () => {
   });
   assert.equal(created.is_error, undefined);
   assert.equal(created.content, "File edited");
-  assert.equal(await readFile(path.join(memory, "user-role.md"), "utf8"), STAMPED);
+  assert.equal(
+    await readFile(path.join(memory, "user-role.md"), "utf8"),
+    STAMPED,
+  );
 
   const outside = await run("Edit", {
     file_path: "notes.md",
@@ -139,9 +142,13 @@ test("Edit stamps a new auto-memory file when Write would", async () => {
     new_string: TOPIC,
   });
   assert.equal(outside.is_error, undefined);
-  assert.equal(await readFile(path.join(memory, "..", "notes.md"), "utf8"), TOPIC);
+  assert.equal(
+    await readFile(path.join(memory, "..", "notes.md"), "utf8"),
+    TOPIC,
+  );
 
-  const index = "- [User role](user_role.md) \u2014 TAU_AUTO_MEMORY_INDEX_LINE\n";
+  const index =
+    "- [User role](user_role.md) \u2014 TAU_AUTO_MEMORY_INDEX_LINE\n";
   const memoryIndex = await run("Edit", {
     file_path: "memory/MEMORY.md",
     old_string: "",
@@ -177,5 +184,8 @@ test("Write still stamps a new auto-memory file", async () => {
     content: TOPIC,
   });
   assert.equal(written.is_error, undefined);
-  assert.equal(await readFile(path.join(memory, "user-role.md"), "utf8"), STAMPED);
+  assert.equal(
+    await readFile(path.join(memory, "user-role.md"), "utf8"),
+    STAMPED,
+  );
 });

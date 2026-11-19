@@ -256,9 +256,10 @@ function branch(expression: string, constants: Record<string, string>): Part {
   const unless = /^e\?"":"((?:[^"\\]|\\.)*)"$/.exec(expression);
   if (unless?.[1] !== undefined)
     return { unlessModelOverridden: cook(unless[1]) };
-  const effort = /^B5t\(\)===void 0\?"((?:[^"\\]|\\.)*)":"((?:[^"\\]|\\.)*)"$/.exec(
-    expression,
-  );
+  const effort =
+    /^B5t\(\)===void 0\?"((?:[^"\\]|\\.)*)":"((?:[^"\\]|\\.)*)"$/.exec(
+      expression,
+    );
   if (effort?.[1] !== undefined && effort[2] !== undefined)
     return {
       subagentEffort: { unset: cook(effort[1]), configured: cook(effort[2]) },
@@ -272,16 +273,18 @@ function constantOf(
   name: string,
 ): string {
   const source = need(bundle.get(ROOT + chunk), chunk);
-  const match = new RegExp(`[,; ]${name}=("(?:[^"\\\\]|\\\\.)*"|\\d+)[,;]`).exec(
-    source,
-  );
+  const match = new RegExp(
+    `[,; ]${name}=("(?:[^"\\\\]|\\\\.)*"|\\d+)[,;]`,
+  ).exec(source);
   const raw = need(match?.[1], `${chunk} ${name}`);
   return raw.startsWith('"') ? cook(raw.slice(1, -1)) : raw;
 }
 
 const binary = process.argv[2];
 if (!binary) {
-  console.error("usage: bun scripts/builtin-skills/generate-assets.ts <claude binary>");
+  console.error(
+    "usage: bun scripts/builtin-skills/generate-assets.ts <claude binary>",
+  );
   process.exit(2);
 }
 const bundle = loadBundle(binary);

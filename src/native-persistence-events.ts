@@ -430,7 +430,9 @@ function instructionContents(files: readonly InstructionNoticeFile[]): string {
     })
     .join("\n\n");
 }
-function initialInstructionText(files: readonly InstructionNoticeFile[]): string {
+function initialInstructionText(
+  files: readonly InstructionNoticeFile[],
+): string {
   const body = instructionContents(files);
   return body ? `${instructionPreamble}\n\n${body}` : "";
 }

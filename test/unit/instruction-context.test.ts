@@ -621,8 +621,7 @@ test("the first eager announcement uses the native instruction reminder, and a l
   const cwd = join(root, "work"),
     memory = join(root, "memory"),
     index = join(memory, "MEMORY.md"),
-    line =
-      "- [User role](user_role.md) \u2014 TAU_AUTO_MEMORY_INDEX_LINE";
+    line = "- [User role](user_role.md) \u2014 TAU_AUTO_MEMORY_INDEX_LINE";
   await mkdir(cwd);
   await mkdir(memory);
   await writeFile(index, `${line}\n`);

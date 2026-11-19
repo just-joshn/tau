@@ -43,19 +43,19 @@ appear in this order:
 
 ## Tool permission dialog
 
-| | Original 2.1.326 | tau |
-|---|---|---|
-| Header | "Edit file", "Create file", "Overwrite file" or "Edit notebook", then the path relative to cwd | same |
-| Body | Diff preview | The same numbered patch, between `╌` rules |
-| Question | "Do you want to make this edit to **a.txt**?". The verb is "create" or "overwrite" for Write (`question-render`). | same, without bold |
-| Option 1 | "Yes" | "Yes" |
-| Option 2 (file edits) | "Yes, and switch to **accept edits (auto-approve file edits and common file commands)** for this session **(shift+tab)**" | same text |
-| Option 2 effect | `setMode acceptEdits`, destination `session` (`edit-session-row-update`). Nothing is written to disk. | The session mode becomes acceptEdits and the footer reads "⏵⏵ accept edits on (shift+tab to cycle)" |
-| When option 2 shows | Mode is `default` (`session-row-offered-in-default`) | Default mode, file inside cwd, path not protected |
-| Last option | "No" | "No" |
-| Footer | "Esc to cancel · Tab to amend" | same |
-| Keys | Number picks, arrows move, Enter takes the focus, Esc refuses, shift+tab takes the session row, Tab edits the focused row | same, except that Tab always edits the refusal |
-| Other tools | "Do you want to proceed?" with Yes / don't-ask-again / No | "Do you want to proceed?" with Yes / No |
+|                       | Original 2.1.326                                                                                                          | tau                                                                                                 |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| Header                | "Edit file", "Create file", "Overwrite file" or "Edit notebook", then the path relative to cwd                            | same                                                                                                |
+| Body                  | Diff preview                                                                                                              | The same numbered patch, between `╌` rules                                                          |
+| Question              | "Do you want to make this edit to **a.txt**?". The verb is "create" or "overwrite" for Write (`question-render`).         | same, without bold                                                                                  |
+| Option 1              | "Yes"                                                                                                                     | "Yes"                                                                                               |
+| Option 2 (file edits) | "Yes, and switch to **accept edits (auto-approve file edits and common file commands)** for this session **(shift+tab)**" | same text                                                                                           |
+| Option 2 effect       | `setMode acceptEdits`, destination `session` (`edit-session-row-update`). Nothing is written to disk.                     | The session mode becomes acceptEdits and the footer reads "⏵⏵ accept edits on (shift+tab to cycle)" |
+| When option 2 shows   | Mode is `default` (`session-row-offered-in-default`)                                                                      | Default mode, file inside cwd, path not protected                                                   |
+| Last option           | "No"                                                                                                                      | "No"                                                                                                |
+| Footer                | "Esc to cancel · Tab to amend"                                                                                            | same                                                                                                |
+| Keys                  | Number picks, arrows move, Enter takes the focus, Esc refuses, shift+tab takes the session row, Tab edits the focused row | same, except that Tab always edits the refusal                                                      |
+| Other tools           | "Do you want to proceed?" with Yes / don't-ask-again / No                                                                 | "Do you want to proceed?" with Yes / No                                                             |
 
 On refusal the model receives this tool result (`reject-tool-result`):
 
@@ -74,18 +74,18 @@ a tabbed dialog ("general", "commands", "custom-commands"). The registry is
 `src/slash-commands.ts`. Tau's `/help` is the same tabbed pane (see
 tui-contract.md).
 
-| Command | Aliases | Description source |
-|---|---|---|
-| /clear | reset, new | original |
-| /compact | | original |
-| /exit | quit | original. Prints one of "Goodbye!", "See ya!", "Bye!" or "Catch you later!". |
-| /help | | original |
-| /model [model] | | original, plus "(currently X)" |
-| /permissions [mode] | allowed-tools | tau. The original manages allow/deny rules. Tau sets the mode. |
-| /resume <session id> | continue | original. Tau has no picker. |
-| /save | | tau only |
-| /skills | | original |
-| /status | | tau. Opens the Settings pane's Status and Usage tabs. |
+| Command              | Aliases       | Description source                                                           |
+| -------------------- | ------------- | ---------------------------------------------------------------------------- |
+| /clear               | reset, new    | original                                                                     |
+| /compact             |               | original                                                                     |
+| /exit                | quit          | original. Prints one of "Goodbye!", "See ya!", "Bye!" or "Catch you later!". |
+| /help                |               | original                                                                     |
+| /model [model]       |               | original, plus "(currently X)"                                               |
+| /permissions [mode]  | allowed-tools | tau. The original manages allow/deny rules. Tau sets the mode.               |
+| /resume <session id> | continue      | original. Tau has no picker.                                                 |
+| /save                |               | tau only                                                                     |
+| /skills              |               | original                                                                     |
+| /status              |               | tau. Opens the Settings pane's Status and Usage tabs.                        |
 
 An unknown command prints "Unknown command: /name". The original also suggests
 "Did you mean /x?" (`unknown-command`).

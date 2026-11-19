@@ -35,33 +35,33 @@ in one bundle chunk (41 in `chunk-4h798pp0.js`; `identity_agent_sdk` and
 
 ## Ported behavior and sources
 
-| Behavior | Original (chunk, function) |
-| --- | --- |
-| Section order, ids, shared/session scope | 4h798pp0 `cds`, `oKo`; joined by `\n\n` in wxeyd558 `J9s` |
-| Intro, security and URL lines | 4h798pp0 `Kls`, `HWn`, `zSt` |
-| `# System` bullets | 4h798pp0 `Yls`, `BWn("standard")`, `Pls`; bullets `aw` |
-| `# Doing tasks` | 4h798pp0 `Xls` (verified-vs-assumed flag off by default) |
-| `# Executing actions with care` | 4h798pp0 `Qls` |
-| `# Using your tools` (Bash vs PowerShell, TaskCreate/TodoWrite) | 4h798pp0 `Jls` |
-| `# Tone and style` | 4h798pp0 `ods` |
-| `# Text output` (standard style), pronouns | 4h798pp0 `kls("standard")`, `xls` |
-| `# Session-specific guidance` | 4h798pp0 `tds`, `nds`, `eds("with-nudge")`; explore gate `G5` = `!CLAUDE_CODE_DISABLE_EXPLORE_PLAN_AGENTS` |
-| `# auto memory` (gated; see `docs/auto-memory-contract.md`) | 2e8vamz8 `bQn`, `$o`, `xt` |
-| `# Environment` (latest models, surfaces, fast mode) | 4h798pp0 `gds`, `pls`; catalog `latest_per_family` in 9vmv3a50 |
-| `# Context management`, act-dont-rederive | 4h798pp0 `_ds`, `ids`, `sds` (`CLAUDE_CODE_ACT_DONT_REDERIVE`) |
-| total_tokens line and reminder | 4h798pp0 `YWn`, `Eme`, `vme`, `lVn`; capability `total_tokens_reminder` |
-| Identity line | wxeyd558 `zVr` |
-| Billing header and entrypoint | d73xe1mr `Ipi`; entrypoint 4k4w82vm `g` |
-| Fingerprint `sha256(salt + chars[4,7,20] + version)[:3]` | wxeyd558 `X9s`, `ZCa` (first non-meta user text) |
-| Block split and cache marks | wxeyd558 `J9s` (no global-cache path) |
-| Environment reminder | 4h798pp0 `FKt`, `vXo`, `hXo`, `wXo`; OS from `os.type()`/`os.release()` |
-| Model reminder | 4h798pp0 `IXo`, `DXo`; display names/cutoffs from 9vmv3a50 catalog |
-| Date reminder | 4h798pp0 `f2t` |
-| Git attribution reminder | 4h798pp0 `y2t`, `p2r`, `m2r`, `$xn` |
-| Agent listing text and concurrency note | 4h798pp0 `agent_listing_delta` renderer, `showConcurrencyNote` |
-| Skill listing text | 4h798pp0 `skill_listing` renderer |
-| Built-in agent `whenToUse` lines | oracle agent listing (cqwkdc0e) |
-| Attachments lead the user round | tau's existing RPi note in `projectMessages` |
+| Behavior                                                        | Original (chunk, function)                                                                                 |
+| --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| Section order, ids, shared/session scope                        | 4h798pp0 `cds`, `oKo`; joined by `\n\n` in wxeyd558 `J9s`                                                  |
+| Intro, security and URL lines                                   | 4h798pp0 `Kls`, `HWn`, `zSt`                                                                               |
+| `# System` bullets                                              | 4h798pp0 `Yls`, `BWn("standard")`, `Pls`; bullets `aw`                                                     |
+| `# Doing tasks`                                                 | 4h798pp0 `Xls` (verified-vs-assumed flag off by default)                                                   |
+| `# Executing actions with care`                                 | 4h798pp0 `Qls`                                                                                             |
+| `# Using your tools` (Bash vs PowerShell, TaskCreate/TodoWrite) | 4h798pp0 `Jls`                                                                                             |
+| `# Tone and style`                                              | 4h798pp0 `ods`                                                                                             |
+| `# Text output` (standard style), pronouns                      | 4h798pp0 `kls("standard")`, `xls`                                                                          |
+| `# Session-specific guidance`                                   | 4h798pp0 `tds`, `nds`, `eds("with-nudge")`; explore gate `G5` = `!CLAUDE_CODE_DISABLE_EXPLORE_PLAN_AGENTS` |
+| `# auto memory` (gated; see `docs/auto-memory-contract.md`)     | 2e8vamz8 `bQn`, `$o`, `xt`                                                                                 |
+| `# Environment` (latest models, surfaces, fast mode)            | 4h798pp0 `gds`, `pls`; catalog `latest_per_family` in 9vmv3a50                                             |
+| `# Context management`, act-dont-rederive                       | 4h798pp0 `_ds`, `ids`, `sds` (`CLAUDE_CODE_ACT_DONT_REDERIVE`)                                             |
+| total_tokens line and reminder                                  | 4h798pp0 `YWn`, `Eme`, `vme`, `lVn`; capability `total_tokens_reminder`                                    |
+| Identity line                                                   | wxeyd558 `zVr`                                                                                             |
+| Billing header and entrypoint                                   | d73xe1mr `Ipi`; entrypoint 4k4w82vm `g`                                                                    |
+| Fingerprint `sha256(salt + chars[4,7,20] + version)[:3]`        | wxeyd558 `X9s`, `ZCa` (first non-meta user text)                                                           |
+| Block split and cache marks                                     | wxeyd558 `J9s` (no global-cache path)                                                                      |
+| Environment reminder                                            | 4h798pp0 `FKt`, `vXo`, `hXo`, `wXo`; OS from `os.type()`/`os.release()`                                    |
+| Model reminder                                                  | 4h798pp0 `IXo`, `DXo`; display names/cutoffs from 9vmv3a50 catalog                                         |
+| Date reminder                                                   | 4h798pp0 `f2t`                                                                                             |
+| Git attribution reminder                                        | 4h798pp0 `y2t`, `p2r`, `m2r`, `$xn`                                                                        |
+| Agent listing text and concurrency note                         | 4h798pp0 `agent_listing_delta` renderer, `showConcurrencyNote`                                             |
+| Skill listing text                                              | 4h798pp0 `skill_listing` renderer                                                                          |
+| Built-in agent `whenToUse` lines                                | oracle agent listing (cqwkdc0e)                                                                            |
+| Attachments lead the user round                                 | tau's existing RPi note in `projectMessages`                                                               |
 
 ## Comparator result (text scenario)
 
@@ -98,7 +98,7 @@ stream-json/`--verbose`):
 - Deferred-tool reminder (owned by the tool-search lane; seam above).
 - Request fields: `context_management` `clear_thinking_20251015` (4h798pp0
   `HMn`, beta `context-management-2025-06-27`) and `thinking.display:
-  "updates"` (connector-text beta). Both need beta-retry integration in
+"updates"` (connector-text beta). Both need beta-retry integration in
   `provider.ts`; a first attempt broke the no-beta resend contract and was
   withdrawn.
 - Mid-turn total_tokens countdown inside tool results, date-change and

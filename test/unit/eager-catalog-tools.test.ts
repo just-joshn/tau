@@ -3,7 +3,10 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "bun:test";
-import { bindGuardedTool, type GuardedToolHost } from "../../src/guarded-tool.js";
+import {
+  bindGuardedTool,
+  type GuardedToolHost,
+} from "../../src/guarded-tool.js";
 import {
   EMPTY_AGENT_LISTING,
   LIST_AGENTS_SEARCH_HINT,
@@ -118,24 +121,25 @@ test("the four tools stay eager, and select: reports them already loaded", () =>
     SCHEDULE_WAKEUP_TOOL,
     WORKFLOW_TOOL,
   ]);
-  const deferred = searchTools("select:ReportFindings,Workflow", [
-    {
-      definition: reportFindingsDefinition(),
-      loading: "deferred",
-      searchHint: REPORT_FINDINGS_SEARCH_HINT,
-    },
-    {
-      definition: workflowDefinition(),
-      loading: "deferred",
-      searchHint: WORKFLOW_SEARCH_HINT,
-    },
-  ], []);
+  const deferred = searchTools(
+    "select:ReportFindings,Workflow",
+    [
+      {
+        definition: reportFindingsDefinition(),
+        loading: "deferred",
+        searchHint: REPORT_FINDINGS_SEARCH_HINT,
+      },
+      {
+        definition: workflowDefinition(),
+        loading: "deferred",
+        searchHint: WORKFLOW_SEARCH_HINT,
+      },
+    ],
+    [],
+  );
   assert.deepEqual(deferred.matches, [REPORT_FINDINGS_TOOL, WORKFLOW_TOOL]);
   assert.deepEqual(deferred.alreadyLoaded, []);
-  assert.equal(
-    LIST_AGENTS_SEARCH_HINT,
-    "list agents you can SendMessage to",
-  );
+  assert.equal(LIST_AGENTS_SEARCH_HINT, "list agents you can SendMessage to");
   assert.equal(
     SCHEDULE_WAKEUP_SEARCH_HINT,
     "self-pace the dynamic /loop: pick a delay before the next tick, or stop/end/cancel the dynamic loop with stop:true (a fixed-interval /loop is a recurring cron \u2014 cancel it with CronDelete)",
@@ -200,30 +204,21 @@ test("ScheduleWakeup clamps, stops, and refuses a blocked plugin", async () => {
   );
   assert.equal(idle.content, scheduleWakeupStopText(0));
 
-  const missing = await call(
-    bindGuardedTool(scheduleWakeupTool(), host()),
-    {},
-  );
+  const missing = await call(bindGuardedTool(scheduleWakeupTool(), host()), {});
   assert.equal(missing.is_error, true);
   assert.equal(missing.content, WAKEUP_DELAY_REASON_REQUIRED);
-  const noPrompt = await call(
-    bindGuardedTool(scheduleWakeupTool(), host()),
-    { delaySeconds: 120, reason: "watching CI" },
-  );
+  const noPrompt = await call(bindGuardedTool(scheduleWakeupTool(), host()), {
+    delaySeconds: 120,
+    reason: "watching CI",
+  });
   assert.equal(noPrompt.content, WAKEUP_PROMPT_REQUIRED);
   const blocked = await call(
-    bindGuardedTool(
-      scheduleWakeupTool({ pluginBlocksSchedule: true }),
-      host(),
-    ),
+    bindGuardedTool(scheduleWakeupTool({ pluginBlocksSchedule: true }), host()),
     { delaySeconds: 120, reason: "watching CI", prompt: "again" },
   );
   assert.equal(blocked.content, WAKEUP_PLUGIN_BLOCKED);
   const stopAnyway = await call(
-    bindGuardedTool(
-      scheduleWakeupTool({ pluginBlocksSchedule: true }),
-      host(),
-    ),
+    bindGuardedTool(scheduleWakeupTool({ pluginBlocksSchedule: true }), host()),
     { stop: true },
   );
   assert.equal(stopAnyway.is_error, undefined);
@@ -259,7 +254,10 @@ test("ScheduleWakeup clamps, stops, and refuses a blocked plugin", async () => {
 
 test("Workflow rejects a missing source and does not launch a script", async () => {
   const missing = await call(bindGuardedTool(workflowTool(), host()), {});
-  assert.match(String(missing.content), /Must provide script, name, or scriptPath/);
+  assert.match(
+    String(missing.content),
+    /Must provide script, name, or scriptPath/,
+  );
   let prompt = "";
   const reviewed = await call(
     bindGuardedTool(
@@ -289,10 +287,7 @@ test("Workflow rejects a missing source and does not launch a script", async () 
   const missingFile = await call(bindGuardedTool(workflowTool(), host()), {
     scriptPath: join(directory, "missing.js"),
   });
-  assert.match(
-    String(missingFile.content),
-    /Workflow script file not found:/,
-  );
+  assert.match(String(missingFile.content), /Workflow script file not found:/);
 
   const launched = await call(bindGuardedTool(workflowTool(), host()), {
     script:
@@ -302,7 +297,10 @@ test("Workflow rejects a missing source and does not launch a script", async () 
   assert.equal(launched.content, WORKFLOW_NOT_LAUNCHED);
 
   const scriptPath = join(directory, "flow.js");
-  await writeFile(scriptPath, "export const meta = { name: 'review', description: 'Review' }\n");
+  await writeFile(
+    scriptPath,
+    "export const meta = { name: 'review', description: 'Review' }\n",
+  );
   const fromFile = await call(bindGuardedTool(workflowTool(), host()), {
     scriptPath,
     name: "ignored-because-path-wins",

@@ -76,9 +76,7 @@ async function print(
   expect(run.exitCode).toBe(0);
   return {
     run,
-    bodies: provider.requests.map((request) =>
-      requestBody.parse(request.body),
-    ),
+    bodies: provider.requests.map((request) => requestBody.parse(request.body)),
   };
 }
 
@@ -131,7 +129,6 @@ test("the Skill tool loads a built-in skill's body and writes its files", async 
   expect(body?.endsWith("## User Request\n\na bar chart of sales")).toBe(true);
   // dataviz ships references/palette.md (chunk-yvvw9mhr.js SKILL_FILES).
   expect(
-    readFileSync(join(directory ?? "", "references/palette.md"), "utf8")
-      .length,
+    readFileSync(join(directory ?? "", "references/palette.md"), "utf8").length,
   ).toBeGreaterThan(0);
 });

@@ -52,15 +52,9 @@
   {
     "kind": "user",
     "message.role": "user",
-    "message.content[].type": [
-      "tool_result"
-    ],
-    "message.content[].tool_use_id": [
-      "fixture-1"
-    ],
-    "message.content[].is_error": [
-      true
-    ],
+    "message.content[].type": ["tool_result"],
+    "message.content[].tool_use_id": ["fixture-1"],
+    "message.content[].is_error": [true],
     "parent_tool_use_id": null,
     "session_id": "<session-0>"
   },
@@ -97,15 +91,9 @@
   {
     "kind": "user",
     "message.role": "user",
-    "message.content[].type": [
-      "tool_result"
-    ],
-    "message.content[].tool_use_id": [
-      "fixture-2"
-    ],
-    "message.content[].is_error": [
-      true
-    ],
+    "message.content[].type": ["tool_result"],
+    "message.content[].tool_use_id": ["fixture-2"],
+    "message.content[].is_error": [true],
     "parent_tool_use_id": null,
     "session_id": "<session-0>"
   },
@@ -142,15 +130,9 @@
   {
     "kind": "user",
     "message.role": "user",
-    "message.content[].type": [
-      "tool_result"
-    ],
-    "message.content[].tool_use_id": [
-      "fixture-3"
-    ],
-    "message.content[].is_error": [
-      "<absent>"
-    ],
+    "message.content[].type": ["tool_result"],
+    "message.content[].tool_use_id": ["fixture-3"],
+    "message.content[].is_error": ["<absent>"],
     "parent_tool_use_id": null,
     "session_id": "<session-0>"
   },
@@ -190,15 +172,9 @@
   {
     "kind": "user",
     "message.role": "user",
-    "message.content[].type": [
-      "tool_result"
-    ],
-    "message.content[].tool_use_id": [
-      "fixture-4"
-    ],
-    "message.content[].is_error": [
-      true
-    ],
+    "message.content[].type": ["tool_result"],
+    "message.content[].tool_use_id": ["fixture-4"],
+    "message.content[].is_error": [true],
     "parent_tool_use_id": null,
     "session_id": "<session-0>"
   },
@@ -236,15 +212,9 @@
   {
     "kind": "user",
     "message.role": "user",
-    "message.content[].type": [
-      "tool_result"
-    ],
-    "message.content[].tool_use_id": [
-      "fixture-5"
-    ],
-    "message.content[].is_error": [
-      "<absent>"
-    ],
+    "message.content[].type": ["tool_result"],
+    "message.content[].tool_use_id": ["fixture-5"],
+    "message.content[].is_error": ["<absent>"],
     "parent_tool_use_id": null,
     "session_id": "<session-0>"
   },

@@ -38,15 +38,15 @@ rewrites only the rows that changed. Tau does not turn on mouse tracking.
 
 ## Layout
 
-| Region | Rule |
-|---|---|
-| Header | A blank row, three logo rows, a blank row. The logo rows read "<product> v<version>", "<model> · API Usage Billing" and the cwd. |
-| Transcript | Each item is preceded by one blank row. Rows are top-aligned. |
-| Input box | Pinned to the bottom: a `─` rule, `❯` and a no-break space, the input (hard-wrapped), a rule and one footer row. A blank row always separates it from the transcript. |
-| Overflow | The last `rows` rows show, so the header scrolls off first. |
-| Permission dialog | Replaces the input box and follows the transcript after a blank row. It is not pinned, so free rows stay blank below it. |
-| Help, status, model | A `▔` rule and the pane, pinned to the bottom, at most `rows - 1` rows. A clipped pane ends in `↓`. The transcript's last rows fill the space above it. |
-| Suggestions | Up to five rows painted over the rows just above the input box. |
+| Region              | Rule                                                                                                                                                                  |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Header              | A blank row, three logo rows, a blank row. The logo rows read "<product> v<version>", "<model> · API Usage Billing" and the cwd.                                      |
+| Transcript          | Each item is preceded by one blank row. Rows are top-aligned.                                                                                                         |
+| Input box           | Pinned to the bottom: a `─` rule, `❯` and a no-break space, the input (hard-wrapped), a rule and one footer row. A blank row always separates it from the transcript. |
+| Overflow            | The last `rows` rows show, so the header scrolls off first.                                                                                                           |
+| Permission dialog   | Replaces the input box and follows the transcript after a blank row. It is not pinned, so free rows stay blank below it.                                              |
+| Help, status, model | A `▔` rule and the pane, pinned to the bottom, at most `rows - 1` rows. A clipped pane ends in `↓`. The transcript's last rows fill the space above it.               |
+| Suggestions         | Up to five rows painted over the rows just above the input box.                                                                                                       |
 
 ## Footer and modes
 
@@ -62,17 +62,17 @@ shows "Press Ctrl-C again to exit" (`exit-hint-key`). A second press within
 
 ## Transcript rows
 
-| Item | Rows |
-|---|---|
-| Prompt | `❯ text` on a grey band the width of the screen |
-| Reply | `⏺ text`, continuation indented two |
-| Explore | `  Searched for N patterns, read N files` (`explore-summary-searches`) |
-| Tool | `⏺ Update(a.txt)`. The bullet is grey while pending, green when done and red on error. Then `  ⎿  Added 1 line, removed 1 line` (`patch-added-summary`) and the numbered patch rows, indented five. |
-| Refusal | `  ⎿  Rejected update to a.txt` plus the patch (`patch-rejected-summary`) |
-| Slash command | `❯ /model` then `  ⎿  Kept model as Sonnet 4.5` (`model-kept`, `model-set`) |
-| Turn end | `✻ <verb> for 0s · done 9:15 PM`. The verb is one of eight (`done-verbs`, `done-line`). |
-| Interrupt | `  ⎿  Interrupted · What should Claude do instead?` |
-| Spinner | `✽ <verb>…` with one of 187 verbs (`spinner-verbs`), hidden while a dialog is open |
+| Item          | Rows                                                                                                                                                                                                |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Prompt        | `❯ text` on a grey band the width of the screen                                                                                                                                                     |
+| Reply         | `⏺ text`, continuation indented two                                                                                                                                                                 |
+| Explore       | `  Searched for N patterns, read N files` (`explore-summary-searches`)                                                                                                                              |
+| Tool          | `⏺ Update(a.txt)`. The bullet is grey while pending, green when done and red on error. Then `  ⎿  Added 1 line, removed 1 line` (`patch-added-summary`) and the numbered patch rows, indented five. |
+| Refusal       | `  ⎿  Rejected update to a.txt` plus the patch (`patch-rejected-summary`)                                                                                                                           |
+| Slash command | `❯ /model` then `  ⎿  Kept model as Sonnet 4.5` (`model-kept`, `model-set`)                                                                                                                         |
+| Turn end      | `✻ <verb> for 0s · done 9:15 PM`. The verb is one of eight (`done-verbs`, `done-line`).                                                                                                             |
+| Interrupt     | `  ⎿  Interrupted · What should Claude do instead?`                                                                                                                                                 |
+| Spinner       | `✽ <verb>…` with one of 187 verbs (`spinner-verbs`), hidden while a dialog is open                                                                                                                  |
 
 A refusal without feedback ends the turn with no interruption row, as in the
 capture.
@@ -119,11 +119,11 @@ capture.
 Measured on 2026-11-18 with tau `--unsandboxed` from this checkout. The table
 counts rows equal in place after normalization, then rows equal in order (LCS).
 
-| Scenario | In place | In order |
-|---|---|---|
-| tour | 437/540 (80.9%) | 90.4% |
-| edit-always | 264/270 (97.8%) | 97.8% |
-| edit-reject | 207/210 (98.6%) | 98.6% |
+| Scenario    | In place        | In order |
+| ----------- | --------------- | -------- |
+| tour        | 437/540 (80.9%) | 90.4%    |
+| edit-always | 264/270 (97.8%) | 97.8%    |
+| edit-reject | 207/210 (98.6%) | 98.6%    |
 
 All tour steps except the three panes reach 100% when the agents hint is the
 only gap. The panes (help, status, model) score 10%, 0% and 3% in place.

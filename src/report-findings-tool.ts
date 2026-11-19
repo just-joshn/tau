@@ -56,10 +56,7 @@ const findingSchema = z
   .strict();
 const reportFindingsSchema = z
   .object({
-    level: z
-      .enum(effort)
-      .optional()
-      .describe("Effort level the review ran at"),
+    level: z.enum(effort).optional().describe("Effort level the review ran at"),
     findings: z
       .array(findingSchema)
       .max(32)
