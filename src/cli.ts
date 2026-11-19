@@ -1544,7 +1544,20 @@ async function main(): Promise<void> {
     ),
     bindGuardedTool(worktrees.enter, guardedHost),
     bindGuardedTool(worktrees.exit, guardedHost),
-    bindGuardedTool(listAgentsTool(), guardedHost),
+    bindGuardedTool(
+      listAgentsTool({
+        agents: () =>
+          agentHosts
+            .flatMap((host) => host.background?.list() ?? [])
+            .map((task) => ({
+              agentId: task.agentId,
+              agentType: task.agentType,
+              status: task.status,
+              startTime: task.startTime,
+            })),
+      }),
+      guardedHost,
+    ),
     bindGuardedTool(reportFindingsTool(), guardedHost),
     bindGuardedTool(scheduleWakeupTool({ jobs: cronStore }), guardedHost),
     bindGuardedTool(workflowTool(), guardedHost),
