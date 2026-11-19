@@ -146,7 +146,9 @@ export interface WorkflowToolOptions {
 }
 
 /** Pure-literal object after `export const meta =`; computed values are refused. */
-function parseMeta(text: string): { name: string } | undefined {
+function metaSpan(
+  text: string,
+): { from: number; start: number; end: number } | undefined {
   const match = /export\s+const\s+meta\s*=\s*\{/.exec(text);
   if (!match) return undefined;
   const start = match.index + match[0].length - 1;
@@ -162,8 +164,13 @@ function parseMeta(text: string): { name: string } | undefined {
     else if (ch === "{") depth++;
     else if (ch === "}" && --depth === 0) end = i;
   }
-  if (end < 0) return undefined;
-  const literal = text.slice(start, end + 1);
+  return end < 0 ? undefined : { from: match.index, start, end };
+}
+
+function parseMeta(text: string): { name: string } | undefined {
+  const span = metaSpan(text);
+  if (!span) return undefined;
+  const literal = text.slice(span.start, span.end + 1);
   const bare = literal
     .replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g, '""')
     .replace(/[A-Za-z_$][\w$]*(?=\s*:)/g, "")
@@ -179,6 +186,30 @@ function parseMeta(text: string): { name: string } | undefined {
   const name = field("name");
   if (!name || field("description") === undefined) return undefined;
   return { name };
+}
+
+/** Script body with the leading `export const meta = {…}` removed. */
+export function stripWorkflowMeta(text: string): string {
+  const span = metaSpan(text);
+  if (!span) return text;
+  const tail = /^\s*;?/.exec(text.slice(span.end + 1));
+  return (
+    text.slice(0, span.from) +
+    text.slice(span.end + 1 + (tail?.[0].length ?? 0))
+  );
+}
+
+/** Syntax-check the body like the original `es()`; returns `SyntaxError: …` or undefined. */
+export function compileWorkflowBody(text: string): string | undefined {
+  const body = stripWorkflowMeta(text);
+  try {
+    new Function(`async function _check() {'use strict';\n${body}\n}`);
+    return undefined;
+  } catch (error) {
+    return error instanceof SyntaxError
+      ? `SyntaxError: ${error.message}`
+      : undefined;
+  }
 }
 
 /** Named workflows: `*.js` files whose `meta.name` is declared, sorted by name. */
@@ -249,7 +280,8 @@ export function workflowTool(
     schema: () => workflowSchema,
     async validate(input) {
       const resolved = await resolveWorkflowSource(input, options);
-      return "error" in resolved ? resolved.error : undefined;
+      if ("error" in resolved) return resolved.error;
+      return compileWorkflowBody(resolved.text);
     },
     async check() {
       return { behavior: "ask", prompt: WORKFLOW_REVIEW_PROMPT };
