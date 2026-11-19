@@ -8,7 +8,7 @@ import {
 
 const main: SendCaller = { kind: "main" };
 const sub: SendCaller = { kind: "agent", agentId: "a1", name: "worker" };
-const v = (to: string, message: string, caller = main, notify?: boolean) =>
+const v = (to: string, message: string, caller: SendCaller = main, notify?: boolean) =>
   validateSendMessage(
     {
       to,
