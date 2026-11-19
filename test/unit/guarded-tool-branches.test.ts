@@ -37,7 +37,9 @@ function tool(
   };
 }
 function host(
-  overrides: Partial<Omit<GuardedToolHost, "policy">> & { policy?: unknown } = {},
+  overrides: Partial<Omit<GuardedToolHost, "policy">> & {
+    policy?: unknown;
+  } = {},
 ): GuardedToolHost {
   const { policy, ...rest } = overrides;
   return {
@@ -266,7 +268,9 @@ test("validation refusal, schema errors and unparsed JSON are tool errors", asyn
 
 test("wrapGuardedTools lists enabled tools and routes calls", async () => {
   const base: ToolExecutor = {
-    definitions: [{ name: "Base", description: "", input_schema: { type: "object" } }],
+    definitions: [
+      { name: "Base", description: "", input_schema: { type: "object" } },
+    ],
     execute: async (call: { id: string }) => ({
       type: "tool_result",
       tool_use_id: call.id,
