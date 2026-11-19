@@ -109,3 +109,29 @@ test("shellQuote leaves safe words bare and single-quotes the rest", () => {
   assert.equal(shellQuote(""), "''");
   assert.equal(shellQuote("it's here"), `'it'"'"'s here'`);
 });
+
+test("/bin/sh sources .profile and names the snapshot shellKind sh", async () => {
+  if (!existsSync("/bin/sh")) return;
+  const { env } = await home({
+    ".profile": 'alias greet="echo hello from profile"\n',
+  });
+  const file = await usableSnapshot("/bin/sh", env);
+  assert.ok(file);
+  assert.match(file, /snapshot-sh-/);
+  assert.equal(runSourced("/bin/sh", file, "greet"), "hello from profile\n");
+});
+
+test("an empty PATH and DONT_INHERIT_ENV still produce a usable snapshot", async () => {
+  const shell = SHELLS[0];
+  assert.ok(shell);
+  const { env } = await home();
+  const stripped: NodeJS.ProcessEnv = {
+    HOME: env.HOME,
+    CLAUDE_CONFIG_DIR: env.CLAUDE_CONFIG_DIR,
+    PATH: "",
+    CLAUDE_CODE_DONT_INHERIT_ENV: "1",
+  };
+  const file = await usableSnapshot(shell, stripped);
+  assert.ok(file);
+  assert.equal(runSourced(shell, file, "echo ok"), "ok\n");
+});

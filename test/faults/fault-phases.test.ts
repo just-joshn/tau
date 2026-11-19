@@ -83,21 +83,25 @@ test("INV-13 before dispatch: a refused connection ends as an error without outp
   assert.equal(envelope(run).api_error_status, null);
 });
 
-test("INV-13 during streaming: a drop before any completed block ends as an error", async () => {
-  // turnEvents for one text block: message_start, block start, block stop, ...
-  for (const events of [0, 1, 2]) {
-    const provider = await startMockProvider([
-      { kind: "drop", events },
-      { kind: "drop", events },
-    ]);
-    const run = await runCli({
-      args: ["-p", "hi", ...JSON_ARGS, ...NO_RECOVERY],
-      provider,
-    });
-    assertFailed(run);
-    assert.equal(provider.unexpected, 0, `drop after ${events} events`);
-  }
-});
+test(
+  "INV-13 during streaming: a drop before any completed block ends as an error",
+  async () => {
+    // turnEvents for one text block: message_start, block start, block stop, ...
+    for (const events of [0, 1, 2]) {
+      const provider = await startMockProvider([
+        { kind: "drop", events },
+        { kind: "drop", events },
+      ]);
+      const run = await runCli({
+        args: ["-p", "hi", ...JSON_ARGS, ...NO_RECOVERY],
+        provider,
+      });
+      assertFailed(run);
+      assert.equal(provider.unexpected, 0, `drop after ${events} events`);
+    }
+  },
+  { timeout: 30_000 },
+);
 
 test("INV-13 during streaming: a drop after a completed block exits 0 with the kept text and a warning", async () => {
   // Two text blocks; the cut follows the second block's text, which tau

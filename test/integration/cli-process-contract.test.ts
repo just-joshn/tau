@@ -195,19 +195,23 @@ test("a repeated --tools exits 1 while a repeated --model keeps the last value",
   );
 });
 
-test("an invalid option value exits 1 with a tau: diagnostic, no stack trace and empty stdout", async () => {
-  for (const args of [
-    ["--permission-mode", "sometimes"],
-    ["--output-format", "xml"],
-    ["--max-retries", "99"],
-  ]) {
-    const run = await runCli({ args: ["-p", "hi", ...args] });
-    assert.equal(run.exitCode, 1, run.stderr);
-    assert.equal(run.stdout, "");
-    assert.ok(run.stderr.startsWith("tau: "), run.stderr);
-    assert.doesNotMatch(run.stderr, STACK_FRAME);
-  }
-});
+test(
+  "an invalid option value exits 1 with a tau: diagnostic, no stack trace and empty stdout",
+  async () => {
+    for (const args of [
+      ["--permission-mode", "sometimes"],
+      ["--output-format", "xml"],
+      ["--max-retries", "99"],
+    ]) {
+      const run = await runCli({ args: ["-p", "hi", ...args] });
+      assert.equal(run.exitCode, 1, run.stderr);
+      assert.equal(run.stdout, "");
+      assert.ok(run.stderr.startsWith("tau: "), run.stderr);
+      assert.doesNotMatch(run.stderr, STACK_FRAME);
+    }
+  },
+  { timeout: 30_000 },
+);
 
 // tau prints the raw zod issue array for a bad option value, so the diagnostic
 // spans a dozen lines of JSON instead of one stable `tau:` line.
@@ -233,39 +237,43 @@ test("a missing --cwd directory exits 1 without contacting the provider", async 
   assert.equal(provider.requests.length, 0);
 });
 
-test("a runtime provider failure with retries disabled exits 1 after one request", async () => {
-  const failure = {
-    kind: "error" as const,
-    status: 500,
-    body: { type: "error", error: { type: "api_error", message: "boom" } },
-  };
-  const textProvider = await startMockProvider([failure]);
-  const text = await runCli({
-    args: ["-p", "hi", "--max-retries", "0"],
-    provider: textProvider,
-  });
-  assert.equal(text.exitCode, 1);
-  assert.equal(text.stderr, "tau: Messages API HTTP error 500\n");
-  // Text mode still ends stdout with the (empty) answer's newline.
-  assert.equal(text.stdout, "\n");
-  assert.equal(textProvider.requests.length, 1);
-  assert.equal(textProvider.unexpected, 0);
+test(
+  "a runtime provider failure with retries disabled exits 1 after one request",
+  async () => {
+    const failure = {
+      kind: "error" as const,
+      status: 500,
+      body: { type: "error", error: { type: "api_error", message: "boom" } },
+    };
+    const textProvider = await startMockProvider([failure]);
+    const text = await runCli({
+      args: ["-p", "hi", "--max-retries", "0"],
+      provider: textProvider,
+    });
+    assert.equal(text.exitCode, 1);
+    assert.equal(text.stderr, "tau: Messages API HTTP error 500\n");
+    // Text mode still ends stdout with the (empty) answer's newline.
+    assert.equal(text.stdout, "\n");
+    assert.equal(textProvider.requests.length, 1);
+    assert.equal(textProvider.unexpected, 0);
 
-  const jsonProvider = await startMockProvider([failure]);
-  const json = await runCli({
-    args: ["-p", "hi", "--max-retries", "0", "--output-format", "json"],
-    provider: jsonProvider,
-  });
-  assert.equal(json.exitCode, 1);
-  assert.equal(json.stderr, "");
-  const result = resultSchema.parse(JSON.parse(json.stdout));
-  // The original reports a failed model request as an API-error reply.
-  assert.equal(result.is_error, true);
-  assert.equal(result.subtype, "success");
-  assert.equal(result.api_error_status, 500);
-  assert.equal(result.result, "Messages API HTTP error 500");
-  assert.equal(jsonProvider.requests.length, 1);
-});
+    const jsonProvider = await startMockProvider([failure]);
+    const json = await runCli({
+      args: ["-p", "hi", "--max-retries", "0", "--output-format", "json"],
+      provider: jsonProvider,
+    });
+    assert.equal(json.exitCode, 1);
+    assert.equal(json.stderr, "");
+    const result = resultSchema.parse(JSON.parse(json.stdout));
+    // The original reports a failed model request as an API-error reply.
+    assert.equal(result.is_error, true);
+    assert.equal(result.subtype, "success");
+    assert.equal(result.api_error_status, 500);
+    assert.equal(result.result, "Messages API HTTP error 500");
+    assert.equal(jsonProvider.requests.length, 1);
+  },
+  { timeout: 30_000 },
+);
 
 test("the API_TIMEOUT_MS request limit ends a hung request with exit 1", async () => {
   const provider = await startMockProvider([{ kind: "hang" }]);
@@ -416,47 +424,57 @@ test("text mode writes only the answer to stdout and tool progress to stderr", a
   assert.match(run.stderr, /\[Read\] \{"file_path":"notes.txt"\}/);
 });
 
-test("non-TTY stdout and stderr carry no escape or bell bytes from model text or tool output", async () => {
-  const hostile = "\u001b]0;pwned\u0007\u001b[31mred\u001b[0m alert\u0007";
-  const script = () => [
-    {
-      kind: "turn" as const,
-      content: [
-        {
-          type: "tool_use" as const,
-          id: "read_1",
-          name: "Read",
-          input: { file_path: "evil.txt" },
-        },
-      ],
-      stopReason: "tool_use" as const,
-    },
-    answer(hostile),
-  ];
-  for (const format of ["text", "json", "stream-json"]) {
-    const provider = await startMockProvider(script());
-    const run = await runCli({
-      args: [
-        "-p",
-        "show",
-        "--output-format",
-        format,
-        ...(format === "stream-json" ? ["--verbose"] : []),
-      ],
-      provider,
-      files: { "evil.txt": `${hostile}\n` },
-    });
-    assert.equal(run.exitCode, 0, run.stderr);
-    assert.ok(!hasEscapes(run.stdout), `${format} stdout`);
-    assert.ok(!hasEscapes(run.stderr), `${format} stderr`);
-    if (format === "text") {
-      assert.equal(run.stdout, "red alert\n");
-      assert.ok(run.stderr.includes("red alert"), "tool output was not shown");
+test(
+  "non-TTY stdout and stderr carry no escape or bell bytes from model text or tool output",
+  async () => {
+    const hostile = "\u001b]0;pwned\u0007\u001b[31mred\u001b[0m alert\u0007";
+    const script = () => [
+      {
+        kind: "turn" as const,
+        content: [
+          {
+            type: "tool_use" as const,
+            id: "read_1",
+            name: "Read",
+            input: { file_path: "evil.txt" },
+          },
+        ],
+        stopReason: "tool_use" as const,
+      },
+      answer(hostile),
+    ];
+    for (const format of ["text", "json", "stream-json"]) {
+      const provider = await startMockProvider(script());
+      const run = await runCli({
+        args: [
+          "-p",
+          "show",
+          "--output-format",
+          format,
+          ...(format === "stream-json" ? ["--verbose"] : []),
+        ],
+        provider,
+        files: { "evil.txt": `${hostile}\n` },
+      });
+      assert.equal(run.exitCode, 0, run.stderr);
+      assert.ok(!hasEscapes(run.stdout), `${format} stdout`);
+      assert.ok(!hasEscapes(run.stderr), `${format} stderr`);
+      if (format === "text") {
+        assert.equal(run.stdout, "red alert\n");
+        assert.ok(
+          run.stderr.includes("red alert"),
+          "tool output was not shown",
+        );
+      }
+      if (format === "json")
+        assert.equal(
+          resultSchema.parse(JSON.parse(run.stdout)).result,
+          hostile,
+        );
     }
-    if (format === "json")
-      assert.equal(resultSchema.parse(JSON.parse(run.stdout)).result, hostile);
-  }
-});
+  },
+  { timeout: 30_000 },
+);
 
 /** Splits newline-delimited JSON fed in arbitrary byte fragments. */
 function jsonLineParser() {
