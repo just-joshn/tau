@@ -78,10 +78,7 @@ test("autonomous sentinels resolve to tick text and other prompts stay", () => {
   expect(cron).not.toContain("dynamic pacing");
   expect(cron).toContain("do not call ScheduleWakeup");
   expect(resolveIdlePrompt("/loop check the run")).toBe("/loop check the run");
-  const fired = planIdleFires(
-    [loopJob(1_000, AUTONOMOUS_LOOP_DYNAMIC)],
-    1_000,
-  );
+  const fired = planIdleFires([loopJob(1_000, AUTONOMOUS_LOOP_DYNAMIC)], 1_000);
   expect(fired.prompts).toEqual([dynamic]);
 });
 

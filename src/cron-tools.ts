@@ -424,10 +424,7 @@ export class CronJobStore {
       const durable = disk.kind === "tasks" ? disk.tasks : [];
       const durablePlan = planIdleFires(durable, now);
       const sessionPlan = planIdleFires(this.#session, now);
-      if (
-        disk.kind === "tasks" &&
-        durableChanged(durable, durablePlan.jobs)
-      )
+      if (disk.kind === "tasks" && durableChanged(durable, durablePlan.jobs))
         await this.#writeDisk(durablePlan.jobs);
       this.#session = sessionPlan.jobs;
       return [...durablePlan.prompts, ...sessionPlan.prompts];
