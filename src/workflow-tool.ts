@@ -5,6 +5,13 @@
  */
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
+import {
+  type AnyNode,
+  type ExportNamedDeclaration,
+  type ObjectExpression,
+  parse,
+  type VariableDeclaration,
+} from "acorn";
 import { z } from "zod";
 import { WORKFLOW_DESCRIPTION } from "./eager-catalog-text.js";
 import type { GuardedTool } from "./guarded-tool.js";
@@ -145,65 +152,176 @@ export interface WorkflowToolOptions {
   workflowsDir?: string;
 }
 
-/** Pure-literal object after `export const meta =`; computed values are refused. */
-function metaSpan(
-  text: string,
-): { from: number; start: number; end: number } | undefined {
-  const match = /export\s+const\s+meta\s*=\s*\{/.exec(text);
-  if (!match) return undefined;
-  const start = match.index + match[0].length - 1;
-  let depth = 0;
-  let quote = "";
-  let end = -1;
-  for (let i = start; i < text.length && end < 0; i++) {
-    const ch = text.charAt(i);
-    if (quote) {
-      if (ch === "\\") i++;
-      else if (ch === quote) quote = "";
-    } else if (ch === '"' || ch === "'" || ch === "`") quote = ch;
-    else if (ch === "{") depth++;
-    else if (ch === "}" && --depth === 0) end = i;
-  }
-  return end < 0 ? undefined : { from: match.index, start, end };
+export interface WorkflowMeta {
+  name: string;
+  description: string;
+  title?: string;
+  whenToUse?: string;
+  phases?: Array<{ title: string; detail?: string; model?: string }>;
 }
+export type ParsedWorkflow =
+  | { meta: WorkflowMeta; scriptBody: string }
+  | { error: string };
 
-function parseMeta(text: string): { name: string } | undefined {
-  const span = metaSpan(text);
-  if (!span) return undefined;
-  const literal = text.slice(span.start, span.end + 1);
-  const bare = literal
-    .replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g, '""')
-    .replace(/[A-Za-z_$][\w$]*(?=\s*:)/g, "")
-    .replace(/\b(?:true|false|null)\b/g, "");
-  if (/[A-Za-z_$]|\(|`/.test(bare)) return undefined;
-  const field = (key: string): string | undefined =>
-    new RegExp(
-      `(?:^|[{,\\s])${key}\\s*:\\s*(?:"((?:[^"\\\\]|\\\\.)*)"|'((?:[^'\\\\]|\\\\.)*)')`,
-    )
-      .exec(literal)
-      ?.slice(1, 3)
-      .find((part) => part !== undefined);
-  const name = field("name");
-  if (!name || field("description") === undefined) return undefined;
-  return { name };
-}
+const RESERVED_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+const PLAIN_JS_HINT =
+  "Workflow scripts must be plain JavaScript \u2014 common causes are TypeScript syntax (type annotations, interfaces, generics) and broken string quoting or escaping.";
 
-/** Script body with the leading `export const meta = {…}` removed. */
-export function stripWorkflowMeta(text: string): string {
-  const span = metaSpan(text);
-  if (!span) return text;
-  const tail = /^\s*;?/.exec(text.slice(span.end + 1));
+function isMetaDeclaration(node: AnyNode): node is ExportNamedDeclaration {
+  if (node.type !== "ExportNamedDeclaration") return false;
+  const decl = node.declaration;
+  if (decl?.type !== "VariableDeclaration") return false;
+  if (decl.kind !== "const" || decl.declarations.length !== 1) return false;
+  const first = decl.declarations[0];
   return (
-    text.slice(0, span.from) +
-    text.slice(span.end + 1 + (tail?.[0].length ?? 0))
+    first?.id.type === "Identifier" &&
+    first.id.name === "meta" &&
+    first.init?.type === "ObjectExpression"
   );
 }
 
-/** Syntax-check the body like the original `es()`; returns `SyntaxError: …` or undefined. */
-export function compileWorkflowBody(text: string): string | undefined {
-  const body = stripWorkflowMeta(text);
+function literalValue(node: AnyNode): unknown {
+  switch (node.type) {
+    case "Literal":
+      return node.value;
+    case "ArrayExpression":
+      return node.elements.map((element) => {
+        if (element === null) throw new Error("sparse arrays not allowed");
+        if (element.type === "SpreadElement")
+          throw new Error("spread not allowed in meta");
+        return literalValue(element);
+      });
+    case "ObjectExpression":
+      return objectValue(node);
+    case "TemplateLiteral":
+      if (node.expressions.length > 0)
+        throw new Error("template interpolation not allowed in meta");
+      return node.quasis.map((quasi) => quasi.value.cooked ?? "").join("");
+    case "UnaryExpression":
+      if (
+        node.operator === "-" &&
+        node.argument.type === "Literal" &&
+        typeof node.argument.value === "number"
+      )
+        return -node.argument.value;
+      throw new Error("only negative-number unary allowed in meta");
+    default:
+      throw new Error(`non-literal node type in meta: ${node.type}`);
+  }
+}
+
+function objectValue(node: ObjectExpression): Record<string, unknown> {
+  const out: Record<string, unknown> = Object.create(null);
+  for (const prop of node.properties) {
+    if (prop.type !== "Property")
+      throw new Error("only plain properties allowed in meta");
+    if (prop.computed) throw new Error("computed keys not allowed in meta");
+    if (prop.method || prop.kind !== "init")
+      throw new Error("methods/accessors not allowed in meta");
+    let key: string;
+    if (prop.key.type === "Identifier") key = prop.key.name;
+    else if (prop.key.type === "Literal") key = String(prop.key.value);
+    else throw new Error(`unsupported key type in meta: ${prop.key.type}`);
+    if (RESERVED_KEYS.has(key))
+      throw new Error(`reserved key name not allowed in meta: ${key}`);
+    out[key] = literalValue(prop.value);
+  }
+  return out;
+}
+
+function metaPhases(value: unknown): WorkflowMeta["phases"] {
+  if (!Array.isArray(value)) return undefined;
+  const phases: NonNullable<WorkflowMeta["phases"]> = [];
+  for (const item of value as unknown[]) {
+    if (typeof item !== "object" || item === null || !("title" in item))
+      continue;
+    const { title, detail, model } = item as Record<string, unknown>;
+    if (typeof title !== "string") continue;
+    phases.push({
+      title,
+      ...(typeof detail === "string" ? { detail } : {}),
+      ...(typeof model === "string" ? { model } : {}),
+    });
+  }
+  return phases.length > 0 ? phases : undefined;
+}
+
+function validateMeta(raw: Record<string, unknown>): ParsedWorkflow | {
+  meta: WorkflowMeta;
+} {
+  const { name, description, title, whenToUse } = raw;
+  if (typeof name !== "string" || name.length === 0)
+    return { error: "meta.name must be a non-empty string" };
+  if (typeof description !== "string" || description.length === 0)
+    return { error: "meta.description must be a non-empty string" };
+  const phases = metaPhases(raw.phases);
+  return {
+    meta: {
+      name,
+      description,
+      ...(typeof title === "string" && title.length > 0 ? { title } : {}),
+      ...(typeof whenToUse === "string" ? { whenToUse } : {}),
+      ...(phases ? { phases } : {}),
+    },
+  };
+}
+
+/** Original `XT`: meta must be the first statement, a pure literal. */
+export function parseWorkflowScript(text: string): ParsedWorkflow {
+  if (text.length > SCRIPT_BYTES)
+    return { error: `Script exceeds ${SCRIPT_BYTES} bytes` };
+  let program;
   try {
-    new Function(`async function _check() {'use strict';\n${body}\n}`);
+    program = parse(text, {
+      ecmaVersion: "latest",
+      sourceType: "module",
+      allowAwaitOutsideFunction: true,
+      allowReturnOutsideFunction: true,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { error: `Script parse error: ${message}. ${PLAIN_JS_HINT}` };
+  }
+  const first = program.body[0];
+  if (!first || !isMetaDeclaration(first))
+    return {
+      error:
+        "`export const meta = { name, description, phases }` must be the FIRST statement in the script",
+    };
+  const init = (first.declaration as VariableDeclaration).declarations[0]?.init;
+  let raw: Record<string, unknown>;
+  try {
+    raw = objectValue(init as ObjectExpression);
+  } catch (error) {
+    return {
+      error: `meta must be a pure literal: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+  const checked = validateMeta(raw);
+  if ("error" in checked) return checked;
+  return {
+    meta: checked.meta,
+    scriptBody: text
+      .slice(first.end)
+      .replace(/^[;\s]*\n/, "")
+      .trimStart(),
+  };
+}
+
+/** Script body with the leading meta removed; unparseable text is returned unchanged. */
+export function stripWorkflowMeta(text: string): string {
+  const parsed = parseWorkflowScript(text);
+  return "error" in parsed ? text : parsed.scriptBody;
+}
+
+/** Original parse then `es()` body check; returns the XT error, `SyntaxError: …`, or undefined. */
+export function compileWorkflowBody(text: string): string | undefined {
+  const parsed = parseWorkflowScript(text);
+  if ("error" in parsed) return parsed.error;
+  try {
+    new Function(
+      `async function _check() {'use strict';\n${parsed.scriptBody}\n}`,
+    );
     return undefined;
   } catch (error) {
     return error instanceof SyntaxError
@@ -231,8 +349,9 @@ export async function listNamedWorkflows(
       const info = await stat(path);
       if (!info.isFile() || info.size > SCRIPT_BYTES) continue;
       const text = await readFile(path, "utf8");
-      const meta = parseMeta(text);
-      if (meta) found.set(meta.name, { name: meta.name, text, path });
+      const parsed = parseWorkflowScript(text);
+      if ("meta" in parsed)
+        found.set(parsed.meta.name, { name: parsed.meta.name, text, path });
     } catch {
       continue;
     }

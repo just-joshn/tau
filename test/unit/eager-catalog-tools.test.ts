@@ -334,7 +334,11 @@ test("Workflow resolves named files under the workflows dir", async () => {
     /Workflow "zeta" not found\. Available: alpha, beta/,
   );
   const direct = join(root, "direct.js");
-  await writeFile(direct, "return 2");
+  await writeFile(direct, "export const meta = { name: 'direct', description: 'd' }\nreturn 2");
+  const bare = join(root, "bare.js");
+  await writeFile(bare, "return 2");
+  const bareResult = await call(tool(), { scriptPath: bare });
+  assert.match(String(bareResult.content), /must be the FIRST statement/);
   const winner = await call(tool(), { name: "zeta", scriptPath: direct });
   assert.equal(winner.content, WORKFLOW_NOT_LAUNCHED);
 });
