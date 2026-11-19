@@ -11,6 +11,7 @@ import {
   nativeInstructionFileFacts,
   type NativeInstructionCaptureHost,
 } from "./native-instruction-capture.js";
+import { renderFirstLoadInstructionReminder } from "./native-persistence-events.js";
 
 interface ProjectedInstruction {
   file: InstructionFile;
@@ -83,6 +84,12 @@ const render = (files: ProjectedInstruction[]) =>
         `Instruction file (${file.kind}): ${file.path}\n${body}`,
     )
     .join("\n\n");
+
+function eagerInstructionsAnnounced(messages: Message[]): boolean {
+  return messages
+    .slice(activeContextStart(messages))
+    .some((message) => (message.instructionFiles?.length ?? 0) > 0);
+}
 
 /** Catalog admission, model-visible announcements and file-read baselines stay separate. */
 export class InstructionContext {
@@ -173,10 +180,17 @@ export class InstructionContext {
         { kind: "eager", message },
       );
     if (!changed.length && !removed.length) return;
+    const changedNotice = eagerInstructionsAnnounced(history)
+      ? `Current instruction files (updated copies replace earlier versions):\n\n${render(changed)}`
+      : renderFirstLoadInstructionReminder(
+          changed.map(({ file, body }) => ({
+            path: file.path,
+            type: file.kind,
+            content: body,
+          })),
+        );
     const notice = [
-      changed.length
-        ? `Current instruction files (updated copies replace earlier versions):\n\n${render(changed)}`
-        : "",
+      changed.length ? changedNotice : "",
       ...removed.map(
         (file) =>
           `Instruction file removed from the active catalog: ${file.path}`,

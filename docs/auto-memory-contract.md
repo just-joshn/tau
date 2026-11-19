@@ -63,6 +63,8 @@ While the gate is on, the instruction catalog loads `<folder>MEMORY.md` after ev
 
 Control and invisible characters are dropped, and reminder-tag openers become `<\`. `CLAUDE_COWORK_MEMORY_INDEX_CONTENT` replaces the file read. Empty, it loads no index. An empty index adds nothing. Subagents get the same entry through their own catalog.
 
+The first print-mode request puts every admitted file, including this index, in one `<system-reminder>`. The body is the native preamble plus one `Contents of <path> <kind label>:` block per file. AutoMem's label is `(user's auto-memory, persists across conversations)`, and its body is sanitized again at render.
+
 ## File allowance
 
 In `vct`, after the protected-config floors and before the broad `.claude` directory hold:
@@ -89,11 +91,11 @@ python3 scripts/differential/run_memory_auto.py tau
 python3 scripts/differential/compare_prompt.py artifacts/differential-pass/memory-auto/original-memory-auto.json artifacts/differential-pass/memory-auto/tau-memory-auto.json
 ```
 
-Each summary's `checks` must be all true. The index block's wrapper differs by design (see below).
+Each summary's `checks` must be all true. The first-load `index_block` is one `<system-reminder>` whose body is the native preamble plus `Contents of <path> (user's auto-memory, persists across conversations):`.
 
 ## Not modeled
 
-- Rendering: tau shows the index as `Instruction file (AutoMem): <path>` inside its own instruction notice. The original shows `Contents of <path> (user's auto-memory, persists across conversations):` in the `claudeMd` reminder. That is the same divergence as every CLAUDE.md file.
+- Instruction updates and nested activation still use tau's notices (`Current instruction files…`, `Instruction file (<kind>):`, `Nested instruction files`).
 - Team memory, `CLAUDE_MEMORY_STORES`, memory tools, sync notes and `skipIndex`.
 - The lean prompt (`ZSe`), the split prompt for `excludeDynamicSections` (`_Ma`), and the REPL wording.
 - The full `Xh` tag neutralizer. tau defuses only the literal tag names in `Phe`.
