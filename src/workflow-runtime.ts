@@ -13,7 +13,13 @@ export interface WorkflowRunOptions {
   args?: unknown;
 }
 
-const HOST_FUNCTIONS = ["agent", "parallel", "pipeline", "phase", "log"] as const;
+const HOST_FUNCTIONS = [
+  "agent",
+  "parallel",
+  "pipeline",
+  "phase",
+  "log",
+] as const;
 
 type HostFn = () => never;
 type BodyFactory = (args: unknown, ...hosts: HostFn[]) => unknown;

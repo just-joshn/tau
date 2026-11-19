@@ -155,8 +155,7 @@ export interface WorkflowMeta {
   phases?: Array<{ title: string; detail?: string; model?: string }>;
 }
 export type ParsedWorkflow =
-  | { meta: WorkflowMeta; scriptBody: string }
-  | { error: string };
+  { meta: WorkflowMeta; scriptBody: string } | { error: string };
 
 const RESERVED_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 const PLAIN_JS_HINT =
@@ -245,9 +244,11 @@ function metaPhases(value: unknown): WorkflowMeta["phases"] {
   return phases.length > 0 ? phases : undefined;
 }
 
-function validateMeta(raw: Record<string, unknown>): ParsedWorkflow | {
-  meta: WorkflowMeta;
-} {
+function validateMeta(raw: Record<string, unknown>):
+  | ParsedWorkflow
+  | {
+      meta: WorkflowMeta;
+    } {
   const { name, description, title, whenToUse } = raw;
   if (typeof name !== "string" || name.length === 0)
     return { error: "meta.name must be a non-empty string" };

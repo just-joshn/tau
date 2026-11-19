@@ -65,9 +65,7 @@ test("workflow validate covers script limits, files and sources", async () => {
   const t = workflowTool();
   const v = (input: WorkflowInput) => t.validate?.(input);
   expect(await v({})).toBe("Must provide script, name, or scriptPath");
-  expect(await v({ script: "x" })).toContain(
-    "must be the FIRST statement",
-  );
+  expect(await v({ script: "x" })).toContain("must be the FIRST statement");
   const dir = await mkdtemp(path.join(os.tmpdir(), "wf-"));
   try {
     const missing = path.join(dir, "missing.js");

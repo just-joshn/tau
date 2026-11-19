@@ -39,19 +39,61 @@ test("meta validation and purity errors", () => {
     const p = parseWorkflowScript(t);
     return "error" in p ? p.error : "";
   };
-  assert.match(err(`export const meta = { name: "", description: "d" };`), /meta.name must be/);
-  assert.match(err(`export const meta = { name: "n" };`), /meta.description must be/);
-  assert.match(err(`export const meta = { name: x, description: "d" };`), /pure literal: non-literal node type in meta: Identifier/);
+  assert.match(
+    err(`export const meta = { name: "", description: "d" };`),
+    /meta.name must be/,
+  );
+  assert.match(
+    err(`export const meta = { name: "n" };`),
+    /meta.description must be/,
+  );
+  assert.match(
+    err(`export const meta = { name: x, description: "d" };`),
+    /pure literal: non-literal node type in meta: Identifier/,
+  );
   assert.match(err(`export const meta = { ["a"]: 1 };`), /computed keys/);
-  assert.match(err(`export const meta = { name: "n", description: "d", get x() { return 1; } };`), /methods\/accessors/);
-  assert.match(err(`export const meta = { name: "n", description: "d", ...{} };`), /only plain properties|spread/);
-  assert.match(err(`export const meta = { name: "n", description: "d", "__proto__": "x" };`), /reserved key/);
-  assert.match(err(`export const meta = { name: "n", description: "d", tags: [,] };`), /sparse arrays/);
-  assert.match(err(`export const meta = { name: "n", description: "d", tags: [...[]] };`), /spread not allowed/);
-  assert.match(err(`export const meta = { name: "n", description: "d", note: \`x\${1}\` };`), /template interpolation/);
-  assert.match(err(`export const meta = { name: "n", description: "d", n: +1 };`), /negative-number unary/);
-  assert.match(err(`export let meta = { name: "n", description: "d" };`), /must be the FIRST/);
-  assert.match(err(`export const meta = { name: "n", description: "d" }, other = 1;`), /must be the FIRST/);
+  assert.match(
+    err(
+      `export const meta = { name: "n", description: "d", get x() { return 1; } };`,
+    ),
+    /methods\/accessors/,
+  );
+  assert.match(
+    err(`export const meta = { name: "n", description: "d", ...{} };`),
+    /only plain properties|spread/,
+  );
+  assert.match(
+    err(
+      `export const meta = { name: "n", description: "d", "__proto__": "x" };`,
+    ),
+    /reserved key/,
+  );
+  assert.match(
+    err(`export const meta = { name: "n", description: "d", tags: [,] };`),
+    /sparse arrays/,
+  );
+  assert.match(
+    err(`export const meta = { name: "n", description: "d", tags: [...[]] };`),
+    /spread not allowed/,
+  );
+  assert.match(
+    err(
+      `export const meta = { name: "n", description: "d", note: \`x\${1}\` };`,
+    ),
+    /template interpolation/,
+  );
+  assert.match(
+    err(`export const meta = { name: "n", description: "d", n: +1 };`),
+    /negative-number unary/,
+  );
+  assert.match(
+    err(`export let meta = { name: "n", description: "d" };`),
+    /must be the FIRST/,
+  );
+  assert.match(
+    err(`export const meta = { name: "n", description: "d" }, other = 1;`),
+    /must be the FIRST/,
+  );
   assert.match(err("x".repeat(524289)), /Script exceeds/);
 });
 
