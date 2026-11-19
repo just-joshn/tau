@@ -612,3 +612,70 @@ test("a validated hook redirect activates instructions for the executed path wit
     false,
   );
 });
+
+test("the first eager announcement uses the native instruction reminder, and a later edit keeps the update notice", async () => {
+  const root = await realpath(
+    await mkdtemp(join(tmpdir(), "tau-automem-wrapper-")),
+  );
+  onTestFinished(() => rm(root, { recursive: true, force: true }));
+  const cwd = join(root, "work"),
+    memory = join(root, "memory"),
+    index = join(memory, "MEMORY.md"),
+    line =
+      "- [User role](user_role.md) \u2014 TAU_AUTO_MEMORY_INDEX_LINE";
+  await mkdir(cwd);
+  await mkdir(memory);
+  await writeFile(index, `${line}\n`);
+  await writeFile(join(cwd, "CLAUDE.md"), "PROJECT_RULE\n");
+  const create = () =>
+    new InstructionContext({
+      cwd,
+      catalog: createInstructionCatalog({
+        cwd,
+        ancestorBoundary: cwd,
+        sources: { user: false, project: true, local: false },
+        autoMemoryIndex: { path: index },
+      }),
+      model: () => "claude-sonnet-4-5",
+      contextWindow: () => 200000,
+    });
+  const first: Message = {
+    role: "user",
+    content: [{ type: "text", text: "recall" }],
+  };
+  await create().announce(first, []);
+  const block = first.content.find(
+    (item) =>
+      item.type === "text" && item.text.includes("TAU_AUTO_MEMORY_INDEX_LINE"),
+  );
+  assert.ok(block && block.type === "text");
+  assert.equal(
+    block.text,
+    [
+      "<system-reminder>",
+      "Codebase and user instructions are shown below. Be sure to adhere to these instructions. IMPORTANT: These instructions OVERRIDE any default behavior and you MUST follow them exactly as written.",
+      "",
+      `Contents of ${join(cwd, "CLAUDE.md")} (project instructions, checked into the codebase):`,
+      "",
+      "PROJECT_RULE",
+      "",
+      `Contents of ${index} (user's auto-memory, persists across conversations):`,
+      "",
+      line,
+      "</system-reminder>",
+    ].join("\n"),
+  );
+  await writeFile(join(cwd, "CLAUDE.md"), "PROJECT_RULE_NEXT\n");
+  const next: Message = { role: "user", content: [] };
+  await create().announce(next, [first]);
+  const update = next.content[0];
+  assert.ok(update && update.type === "text");
+  assert.match(
+    update.text,
+    /Current instruction files \(updated copies replace earlier versions\)/,
+  );
+  assert.match(update.text, /Instruction file \(Project\):/);
+  assert.match(update.text, /PROJECT_RULE_NEXT/);
+  assert.doesNotMatch(update.text, /TAU_AUTO_MEMORY_INDEX_LINE/);
+  assert.doesNotMatch(update.text, /Codebase and user instructions/);
+});
