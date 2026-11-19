@@ -282,7 +282,7 @@ test("native eager capture uses real admitted files before rendering and full ow
     capture.beforeNotice[0],
     JSON.stringify([{ type: "text", text: "HUMAN_INITIAL" }]),
   );
-  assert.match(JSON.stringify(first.content), /Current instruction files/);
+  assert.match(JSON.stringify(first.content), /Codebase and user instructions/);
   const same: Message = {
     role: "user",
     content: [{ type: "text", text: "HUMAN_SAME" }],

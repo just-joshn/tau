@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { sanitizeAutoMemoryIndex } from "./auto-memory.js";
 import { escapeReminderText } from "./attachments.js";
 import {
   validateNativeHookProgressRow,
@@ -413,6 +414,33 @@ const reasonText: Record<(typeof reasons)[number], string> = {
 };
 const wrap = (value: string) =>
   `<system-reminder>\n${value}\n</system-reminder>`;
+type InstructionNoticeFile = {
+  path: string;
+  type: keyof typeof instructionKinds;
+  content: string;
+};
+function instructionContents(files: readonly InstructionNoticeFile[]): string {
+  return files
+    .map((file) => {
+      const content =
+        file.type === "AutoMem"
+          ? sanitizeAutoMemoryIndex(file.content).trim()
+          : file.content.trim();
+      return `Contents of ${file.path}${instructionKinds[file.type]}:\n\n${content}`;
+    })
+    .join("\n\n");
+}
+function initialInstructionText(files: readonly InstructionNoticeFile[]): string {
+  const body = instructionContents(files);
+  return body ? `${instructionPreamble}\n\n${body}` : "";
+}
+/** First-load claudeMd reminder, including the AutoMem index sanitizer. */
+export function renderFirstLoadInstructionReminder(
+  files: readonly InstructionNoticeFile[],
+): string {
+  const text = initialInstructionText(files);
+  return text ? wrap(text) : "";
+}
 /** Exact supported ordinary QTe/amn branch. This host has no Code Mode/system-turn renderer. */
 export function renderNativePersistenceAttachment(
   value: unknown,
@@ -462,19 +490,14 @@ export function renderNativePersistenceAttachment(
         throw new Error(
           "Unverified/auto-memory instruction rendering requires its native sanitizer host",
         );
-      const body = attachment.files
-        .map(
-          (file) =>
-            `Contents of ${file.path}${instructionKinds[file.type]}:\n\n${file.content.trim()}`,
-        )
-        .join("\n\n");
       if (!attachment.changed) {
         if (attachment.removed?.length)
           throw new Error(
             "Removed instructions require their native changed attachment",
           );
-        output = body ? `${instructionPreamble}\n\n${body}` : "";
+        output = initialInstructionText(attachment.files);
       } else {
+        const body = instructionContents(attachment.files);
         const removed = (attachment.removed ?? []).map(
           (path) => `Instructions no longer present: ${path}`,
         );

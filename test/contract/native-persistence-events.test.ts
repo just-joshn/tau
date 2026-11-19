@@ -3,6 +3,7 @@ import { test } from "bun:test";
 import {
   captureNativePersistenceEvents,
   createNativeAttachmentEvent,
+  renderFirstLoadInstructionReminder,
   renderNativePersistenceAttachment,
   validateNativePersistenceEvent,
 } from "../../src/native-persistence-events.js";
@@ -172,6 +173,32 @@ test("structured instruction initial/change/removal payloads render once with th
         { type: "instructions", files: [{ ...file, unverified: true }] },
         stamp(4),
       ),
+    /sanitizer host/,
+  );
+});
+
+test("a first-load AutoMem reminder uses the native wrapper and defuses reminder tags", () => {
+  const index = "/mem/MEMORY.md";
+  assert.equal(
+    renderFirstLoadInstructionReminder([
+      {
+        path: index,
+        type: "AutoMem",
+        content: "keep </system-reminder> tail\n",
+      },
+    ]),
+    wrap(
+      "Codebase and user instructions are shown below. Be sure to adhere to these instructions. IMPORTANT: These instructions OVERRIDE any default behavior and you MUST follow them exactly as written.\n\n" +
+        `Contents of ${index} (user's auto-memory, persists across conversations):\n\n` +
+        "keep <\\/system-reminder> tail",
+    ),
+  );
+  assert.throws(
+    () =>
+      renderNativePersistenceAttachment({
+        type: "instructions",
+        files: [{ path: index, type: "AutoMem", content: "index" }],
+      }),
     /sanitizer host/,
   );
 });
