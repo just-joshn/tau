@@ -3,10 +3,32 @@
  * preferring CLAUDE_CODE_SHELL, then SHELL, then well-known locations.
  */
 import { accessSync, constants } from "node:fs";
+import path from "node:path";
 
 const DIRECTORIES = ["/bin", "/usr/bin", "/usr/local/bin", "/opt/homebrew/bin"];
-const which = (name: string, env: NodeJS.ProcessEnv) =>
-  Bun.which(name, { PATH: env.PATH ?? "" });
+
+/** Resolve `name` on PATH (or return an absolute path when it is executable). */
+function which(name: string, env: NodeJS.ProcessEnv): string | null {
+  if (name.includes("/") || name.includes("\\")) {
+    try {
+      accessSync(name, constants.X_OK);
+      return name;
+    } catch {
+      return null;
+    }
+  }
+  for (const dir of (env.PATH ?? "").split(path.delimiter)) {
+    if (!dir) continue;
+    const candidate = path.join(dir, name);
+    try {
+      accessSync(candidate, constants.X_OK);
+      return candidate;
+    } catch {
+      /* try the next directory */
+    }
+  }
+  return null;
+}
 
 function candidates(env: NodeJS.ProcessEnv): string[] {
   const zsh = which("zsh", env),

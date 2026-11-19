@@ -1,5 +1,7 @@
 /** Provenance stamp the original applies when Write creates an auto-memory .md file. */
 
+import { parse as parseYaml } from "yaml";
+
 const FRONTMATTER = /^---\n([\s\S]*?)\n---\n(?:\n|([\s\S]*))?$/;
 
 /** Source Tm: memory `name` is a kebab slug. */
@@ -33,7 +35,7 @@ export function stampNewMemoryContent(input: MemoryStampInput): string {
   if (!match) return input.content;
   let parsed: unknown;
   try {
-    parsed = Bun.YAML.parse(match[1] ?? "");
+    parsed = parseYaml(match[1] ?? "");
   } catch {
     return input.content;
   }
@@ -68,11 +70,37 @@ export function stampNewMemoryContent(input: MemoryStampInput): string {
     },
   };
   const body = (match[2] ?? "").replace(/^\n+/, "");
-  // Source YDe: Bun.YAML.stringify plus a trailing newline before the closer.
-  const yaml = Bun.YAML.stringify(stamped, null, 2);
-  return `---\n${yaml.endsWith("\n") ? yaml : `${yaml}\n`}---\n\n${body}`;
+  // Match Bun.YAML.stringify(stamped, null, 2): quote strings that need it.
+  const yaml = formatStampYaml(stamped);
+  return `---\n${yaml}---\n\n${body}`;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/** Quote when Bun.YAML would (apostrophes, leading markers, non-printables, …). */
+function yamlScalar(value: unknown): string {
+  if (typeof value !== "string") return String(value);
+  if (
+    value.length === 0 ||
+    /[\n\r]|^[ \t]|[ \t]$|['"#{}\[\],&*!|>%@`]|[^\x20-\x7e]/.test(value) ||
+    /^(?:true|false|null|~|y|n|yes|no|on|off)$/i.test(value)
+  )
+    return JSON.stringify(value);
+  return value;
+}
+
+function formatStampYaml(stamped: {
+  name: string;
+  description?: unknown;
+  metadata: Record<string, unknown>;
+}): string {
+  const lines = [`name: ${yamlScalar(stamped.name)}`];
+  if (stamped.description !== undefined)
+    lines.push(`description: ${yamlScalar(stamped.description)}`);
+  lines.push("metadata:");
+  for (const [key, value] of Object.entries(stamped.metadata))
+    lines.push(`  ${key}: ${yamlScalar(value)}`);
+  return `${lines.join("\n")}\n`;
 }
