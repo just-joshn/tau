@@ -12,7 +12,10 @@ A cron job is one record: `id` (8 hex chars), `cron` (5 local-time fields
 `M H DoM Mon DoW`, Sunday is 7), `prompt`, `createdAt`, optional `lastFiredAt`,
 `recurring`, `permanent`, `createdBySessionId`, `createdByPid`,
 `createdByProcStart`, `createdInProject`, `plugin`, plus in-memory `durable`
-and optional `agentId`. Durable jobs live in
+and optional `agentId`. A job may also set `kind` to `cron` or `loop`.
+Absent `kind` means cron. A loop job is session-only. It carries
+`scheduledFor` (the instant it becomes due) and `reason`. Its cron field is
+that local minute and hour, with the other three fields `*`. Durable jobs live in
 `<project>/.claude/scheduled_tasks.json` as `{ "tasks": [ ... ] }` (pretty JSON,
 trailing newline). Disk records omit `durable`. One `CronJobStore` owns the
 memory list and that file, under a promise chain, and replaces the file by
@@ -61,6 +64,14 @@ within 15 seconds of the cache lead fires `period - 15s` after the anchor.
 Recurring jitter is `min(hash * 0.5 * period, 30 min)` on the first fire.
 One-shot times on minute 0 or 30 move up to 90 seconds earlier. Other one-shots
 stay on the match. Display times are rounded to the nearest minute.
+A loop job does not use that early shift. It is due at `scheduledFor`.
+
+While the interactive REPL is waiting for the next prompt, due jobs enqueue
+their prompts. ScheduleWakeup inserts one session loop job, and stop removes
+every session loop job. The tick deletes a loop job and a one-shot after
+enqueue, stamps `lastFiredAt` on a recurring job, and deletes a recurring job
+after its final fire at 7 days. `<<autonomous-loop-dynamic>>` resolves to the
+dynamic tick text, and `<<autonomous-loop>>` resolves to the cron tick text.
 
 ## SendMessage
 
@@ -77,9 +88,9 @@ with the same name must be addressed as `name [agentId]`.
 
 ## Not in this port
 
-Jobs do not enqueue prompts while the REPL is idle, and the 7-day expiry is
-prompt text only. The self-hosted one-shot MCP refusal (`tengu_snug_crystal`,
-default false) is absent. Loop jobs are absent. Cross-session sockets, the
+The autonomous preamble file and the missed-while-closed confirmation are
+absent. The self-hosted one-shot MCP refusal (`tengu_snug_crystal`, default
+false) is absent. Cross-session sockets, the
 bridge, cloud sessions, and ListAgents discovery are described and not routed.
 Prefix match, resume-on-send, team roster, and idle subscription are absent.
 An unreadable tasks file counts as zero jobs and a later durable create

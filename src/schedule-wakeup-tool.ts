@@ -1,7 +1,8 @@
 /**
- * ScheduleWakeup (chunk-fkkma3m4.js call, chunk-46yvn24a.js clamp).
- * shouldDefer is false. The book records the wakeup. This process does
- * not re-enter the session when the wakeup comes due.
+ * ScheduleWakeup (chunk-fkkma3m4.js call, chunk-46yvn24a.js clamp and M).
+ * shouldDefer is false. The book records the chain. When a job list is
+ * attached, schedule inserts one session loop job and stop removes them.
+ * The idle tick enqueues a due loop job.
  */
 import { z } from "zod";
 import { SCHEDULE_WAKEUP_DESCRIPTION } from "./eager-catalog-text.js";
@@ -227,12 +228,33 @@ export function scheduleWakeupDefinition(): ToolDefinition {
   };
 }
 
+export interface LoopJobs {
+  replaceLoop(input: {
+    prompt: string;
+    reason: string;
+    scheduledFor: number;
+    createdAt: number;
+  }): Promise<void>;
+  cancelLoops(): Promise<number>;
+}
+
 export interface ScheduleWakeupOptions {
   now?: () => number;
   cacheAnchor?: () => number;
   /** Unnamed plugin owner. Scheduling is refused. stop still runs. */
   pluginBlocksSchedule?: boolean;
   initial?: WakeupBook;
+  /** Same session list CronCreate uses. */
+  jobs?: LoopJobs;
+}
+
+function loopCreatedAt(
+  now: number,
+  delaySeconds: number,
+  scheduledFor: number,
+): number {
+  const raw = now + delaySeconds * 1000;
+  return raw < scheduledFor ? raw : scheduledFor - 1;
 }
 
 export function scheduleWakeupTool(
@@ -251,9 +273,11 @@ export function scheduleWakeupTool(
       if (input.stop !== true && options.pluginBlocksSchedule === true)
         throw new ScheduleWakeupInputError(WAKEUP_PLUGIN_BLOCKED);
       if (input.stop === true) {
-        const stopped = stopWakeups(book);
-        book = stopped.book;
-        return scheduleWakeupStopText(stopped.cancelled);
+        const cancelled = options.jobs
+          ? await options.jobs.cancelLoops()
+          : book.pending.length;
+        book = emptyWakeupBook();
+        return scheduleWakeupStopText(cancelled);
       }
       if (input.delaySeconds === undefined || input.reason === undefined)
         throw new ScheduleWakeupInputError(WAKEUP_DELAY_REASON_REQUIRED);
@@ -270,6 +294,20 @@ export function scheduleWakeupTool(
         at,
         options.cacheAnchor?.() ?? at,
       );
+      if (options.jobs) {
+        if (step.kind === "aged_out") await options.jobs.cancelLoops();
+        else
+          await options.jobs.replaceLoop({
+            prompt: input.prompt,
+            reason: input.reason,
+            scheduledFor: step.clamped.scheduledFor,
+            createdAt: loopCreatedAt(
+              at,
+              step.clamped.clampedDelaySeconds,
+              step.clamped.scheduledFor,
+            ),
+          });
+      }
       book = step.book;
       if (step.kind === "aged_out") return WAKEUP_AGED_OUT_TEXT;
       return scheduleWakeupScheduledText({ ...step.clamped, now: at });

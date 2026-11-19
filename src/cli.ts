@@ -99,7 +99,12 @@ import { formatBackgroundNotification } from "./background-notifications.js";
 import { createBackgroundTaskTools } from "./background-task-tools.js";
 import { createWebTools } from "./web-tools.js";
 import { bindGuardedTool, wrapGuardedTools } from "./guarded-tool.js";
-import { createCronTools, cronToolsEnabled } from "./cron-tools.js";
+import { createIdlePromptSource } from "./cron-idle.js";
+import {
+  CronJobStore,
+  createCronTools,
+  cronToolsEnabled,
+} from "./cron-tools.js";
 import { listAgentsTool } from "./list-agents-tool.js";
 import { monitorTool } from "./monitor-tool.js";
 import { reportFindingsTool } from "./report-findings-tool.js";
@@ -1501,11 +1506,13 @@ async function main(): Promise<void> {
     shell: shellHost,
     baseRef: () => worktreeBaseRef(launch.snapshot.effective),
   });
+  const cronOptions = {
+    projectDir: () => shellHost.root,
+    sessionId: () => session.id,
+  };
+  const cronStore = new CronJobStore(cronOptions);
   const cron = cronToolsEnabled(process.env)
-    ? createCronTools({
-        projectDir: () => shellHost.root,
-        sessionId: () => session.id,
-      })
+    ? createCronTools({ ...cronOptions, store: cronStore })
     : undefined;
   const sessionTools = [
     ...(cron === undefined
@@ -1539,7 +1546,7 @@ async function main(): Promise<void> {
     bindGuardedTool(worktrees.exit, guardedHost),
     bindGuardedTool(listAgentsTool(), guardedHost),
     bindGuardedTool(reportFindingsTool(), guardedHost),
-    bindGuardedTool(scheduleWakeupTool(), guardedHost),
+    bindGuardedTool(scheduleWakeupTool({ jobs: cronStore }), guardedHost),
     bindGuardedTool(workflowTool(), guardedHost),
   ];
   const createSessionTools = async () => {
@@ -2117,10 +2124,20 @@ async function main(): Promise<void> {
       }));
     const customEntries = () =>
       skillEntries().filter((skill) => !skill.builtin);
+    const readIdlePrompt = createIdlePromptSource({
+      nextUser: () => tui?.next() ?? Promise.resolve(undefined),
+      poll: () => cronStore.fireDue(Date.now()),
+      wait: (ms) =>
+        new Promise((resolve) => {
+          const timer = setTimeout(resolve, ms);
+          timer.unref?.();
+        }),
+    });
     while (tui && !closing) {
       tui.setCommands(commandEntries(skillEntries(), session.model));
       tui.setModel(modelLabel(session.model));
-      const input = (await tui.next())?.trim();
+      const input = (await readIdlePrompt())?.trim();
+
       if (input === undefined) break;
       if (!input) continue;
       if (!input.startsWith("/")) {

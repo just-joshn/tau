@@ -26,6 +26,7 @@ import {
   scheduledFireAt,
   type CronFireInput,
 } from "./cron-schedule.js";
+import { planIdleFires } from "./cron-idle.js";
 import type { GuardedTool } from "./guarded-tool.js";
 import { ToolValidationRefused } from "./guarded-tool.js";
 import type { ToolDefinition } from "./types.js";
@@ -139,6 +140,10 @@ export interface CronJob extends CronFireInput {
   createdInProject?: string;
   permanent?: true;
   plugin?: string;
+  /** Absent on CronCreate jobs and on disk. Loop jobs are session-only. */
+  kind?: "cron" | "loop";
+  scheduledFor?: number;
+  reason?: string;
 }
 
 export interface CronStoreOptions {
@@ -376,6 +381,59 @@ export class CronJobStore {
     });
   }
 
+  /** One-shot kind:"loop" job. Replaces any loop job already in the session list. */
+  async replaceLoop(input: {
+    prompt: string;
+    reason: string;
+    scheduledFor: number;
+    createdAt: number;
+  }): Promise<void> {
+    return this.#locked(async () => {
+      this.#session = this.#session.filter((job) => job.kind !== "loop");
+      const date = new Date(input.scheduledFor);
+      this.#session.push({
+        id: this.#id(),
+        cron: `${date.getMinutes()} ${date.getHours()} * * *`,
+        prompt: input.prompt,
+        createdAt: input.createdAt,
+        recurring: false,
+        durable: false,
+        kind: "loop",
+        scheduledFor: input.scheduledFor,
+        reason: input.reason,
+      });
+    });
+  }
+
+  /** Removes session loop jobs. Durable cron jobs stay. */
+  async cancelLoops(): Promise<number> {
+    return this.#locked(async () => {
+      const before = this.#session.length;
+      this.#session = this.#session.filter((job) => job.kind !== "loop");
+      return before - this.#session.length;
+    });
+  }
+
+  /**
+   * Enqueues prompts for due jobs and updates the list.
+   * Durable changes are written. An unreadable tasks file contributes nothing.
+   */
+  async fireDue(now: number): Promise<string[]> {
+    return this.#locked(async () => {
+      const disk = await this.#readDisk();
+      const durable = disk.kind === "tasks" ? disk.tasks : [];
+      const durablePlan = planIdleFires(durable, now);
+      const sessionPlan = planIdleFires(this.#session, now);
+      if (
+        disk.kind === "tasks" &&
+        durableChanged(durable, durablePlan.jobs)
+      )
+        await this.#writeDisk(durablePlan.jobs);
+      this.#session = sessionPlan.jobs;
+      return [...durablePlan.prompts, ...sessionPlan.prompts];
+    });
+  }
+
   async list(): Promise<CronJob[]> {
     return this.#locked(async () => {
       const all = await this.#all();
@@ -424,7 +482,7 @@ export class CronJobStore {
     caller: string | undefined,
   ): CronJob {
     const job: CronJob = {
-      id: (this.options.newId ?? (() => randomUUID().slice(0, 8)))(),
+      id: this.#id(),
       cron: input.cron,
       prompt: input.prompt,
       createdAt: (this.options.now ?? Date.now)(),
@@ -530,6 +588,10 @@ export class CronJobStore {
     await rename(temporary, path);
   }
 
+  #id(): string {
+    return (this.options.newId ?? (() => randomUUID().slice(0, 8)))();
+  }
+
   async #locked<T>(work: () => Promise<T>): Promise<T> {
     const run = this.#chain.then(work, work);
     this.#chain = run.then(
@@ -538,6 +600,16 @@ export class CronJobStore {
     );
     return run;
   }
+}
+
+function durableChanged(
+  before: readonly CronJob[],
+  after: readonly CronJob[],
+): boolean {
+  if (before.length !== after.length) return true;
+  return after.some(
+    (job, index) => job.lastFiredAt !== before[index]?.lastFiredAt,
+  );
 }
 
 function refuse(message: string): never {
@@ -553,8 +625,10 @@ export interface CronTools {
   list: GuardedTool<CronListInput>;
 }
 
-export function createCronTools(options: CronStoreOptions): CronTools {
-  const store = new CronJobStore(options);
+export function createCronTools(
+  options: CronStoreOptions & { store?: CronJobStore },
+): CronTools {
+  const store = options.store ?? new CronJobStore(options);
   const now = () => (options.now ?? Date.now)();
   const create: GuardedTool<CronCreateInput> = {
     name: CRON_CREATE,
